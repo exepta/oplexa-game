@@ -55,7 +55,11 @@ impl WorldRefType<NetworkEntity> for NetworkWorldRef<'_> {
     }
 
     fn entities(&self) -> Vec<NetworkEntity> {
-        self.world.entities.iter().map(|(entity, _)| entity).collect()
+        self.world
+            .entities
+            .iter()
+            .map(|(entity, _)| entity)
+            .collect()
     }
 
     fn has_component<R: Replicate>(&self, entity: &NetworkEntity) -> bool {
@@ -100,7 +104,11 @@ impl WorldRefType<NetworkEntity> for NetworkWorldMut<'_> {
     }
 
     fn entities(&self) -> Vec<NetworkEntity> {
-        self.world.entities.iter().map(|(entity, _)| entity).collect()
+        self.world
+            .entities
+            .iter()
+            .map(|(entity, _)| entity)
+            .collect()
     }
 
     fn has_component<R: Replicate>(&self, entity: &NetworkEntity) -> bool {
@@ -224,7 +232,11 @@ impl WorldMutType<NetworkEntity> for NetworkWorldMut<'_> {
         Ok(())
     }
 
-    fn mirror_entities(&mut self, mutable_entity: &NetworkEntity, immutable_entity: &NetworkEntity) {
+    fn mirror_entities(
+        &mut self,
+        mutable_entity: &NetworkEntity,
+        immutable_entity: &NetworkEntity,
+    ) {
         for component_kind in self.component_kinds(immutable_entity) {
             self.mirror_components(mutable_entity, immutable_entity, &component_kind);
         }
@@ -265,11 +277,7 @@ impl WorldMutType<NetworkEntity> for NetworkWorldMut<'_> {
         components.insert(component_kind, Box::new(component));
     }
 
-    fn insert_boxed_component(
-        &mut self,
-        entity: &NetworkEntity,
-        component: Box<dyn Replicate>,
-    ) {
+    fn insert_boxed_component(&mut self, entity: &NetworkEntity, component: Box<dyn Replicate>) {
         let component_kind = component.kind();
         let components = self
             .world

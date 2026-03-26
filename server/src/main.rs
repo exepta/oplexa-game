@@ -2,13 +2,19 @@ use log::{error, info, warn};
 use multiplayer::{
     config::NetworkSettings,
     discovery::{LanDiscoveryServer, LanServerInfo},
-    protocol::{protocol, Auth, PlayerJoined, PlayerLeft, PlayerMove, PlayerSnapshot, ServerWelcome},
+    protocol::{
+        Auth, ClientBlockBreak, ClientBlockPlace, PlayerJoined, PlayerLeft, PlayerMove,
+        PlayerSnapshot, ServerBlockBreak, ServerBlockPlace, ServerWelcome, protocol,
+    },
     world::{NetworkEntity, NetworkWorld},
 };
 use naia_server::{
-    shared::default_channels::{UnorderedReliableChannel, UnorderedUnreliableChannel},
-    transport::udp, AuthEvent, ConnectEvent, DisconnectEvent, ErrorEvent, MessageEvent,
-    Server as NaiaServer, ServerConfig, UserKey,
+    AuthEvent, ConnectEvent, DisconnectEvent, ErrorEvent, MessageEvent, Server as NaiaServer,
+    ServerConfig, UserKey,
+    shared::default_channels::{
+        OrderedReliableChannel, UnorderedReliableChannel, UnorderedUnreliableChannel,
+    },
+    transport::udp,
 };
 use simple_logger::SimpleLogger;
 use std::{collections::HashMap, thread::sleep, time::Duration};
@@ -141,7 +147,9 @@ fn main() {
             }
 
             players.insert(user_key, player);
-            let joined = players.get(&user_key).expect("Player must exist after insert");
+            let joined = players
+                .get(&user_key)
+                .expect("Player must exist after insert");
 
             info!("{} joined as id {}", joined.username, joined.player_id);
             server.broadcast_message::<UnorderedReliableChannel, _>(&PlayerJoined::new(
@@ -150,7 +158,9 @@ fn main() {
             ));
         }
 
-        for (user_key, movement) in events.read::<MessageEvent<UnorderedUnreliableChannel, PlayerMove>>() {
+        for (user_key, movement) in
+            events.read::<MessageEvent<UnorderedUnreliableChannel, PlayerMove>>()
+        {
             busy = true;
 
             if let Some(player) = players.get_mut(&user_key) {
@@ -163,6 +173,33 @@ fn main() {
                     player.translation,
                     player.yaw,
                     player.pitch,
+                ));
+            }
+        }
+
+        for (user_key, message) in
+            events.read::<MessageEvent<OrderedReliableChannel, ClientBlockBreak>>()
+        {
+            busy = true;
+
+            if let Some(player) = players.get(&user_key) {
+                server.broadcast_message::<OrderedReliableChannel, _>(&ServerBlockBreak::new(
+                    player.player_id,
+                    message.location,
+                ));
+            }
+        }
+
+        for (user_key, message) in
+            events.read::<MessageEvent<OrderedReliableChannel, ClientBlockPlace>>()
+        {
+            busy = true;
+
+            if let Some(player) = players.get(&user_key) {
+                server.broadcast_message::<OrderedReliableChannel, _>(&ServerBlockPlace::new(
+                    player.player_id,
+                    message.location,
+                    message.block_id,
                 ));
             }
         }

@@ -29,7 +29,9 @@ impl NetworkSettings {
             toml::from_str(&contents).expect("Failed to parse multiplayer config file")
         } else {
             let settings = Self::default();
-            settings.save(path).expect("Failed to create multiplayer config file");
+            settings
+                .save(path)
+                .expect("Failed to create multiplayer config file");
             settings
         }
     }

@@ -28,8 +28,10 @@ impl LanDiscoveryClient {
     }
 
     pub fn broadcast_query(&self) -> io::Result<()> {
-        self.socket
-            .send_to(DISCOVERY_QUERY, SocketAddr::from(([255, 255, 255, 255], self.port)))?;
+        self.socket.send_to(
+            DISCOVERY_QUERY,
+            SocketAddr::from(([255, 255, 255, 255], self.port)),
+        )?;
         Ok(())
     }
 
@@ -40,9 +42,8 @@ impl LanDiscoveryClient {
         loop {
             match self.socket.recv_from(&mut buffer) {
                 Ok((bytes, addr)) => {
-                    let mut info = serde_json::from_slice::<LanServerInfo>(&buffer[..bytes]).map_err(
-                        |error| io::Error::new(ErrorKind::InvalidData, error),
-                    )?;
+                    let mut info = serde_json::from_slice::<LanServerInfo>(&buffer[..bytes])
+                        .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
                     info.observed_addr = Some(addr.ip().to_string());
                     servers.push(info);
                 }

@@ -1,8 +1,16 @@
+use self::manager::ManagerPlugin;
 use crate::core::config::GlobalConfig;
 use crate::core::debug::{BuildInfo, WorldInspectorState};
 use crate::core::entities::player::{FpsController, Player};
+use crate::core::events::block::block_player_events::{
+    BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
+};
+use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
 use crate::core::states::states::AppState;
-use self::manager::ManagerPlugin;
+use crate::core::world::chunk::ChunkMap;
+use crate::core::world::chunk_dimension::{Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local};
+use crate::core::world::fluid::FluidMap;
+use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
 use bevy::log::{BoxedLayer, Level, LogPlugin};
 use bevy::math::primitives::Capsule3d;
@@ -20,13 +28,19 @@ use dotenvy::dotenv;
 use multiplayer::{
     config::NetworkSettings,
     discovery::{LanDiscoveryClient, LanServerInfo},
-    protocol::{protocol, Auth, PlayerJoined, PlayerLeft, PlayerMove, PlayerSnapshot, ServerWelcome},
+    protocol::{
+        Auth, ClientBlockBreak, ClientBlockPlace, PlayerJoined, PlayerLeft, PlayerMove,
+        PlayerSnapshot, ServerBlockBreak, ServerBlockPlace, ServerWelcome, protocol,
+    },
     world::{NetworkEntity, NetworkWorld},
 };
 use naia_client::{
-    shared::default_channels::{UnorderedReliableChannel, UnorderedUnreliableChannel},
-    transport::udp, Client as NaiaClient, ClientConfig, ConnectEvent, DisconnectEvent, ErrorEvent,
-    MessageEvent, RejectEvent,
+    Client as NaiaClient, ClientConfig, ConnectEvent, DisconnectEvent, ErrorEvent, MessageEvent,
+    RejectEvent,
+    shared::default_channels::{
+        OrderedReliableChannel, UnorderedReliableChannel, UnorderedUnreliableChannel,
+    },
+    transport::udp,
 };
 use std::collections::HashMap;
 use std::env;
@@ -373,6 +387,8 @@ impl Plugin for MultiplayerClientPlugin {
                 Update,
                 (
                     poll_lan_servers,
+                    send_local_block_break_events,
+                    send_local_block_place_events,
                     receive_multiplayer_messages,
                     send_local_player_pose,
                 ),
@@ -456,6 +472,9 @@ fn poll_lan_servers(
 fn receive_multiplayer_messages(
     mut commands: Commands,
     visuals: Res<RemotePlayerVisuals>,
+    mut chunk_map: ResMut<ChunkMap>,
+    mut fluids: ResMut<FluidMap>,
+    mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
     mut runtime: NonSendMut<MultiplayerClientRuntime>,
 ) {
     let Some(mut client) = runtime.client.take() else {
@@ -533,6 +552,28 @@ fn receive_multiplayer_messages(
         });
     }
 
+    for message in events.read::<MessageEvent<OrderedReliableChannel, ServerBlockBreak>>() {
+        if Some(message.player_id) == runtime.local_player_id {
+            continue;
+        }
+
+        apply_remote_block_break(message.location, &mut chunk_map, &mut ev_dirty);
+    }
+
+    for message in events.read::<MessageEvent<OrderedReliableChannel, ServerBlockPlace>>() {
+        if Some(message.player_id) == runtime.local_player_id {
+            continue;
+        }
+
+        apply_remote_block_place(
+            message.location,
+            message.block_id,
+            &mut chunk_map,
+            &mut fluids,
+            &mut ev_dirty,
+        );
+    }
+
     for error in events.read::<ErrorEvent>() {
         error!("Multiplayer client error: {}", error);
     }
@@ -545,6 +586,49 @@ fn receive_multiplayer_messages(
     }
 
     runtime.client = Some(client);
+}
+
+fn send_local_block_break_events(
+    mut break_events: MessageReader<BlockBreakByPlayerEvent>,
+    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+) {
+    let Some(client) = runtime.client.as_mut() else {
+        for _ in break_events.read() {}
+        return;
+    };
+
+    if !client.connection_status().is_connected() {
+        for _ in break_events.read() {}
+        return;
+    }
+
+    for event in break_events.read() {
+        client.send_message::<OrderedReliableChannel, _>(&ClientBlockBreak::new(
+            event.location.to_array(),
+        ));
+    }
+}
+
+fn send_local_block_place_events(
+    mut place_events: MessageReader<BlockPlaceByPlayerEvent>,
+    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+) {
+    let Some(client) = runtime.client.as_mut() else {
+        for _ in place_events.read() {}
+        return;
+    };
+
+    if !client.connection_status().is_connected() {
+        for _ in place_events.read() {}
+        return;
+    }
+
+    for event in place_events.read() {
+        client.send_message::<OrderedReliableChannel, _>(&ClientBlockPlace::new(
+            event.location.to_array(),
+            event.block_id,
+        ));
+    }
 }
 
 fn send_local_player_pose(
@@ -574,6 +658,53 @@ fn send_local_player_pose(
         controller.yaw,
         controller.pitch,
     ));
+}
+
+fn apply_remote_block_break(
+    location: [i32; 3],
+    chunk_map: &mut ChunkMap,
+    ev_dirty: &mut MessageWriter<SubChunkNeedRemeshEvent>,
+) {
+    let world_pos = IVec3::from_array(location);
+
+    if let Some(mut access) = world_access_mut(chunk_map, world_pos) {
+        if access.get() == 0 {
+            return;
+        }
+        access.set(0);
+        mark_dirty_block_and_neighbors(chunk_map, world_pos, ev_dirty);
+    }
+}
+
+fn apply_remote_block_place(
+    location: [i32; 3],
+    block_id: u16,
+    chunk_map: &mut ChunkMap,
+    fluids: &mut FluidMap,
+    ev_dirty: &mut MessageWriter<SubChunkNeedRemeshEvent>,
+) {
+    if block_id == 0 {
+        return;
+    }
+
+    let world_pos = IVec3::from_array(location);
+    if world_pos.y < Y_MIN || world_pos.y > Y_MAX {
+        return;
+    }
+
+    let (chunk_coord, local) = world_to_chunk_xz(world_pos.x, world_pos.z);
+    let lx = local.x as usize;
+    let lz = local.y as usize;
+    let ly = world_y_to_local(world_pos.y);
+
+    if let Some(mut access) = world_access_mut(chunk_map, world_pos) {
+        access.set(block_id);
+        mark_dirty_block_and_neighbors(chunk_map, world_pos, ev_dirty);
+    }
+
+    if let Some(fluid_chunk) = fluids.0.get_mut(&chunk_coord) {
+        fluid_chunk.set(lx, ly, lz, false);
+    }
 }
 
 fn ensure_remote_player(

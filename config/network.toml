@@ -1,7 +1,7 @@
 [client]
 enabled = true
 connect_on_startup = true
-session_url = "lan:auto"
+session_url = "http://127.0.0.1:14191"
 player_name = "Player"
 lan_discovery = true
 lan_discovery_port = 14192
