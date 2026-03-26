@@ -340,11 +340,15 @@ impl Drop for StartLogText {
 pub(crate) mod manager {
     use crate::core::CoreModule;
     use crate::core::config::GlobalConfig;
-    use crate::core::debug::WorldInspectorState;
+    use crate::core::debug::{ChunkGridGizmos, DebugGridState, WorldInspectorState};
+    use crate::core::entities::player::Player;
+    use crate::core::world::chunk_dimension::{CX, CZ, Y_MAX, Y_MIN, world_to_chunk_xz};
     use crate::generator::GeneratorModule;
     use crate::graphic::GraphicModule;
     use crate::logic::LogicModule;
     use crate::utils::key_utils::convert;
+    use bevy::camera::visibility::RenderLayers;
+    use bevy::gizmos::config::{DefaultGizmoConfigGroup, GizmoConfigGroup};
     use bevy::light::DirectionalLightShadowMap;
     use bevy::prelude::*;
     use bevy_rapier3d::prelude::*;
@@ -353,15 +357,46 @@ pub(crate) mod manager {
 
     impl Plugin for ManagerPlugin {
         fn build(&self, app: &mut App) {
+            app.init_gizmo_group::<ChunkGridGizmos>();
             app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default());
             app.add_plugins((CoreModule, LogicModule, GeneratorModule, GraphicModule));
-            app.add_systems(Startup, setup_shadow_map);
-            app.add_systems(Update, toggle_world_inspector);
+            app.add_systems(
+                Startup,
+                (
+                    setup_shadow_map,
+                    configure_default_gizmos,
+                    configure_chunk_grid_gizmos,
+                ),
+            );
+            app.add_systems(
+                Update,
+                (
+                    toggle_world_inspector,
+                    toggle_chunk_grid,
+                    draw_chunk_grid_gizmo,
+                ),
+            );
         }
     }
 
     fn setup_shadow_map(mut commands: Commands) {
         commands.insert_resource(DirectionalLightShadowMap { size: 1024 });
+    }
+
+    fn configure_default_gizmos(mut gizmo_config_store: ResMut<GizmoConfigStore>) {
+        let (config, _) = gizmo_config_store.config_mut::<DefaultGizmoConfigGroup>();
+        config.enabled = true;
+        config.line.width = 3.0;
+        config.depth_bias = -1.0;
+        config.render_layers = RenderLayers::from_layers(&[0, 1, 2]);
+    }
+
+    fn configure_chunk_grid_gizmos(mut gizmo_config_store: ResMut<GizmoConfigStore>) {
+        let (config, _) = gizmo_config_store.config_mut::<ChunkGridGizmos>();
+        config.enabled = true;
+        config.line.width = 3.0;
+        config.depth_bias = -1.0;
+        config.render_layers = RenderLayers::from_layers(&[0, 1, 2]);
     }
 
     fn toggle_world_inspector(
@@ -375,6 +410,118 @@ pub(crate) mod manager {
             debug_context.0 = !debug_context.0;
             info!("World Inspector: {}", debug_context.0);
         }
+    }
+
+    fn toggle_chunk_grid(
+        mut debug_grid: ResMut<DebugGridState>,
+        keyboard: Res<ButtonInput<KeyCode>>,
+        game_config: Res<GlobalConfig>,
+        player_query: Query<&Transform, With<Player>>,
+    ) {
+        let key =
+            convert(game_config.input.chunk_grid.as_str()).expect("Invalid key for chunk grid");
+
+        if keyboard.just_pressed(key) {
+            debug_grid.show = !debug_grid.show;
+            if let Ok(player_transform) = player_query.single() {
+                debug_grid.plane_y = player_transform.translation.y.floor();
+            }
+            info!("Chunk Grid: {}", debug_grid.show);
+        }
+
+        if debug_grid.show
+            && let Ok(player_transform) = player_query.single()
+        {
+            debug_grid.plane_y = player_transform.translation.y.floor();
+        }
+    }
+
+    fn draw_chunk_grid_gizmo(
+        debug_grid: Res<DebugGridState>,
+        player_query: Query<&Transform, With<Player>>,
+        mut gizmos: Gizmos<ChunkGridGizmos>,
+        mut fallback_gizmos: Gizmos,
+    ) {
+        if !debug_grid.show {
+            return;
+        }
+
+        let Ok(player_transform) = player_query.single() else {
+            return;
+        };
+
+        let world_x = player_transform.translation.x.floor() as i32;
+        let world_z = player_transform.translation.z.floor() as i32;
+        let (center_chunk, _) = world_to_chunk_xz(world_x, world_z);
+        let plane_y = debug_grid.plane_y + 0.05;
+        let y_min = Y_MIN as f32;
+        let y_max = (Y_MAX + 1) as f32;
+        let range = 2;
+
+        for dz in -range..=range {
+            for dx in -range..=range {
+                let chunk = center_chunk + IVec2::new(dx, dz);
+                draw_chunk_outline(&mut gizmos, chunk, plane_y, y_min, y_max);
+                draw_chunk_outline(&mut fallback_gizmos, chunk, plane_y, y_min, y_max);
+            }
+        }
+    }
+
+    fn draw_chunk_outline<G: GizmoConfigGroup>(
+        gizmos: &mut Gizmos<G>,
+        chunk: IVec2,
+        plane_y: f32,
+        y_min: f32,
+        y_max: f32,
+    ) {
+        let x0 = chunk.x as f32 * CX as f32;
+        let z0 = chunk.y as f32 * CZ as f32;
+        let x1 = x0 + CX as f32;
+        let z1 = z0 + CZ as f32;
+        let border_color = Color::srgb(0.98, 0.88, 0.16);
+        let corner_color = Color::srgb(0.96, 0.54, 0.12);
+
+        gizmos.line(
+            Vec3::new(x0, plane_y, z0),
+            Vec3::new(x1, plane_y, z0),
+            border_color,
+        );
+        gizmos.line(
+            Vec3::new(x1, plane_y, z0),
+            Vec3::new(x1, plane_y, z1),
+            border_color,
+        );
+        gizmos.line(
+            Vec3::new(x1, plane_y, z1),
+            Vec3::new(x0, plane_y, z1),
+            border_color,
+        );
+        gizmos.line(
+            Vec3::new(x0, plane_y, z1),
+            Vec3::new(x0, plane_y, z0),
+            border_color,
+        );
+
+        gizmos.line(
+            Vec3::new(x0, y_min, z0),
+            Vec3::new(x0, y_max, z0),
+            corner_color,
+        );
+        gizmos.line(
+            Vec3::new(x1, y_min, z0),
+            Vec3::new(x1, y_max, z0),
+            corner_color,
+        );
+        gizmos.line(
+            Vec3::new(x1, y_min, z1),
+            Vec3::new(x1, y_max, z1),
+            corner_color,
+        );
+        gizmos.line(
+            Vec3::new(x0, y_min, z1),
+            Vec3::new(x0, y_max, z1),
+            corner_color,
+        );
     }
 }
 

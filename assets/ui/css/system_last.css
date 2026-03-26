@@ -1,0 +1,56 @@
+:root {
+  --panel-bg: rgba(7, 12, 18, 0.86);
+  --panel-border: rgba(128, 204, 255, 0.35);
+  --text-main: #e8f7ff;
+  --text-dim: #a7c7d9;
+}
+
+#system-last-root {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  justify-content: flex-start;
+  align-items: flex-start;
+  padding: 16px;
+  pointer-events: none;
+}
+
+#system-last-panel {
+  width: min(420px, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--panel-bg);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.38);
+}
+
+#debug-title {
+  margin: 0 0 2px;
+  color: var(--text-main);
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+#debug-build,
+#debug-cpu-name,
+#debug-gpu-name,
+#debug-biome,
+#debug-global-cpu,
+#debug-app-cpu,
+#debug-app-mem,
+#debug-player-pos,
+#debug-grid,
+#debug-world-inspector,
+#debug-overlay {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+}
