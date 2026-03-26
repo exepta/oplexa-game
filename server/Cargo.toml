@@ -1,0 +1,10 @@
+[package]
+name = "oplexa-game-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = "0.4.28"
+multiplayer = { path = "../multiplayer" }
+naia-server = { version = "0.24.0", features = ["transport_udp"] }
+simple_logger = "5.0.0"

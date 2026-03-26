@@ -1,0 +1,18 @@
+[client]
+enabled = true
+connect_on_startup = true
+session_url = "lan:auto"
+player_name = "Player"
+lan_discovery = true
+lan_discovery_port = 14192
+transform_send_interval_ms = 50
+
+[server]
+bind_ip = "0.0.0.0"
+game_port = 14191
+advertise_host = "auto"
+server_name = "Oplexa LAN"
+motd = "Open to LAN"
+max_players = 8
+lan_discovery = true
+lan_discovery_port = 14192
