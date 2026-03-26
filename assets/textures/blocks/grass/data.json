@@ -1,0 +1,11 @@
+{
+  "image": "grass.png",
+  "tile_size": 128,
+  "columns": 2,
+  "rows": 2,
+  "tiles": {
+    "grass_top": [0, 0],
+    "grass_side": [0, 1],
+    "dirt": [1, 0]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "stone_block",
+  "texture_dir": "textures/blocks/stone",
+  "texture": {
+    "all": "stone"
+  },
+  "stats": {
+    "hardness": 4.5,
+    "blast_resistance": 3.5,
+    "opaque": true,
+    "emissive": 0.0
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "dirt_block",
+  "texture_dir": "textures/blocks/dirt",
+  "texture": {
+    "all": "dirt"
+  },
+  "stats": {
+    "hardness": 0.65,
+    "blast_resistance": 1.5,
+    "opaque": true,
+    "emissive": 0.0
+  }
+}

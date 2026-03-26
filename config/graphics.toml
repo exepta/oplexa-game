@@ -1,0 +1,6 @@
+window_width = 1270
+window_height = 720
+fullscreen = false
+vsync = true
+graphic_backend = "AUTO"
+chunk_range = 8

@@ -1,0 +1,28 @@
+pub mod config;
+pub mod debug;
+pub mod entities;
+pub mod events;
+pub mod shader;
+pub mod states;
+pub mod world;
+
+use crate::core::config::*;
+use crate::core::entities::EntitiesModule;
+use crate::core::events::EventModule;
+use crate::core::world::biome::registry::BiomeRegistry;
+use crate::core::world::block::*;
+use bevy::prelude::*;
+
+pub struct CoreModule;
+
+impl Plugin for CoreModule {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<WorldGenConfig>();
+        app.init_resource::<CrosshairConfig>();
+        app.init_resource::<SelectedBlock>();
+        app.init_resource::<MiningState>();
+        app.init_resource::<MiningOverlayRoot>();
+        app.init_resource::<BiomeRegistry>();
+        app.add_plugins((EventModule, EntitiesModule));
+    }
+}

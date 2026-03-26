@@ -1,0 +1,14 @@
+{
+  "name": "water_block",
+  "texture_dir": "textures/blocks/water",
+  "texture": {
+    "all": "water"
+  },
+  "stats": {
+    "hardness": 0.0,
+    "blast_resistance": 0.0,
+    "opaque": false,
+    "fluid": true,
+    "emissive": 0.0
+  }
+}

@@ -1,0 +1,14 @@
+# Rust/Cargo
+/target/
+Cargo.lock
+
+# IDE
+/.idea/
+
+# Runtime generated
+/logs/
+/saves/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,86 @@
+:root {
+  --bg-top: #08131a;
+  --bg-bottom: #02080d;
+  --panel-top: rgba(14, 35, 46, 0.95);
+  --panel-bottom: rgba(5, 14, 20, 0.92);
+  --border-soft: rgba(126, 214, 255, 0.22);
+  --border-strong: rgba(126, 214, 255, 0.5);
+  --text-main: #effcff;
+  --track-bg: rgba(4, 11, 16, 0.9);
+  --track-fill-a: #66f0ff;
+  --track-fill-b: #14b9ff;
+}
+
+#world-gen-root {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 32px;
+  background: linear-gradient(135deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+}
+
+#world-gen-shell {
+  position: relative;
+  width: min(540px, 88vw);
+  padding: 2px;
+  border-radius: 28px;
+  background: linear-gradient(135deg, var(--border-strong) 0%, rgba(255, 255, 255, 0.04) 100%);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.55);
+}
+
+.world-gen-aura {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 160px;
+  height: 160px;
+  background-color: rgba(74, 214, 255, 0.14);
+  border-radius: 999px;
+  box-shadow: 0 0 64px rgba(74, 214, 255, 0.32);
+  transform: translate(-50%, -50%);
+}
+
+#world-gen-panel {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 30px 30px 28px;
+  border: 1px rgba(255, 255, 255, 0.03);
+  border-radius: 26px;
+  background: linear-gradient(180deg, var(--panel-top) 0%, var(--panel-bottom) 100%);
+  backdrop-filter: blur(18px);
+}
+
+#world-gen-title {
+  margin: 0;
+  color: var(--text-main);
+  text-align: center;
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-transform: uppercase;
+  text-shadow: 0 0 18px rgba(109, 228, 255, 0.18);
+}
+
+#world-gen-progress {
+  width: 100%;
+  height: 20px;
+  padding: 4px;
+  background: var(--track-bg);
+  border: 1px var(--border-soft);
+  border-radius: 999px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
+#world-gen-progress > .progress {
+  height: 100%;
+  background: linear-gradient(90deg, var(--track-fill-a) 0%, var(--track-fill-b) 100%);
+  border-radius: 999px;
+  box-shadow: 0 0 22px rgba(102, 240, 255, 0.45);
+  transition: width 0.16s linear;
+}

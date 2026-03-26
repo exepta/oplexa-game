@@ -1,0 +1,12 @@
+{
+  "image": "dirt.png",
+  "tile_size": 128,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "dirt": [
+      0,
+      0
+    ]
+  }
+}

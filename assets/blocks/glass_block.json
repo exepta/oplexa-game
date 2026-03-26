@@ -1,0 +1,13 @@
+{
+  "name": "glass_block",
+  "texture_dir": "textures/blocks/glass",
+  "texture": {
+    "all": "glass"
+  },
+  "stats": {
+    "hardness": 0.1,
+    "blast_resistance": 1.5,
+    "opaque": false,
+    "emissive": 0.0
+  }
+}

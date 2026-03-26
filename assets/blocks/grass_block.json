@@ -1,0 +1,15 @@
+{
+  "name": "grass_block",
+  "texture_dir": "textures/blocks/grass",
+  "texture": {
+    "top": "grass_top",
+    "bottom": "dirt",
+    "horizontal": "grass_side"
+  },
+  "stats": {
+    "hardness": 1.0,
+    "blast_resistance": 1.5,
+    "opaque": true,
+    "emissive": 0.0
+  }
+}
