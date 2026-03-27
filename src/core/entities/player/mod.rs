@@ -1,6 +1,8 @@
 pub mod block_selection;
+pub mod inventory;
 
 use crate::core::entities::player::block_selection::SelectionState;
+use crate::core::entities::player::inventory::PlayerInventory;
 use bevy::prelude::*;
 
 pub struct PlayerModule;
@@ -8,6 +10,7 @@ pub struct PlayerModule;
 impl Plugin for PlayerModule {
     fn build(&self, app: &mut App) {
         app.init_resource::<SelectionState>()
+            .init_resource::<PlayerInventory>()
             .init_resource::<GameModeState>();
     }
 }

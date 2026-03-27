@@ -1,5 +1,6 @@
 use crate::core::entities::player::block_selection::SelectionState;
-use crate::core::entities::player::{GameMode, GameModeState};
+use crate::core::entities::player::inventory::PlayerInventory;
+use crate::core::entities::player::{GameMode, GameModeState, Player};
 use crate::core::events::block::block_player_events::{
     BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
 };
@@ -13,6 +14,7 @@ use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
+use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 
 #[derive(Component)]
@@ -20,6 +22,21 @@ struct MiningOverlay;
 
 #[derive(Component)]
 struct MiningOverlayFace;
+
+#[derive(Component)]
+struct DroppedBlockItem {
+    block_id: BlockId,
+    resting: bool,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+struct DroppedBlockVelocity(Vec3);
+
+const DROP_ITEM_SIZE: f32 = 0.32;
+const DROP_PICKUP_RADIUS: f32 = 1.35;
+const DROP_GRAVITY: f32 = 12.0;
+const DROP_POP_MIN_DIST: f32 = 0.1;
+const DROP_POP_MAX_DIST: f32 = 1.0;
 
 #[derive(Clone, Copy)]
 enum Axis {
@@ -37,6 +54,8 @@ impl Plugin for BlockEventHandler {
             (
                 (block_break_handler, sync_mining_overlay).chain(),
                 block_place_handler,
+                simulate_dropped_block_items,
+                pick_up_dropped_block_items,
             )
                 .run_if(in_state(AppState::InGame(InGameStates::Game))),
         );
@@ -44,6 +63,8 @@ impl Plugin for BlockEventHandler {
 }
 
 fn block_break_handler(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
     time: Res<Time>,
     buttons: Res<ButtonInput<MouseButton>>,
     selection: Res<SelectionState>,
@@ -162,6 +183,17 @@ fn block_break_handler(
         block_name: registry.name_opt(target.id).unwrap_or("").to_string(),
     });
 
+    if !registry.is_fluid(target.id) {
+        spawn_dropped_block_item(
+            &mut commands,
+            &mut meshes,
+            &registry,
+            target.id,
+            world_loc,
+            now,
+        );
+    }
+
     state.target = None;
 }
 
@@ -222,6 +254,168 @@ fn block_place_handler(
         block_id: id,
         block_name: name,
     });
+}
+
+fn simulate_dropped_block_items(
+    time: Res<Time>,
+    chunk_map: Res<ChunkMap>,
+    mut items: Query<
+        (
+            &mut DroppedBlockItem,
+            &mut DroppedBlockVelocity,
+            &mut Transform,
+        ),
+        With<DroppedBlockItem>,
+    >,
+) {
+    let delta = time.delta_secs();
+
+    for (mut item, mut velocity, mut transform) in &mut items {
+        velocity.0.y -= DROP_GRAVITY * delta;
+        let half = DROP_ITEM_SIZE * 0.5;
+        let support_probe = transform.translation - Vec3::Y * (half + 0.06);
+        let support_x = support_probe.x.floor() as i32;
+        let support_y = support_probe.y.floor() as i32;
+        let support_z = support_probe.z.floor() as i32;
+        let has_support =
+            get_block_world(&chunk_map, IVec3::new(support_x, support_y, support_z)) != 0;
+
+        if item.resting {
+            if has_support {
+                velocity.0 = Vec3::ZERO;
+                continue;
+            }
+
+            item.resting = false;
+            velocity.0 = Vec3::new(0.0, velocity.0.y.min(-0.1), 0.0);
+        }
+
+        transform.translation += velocity.0 * delta;
+
+        let foot = transform.translation - Vec3::Y * (half + 0.03);
+        let wx = foot.x.floor() as i32;
+        let wy = foot.y.floor() as i32;
+        let wz = foot.z.floor() as i32;
+
+        let below_is_solid = get_block_world(&chunk_map, IVec3::new(wx, wy, wz)) != 0;
+        if !below_is_solid || velocity.0.y > 0.0 {
+            continue;
+        }
+
+        let ground_top = wy as f32 + 1.0;
+        if transform.translation.y - half > ground_top {
+            continue;
+        }
+
+        transform.translation.y = ground_top + half;
+        velocity.0 = Vec3::ZERO;
+        item.resting = true;
+    }
+}
+
+fn pick_up_dropped_block_items(
+    mut commands: Commands,
+    game_mode: Res<GameModeState>,
+    mut inventory: ResMut<PlayerInventory>,
+    player: Query<&Transform, With<Player>>,
+    drops: Query<(Entity, &DroppedBlockItem, &Transform), With<DroppedBlockItem>>,
+) {
+    if game_mode.0 == GameMode::Spectator {
+        return;
+    }
+
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+
+    let radius_sq = DROP_PICKUP_RADIUS * DROP_PICKUP_RADIUS;
+    let player_pos = player_transform.translation;
+
+    for (entity, item, transform) in &drops {
+        if player_pos.distance_squared(transform.translation) > radius_sq {
+            continue;
+        }
+
+        if inventory.add_block(item.block_id, 1) == 0 {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn spawn_dropped_block_item(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    registry: &BlockRegistry,
+    block_id: BlockId,
+    world_loc: IVec3,
+    now: f32,
+) {
+    let mut mesh = build_block_cube_mesh(registry, block_id, DROP_ITEM_SIZE);
+    center_mesh_vertices(&mut mesh, DROP_ITEM_SIZE * 0.5);
+
+    let center = Vec3::new(
+        (world_loc.x as f32 + 0.5) * VOXEL_SIZE,
+        (world_loc.y as f32 + 0.5) * VOXEL_SIZE + 0.28,
+        (world_loc.z as f32 + 0.5) * VOXEL_SIZE,
+    );
+
+    commands.spawn((
+        DroppedBlockItem {
+            block_id,
+            resting: false,
+        },
+        DroppedBlockVelocity(compute_drop_pop_velocity(world_loc, now)),
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(registry.material(block_id)),
+        Transform {
+            translation: center,
+            rotation: Quat::from_euler(EulerRot::XYZ, std::f32::consts::FRAC_PI_2, 0.0, 0.0),
+            scale: Vec3::ONE,
+        },
+        Visibility::default(),
+        Name::new(format!("Drop::{}", registry.name(block_id))),
+        NotShadowCaster,
+        NotShadowReceiver,
+    ));
+}
+
+fn compute_drop_pop_velocity(world_loc: IVec3, now: f32) -> Vec3 {
+    let seed_base = hash01(
+        world_loc.x.wrapping_mul(31) ^ world_loc.y.wrapping_mul(47) ^ world_loc.z.wrapping_mul(73),
+        now,
+    );
+    let seed_angle = hash01(world_loc.x ^ world_loc.z ^ 0x51, now * 0.77);
+    let seed_dist = hash01(world_loc.y ^ 0x2A, now * 1.37);
+
+    let angle = seed_angle * std::f32::consts::TAU;
+    let distance = DROP_POP_MIN_DIST + (DROP_POP_MAX_DIST - DROP_POP_MIN_DIST) * seed_dist;
+    let flight_time = 0.35 + seed_base * 0.25;
+    let horizontal_speed = (distance / flight_time).max(0.2);
+
+    Vec3::new(
+        angle.cos() * horizontal_speed,
+        2.8 + seed_base * 1.2,
+        angle.sin() * horizontal_speed,
+    )
+}
+
+fn hash01(input: i32, time_factor: f32) -> f32 {
+    let x = input as f32 * 12.9898 + time_factor * 78.233;
+    (x.sin() * 43_758.547).fract().abs()
+}
+
+fn center_mesh_vertices(mesh: &mut Mesh, half_extent: f32) {
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    else {
+        return;
+    };
+
+    for position in positions.iter_mut() {
+        position[0] -= half_extent;
+        position[1] -= half_extent;
+        position[2] -= half_extent;
+    }
 }
 
 fn sync_mining_overlay(
