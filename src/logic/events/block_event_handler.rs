@@ -38,6 +38,9 @@ struct DroppedBlockAngularVelocity(Vec3);
 
 const DROP_ITEM_SIZE: f32 = 0.32;
 const DROP_PICKUP_RADIUS: f32 = 1.35;
+const DROP_ATTRACT_RADIUS: f32 = 3.5;
+const DROP_ATTRACT_ACCEL: f32 = 34.0;
+const DROP_ATTRACT_MAX_SPEED: f32 = 12.0;
 const DROP_GRAVITY: f32 = 12.0;
 const DROP_POP_MIN_DIST: f32 = 0.1;
 const DROP_POP_MAX_DIST: f32 = 1.0;
@@ -270,6 +273,7 @@ fn block_place_handler(
 fn simulate_dropped_block_items(
     time: Res<Time>,
     chunk_map: Res<ChunkMap>,
+    player: Query<&Transform, (With<Player>, Without<DroppedBlockItem>)>,
     mut items: Query<
         (
             &mut DroppedBlockItem,
@@ -281,6 +285,7 @@ fn simulate_dropped_block_items(
     >,
 ) {
     let delta = time.delta_secs();
+    let player_pos = player.single().ok().map(|t| t.translation);
 
     for (mut item, mut velocity, mut angular_velocity, mut transform) in &mut items {
         velocity.0.y -= DROP_GRAVITY * delta;
@@ -303,6 +308,23 @@ fn simulate_dropped_block_items(
         let support_z = support_probe.z.floor() as i32;
         let has_support =
             get_block_world(&chunk_map, IVec3::new(support_x, support_y, support_z)) != 0;
+
+        if let Some(player_pos) = player_pos {
+            let to_player = player_pos - transform.translation;
+            let dist_sq = to_player.length_squared();
+            if dist_sq <= DROP_ATTRACT_RADIUS * DROP_ATTRACT_RADIUS && dist_sq > 0.000_001 {
+                let dist = dist_sq.sqrt();
+                let dir = to_player / dist;
+                let t = 1.0 - (dist / DROP_ATTRACT_RADIUS).clamp(0.0, 1.0);
+                let accel = DROP_ATTRACT_ACCEL * (0.35 + t * 1.65);
+                velocity.0 += dir * (accel * delta);
+                let speed = velocity.0.length();
+                if speed > DROP_ATTRACT_MAX_SPEED {
+                    velocity.0 = velocity.0 / speed * DROP_ATTRACT_MAX_SPEED;
+                }
+                item.resting = false;
+            }
+        }
 
         if item.resting {
             if has_support {

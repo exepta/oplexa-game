@@ -94,6 +94,9 @@ struct MultiplayerDropIndex {
 
 const MULTIPLAYER_DROP_ITEM_SIZE: f32 = 0.32;
 const MULTIPLAYER_DROP_PICKUP_RADIUS: f32 = 1.35;
+const MULTIPLAYER_DROP_ATTRACT_RADIUS: f32 = 3.5;
+const MULTIPLAYER_DROP_ATTRACT_ACCEL: f32 = 34.0;
+const MULTIPLAYER_DROP_ATTRACT_MAX_SPEED: f32 = 12.0;
 const MULTIPLAYER_DROP_GRAVITY: f32 = 12.0;
 const MULTIPLAYER_DROP_POP_MIN_DIST: f32 = 0.1;
 const MULTIPLAYER_DROP_POP_MAX_DIST: f32 = 1.0;
@@ -888,9 +891,11 @@ fn send_local_block_place_events(
 fn simulate_multiplayer_drop_items(
     time: Res<Time>,
     chunk_map: Res<ChunkMap>,
+    player: Query<&Transform, (With<Player>, Without<MultiplayerDroppedItem>)>,
     mut drops: Query<(&mut MultiplayerDroppedItem, &mut Transform), With<MultiplayerDroppedItem>>,
 ) {
     let delta = time.delta_secs();
+    let player_pos = player.single().ok().map(|t| t.translation);
 
     for (mut drop, mut transform) in &mut drops {
         drop.velocity.y -= MULTIPLAYER_DROP_GRAVITY * delta;
@@ -923,6 +928,25 @@ fn simulate_multiplayer_drop_items(
         let support_z = support_probe.z.floor() as i32;
         let has_support =
             get_block_world(&chunk_map, IVec3::new(support_x, support_y, support_z)) != 0;
+
+        if let Some(player_pos) = player_pos {
+            let to_player = player_pos - transform.translation;
+            let dist_sq = to_player.length_squared();
+            if dist_sq <= MULTIPLAYER_DROP_ATTRACT_RADIUS * MULTIPLAYER_DROP_ATTRACT_RADIUS
+                && dist_sq > 0.000_001
+            {
+                let dist = dist_sq.sqrt();
+                let dir = to_player / dist;
+                let t = 1.0 - (dist / MULTIPLAYER_DROP_ATTRACT_RADIUS).clamp(0.0, 1.0);
+                let accel = MULTIPLAYER_DROP_ATTRACT_ACCEL * (0.35 + t * 1.65);
+                drop.velocity += dir * (accel * delta);
+                let speed = drop.velocity.length();
+                if speed > MULTIPLAYER_DROP_ATTRACT_MAX_SPEED {
+                    drop.velocity = drop.velocity / speed * MULTIPLAYER_DROP_ATTRACT_MAX_SPEED;
+                }
+                drop.resting = false;
+            }
+        }
 
         if drop.resting {
             if has_support {
