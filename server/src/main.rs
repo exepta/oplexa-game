@@ -3,8 +3,9 @@ use multiplayer::{
     config::NetworkSettings,
     discovery::{LanDiscoveryServer, LanServerInfo},
     protocol::{
-        Auth, ClientBlockBreak, ClientBlockPlace, PlayerJoined, PlayerLeft, PlayerMove,
-        PlayerSnapshot, ServerBlockBreak, ServerBlockPlace, ServerWelcome, protocol,
+        Auth, ClientBlockBreak, ClientBlockPlace, ClientDropPickup, PlayerJoined, PlayerLeft,
+        PlayerMove, PlayerSnapshot, ServerBlockBreak, ServerBlockPlace, ServerDropPicked,
+        ServerDropSpawn, ServerWelcome, protocol,
     },
     world::{NetworkEntity, NetworkWorld},
 };
@@ -28,6 +29,14 @@ struct HostedPlayer {
     yaw: f32,
     pitch: f32,
 }
+
+struct HostedDrop {
+    drop_id: u64,
+    location: [i32; 3],
+    block_id: u16,
+}
+
+const DROP_PICKUP_RADIUS: f32 = 2.0;
 
 fn main() {
     SimpleLogger::new()
@@ -73,8 +82,10 @@ fn main() {
 
     let mut world = NetworkWorld::default();
     let mut next_player_id = 1_u64;
+    let mut next_drop_id = 1_u64;
     let mut pending_auth = HashMap::<UserKey, String>::new();
     let mut players = HashMap::<UserKey, HostedPlayer>::new();
+    let mut drops = HashMap::<u64, HostedDrop>::new();
 
     loop {
         if let Some(discovery) = &discovery {
@@ -146,6 +157,13 @@ fn main() {
                 );
             }
 
+            for drop in drops.values() {
+                server.send_message::<OrderedReliableChannel, _>(
+                    &user_key,
+                    &ServerDropSpawn::new(drop.drop_id, drop.location, drop.block_id),
+                );
+            }
+
             players.insert(user_key, player);
             let joined = players
                 .get(&user_key)
@@ -187,6 +205,31 @@ fn main() {
                     player.player_id,
                     message.location,
                 ));
+
+                if message.drop_block_id != 0 {
+                    let drop_id = if message.drop_id != 0 {
+                        message.drop_id
+                    } else {
+                        let generated = next_drop_id;
+                        next_drop_id = next_drop_id.wrapping_add(1);
+                        generated
+                    };
+
+                    drops.insert(
+                        drop_id,
+                        HostedDrop {
+                            drop_id,
+                            location: message.location,
+                            block_id: message.drop_block_id,
+                        },
+                    );
+
+                    server.broadcast_message::<OrderedReliableChannel, _>(&ServerDropSpawn::new(
+                        drop_id,
+                        message.location,
+                        message.drop_block_id,
+                    ));
+                }
             }
         }
 
@@ -202,6 +245,44 @@ fn main() {
                     message.block_id,
                 ));
             }
+        }
+
+        for (user_key, message) in
+            events.read::<MessageEvent<OrderedReliableChannel, ClientDropPickup>>()
+        {
+            busy = true;
+
+            let Some(player) = players.get(&user_key) else {
+                continue;
+            };
+
+            let Some(drop) = drops.get(&message.drop_id) else {
+                continue;
+            };
+
+            let drop_center = [
+                drop.location[0] as f32 + 0.5,
+                drop.location[1] as f32 + 0.5,
+                drop.location[2] as f32 + 0.5,
+            ];
+
+            let dx = player.translation[0] - drop_center[0];
+            let dy = player.translation[1] - drop_center[1];
+            let dz = player.translation[2] - drop_center[2];
+            let dist_sq = dx * dx + dy * dy + dz * dz;
+            if dist_sq > DROP_PICKUP_RADIUS * DROP_PICKUP_RADIUS {
+                continue;
+            }
+
+            let Some(drop) = drops.remove(&message.drop_id) else {
+                continue;
+            };
+
+            server.broadcast_message::<OrderedReliableChannel, _>(&ServerDropPicked::new(
+                drop.drop_id,
+                player.player_id,
+                drop.block_id,
+            ));
         }
 
         for (user_key, user) in events.read::<DisconnectEvent>() {

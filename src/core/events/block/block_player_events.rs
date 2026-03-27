@@ -9,6 +9,7 @@ pub struct BlockBreakByPlayerEvent {
     pub chunk_z: u8,
     pub block_id: u16,
     pub block_name: String,
+    pub drops_item: bool,
 }
 
 #[derive(Message, Clone, Debug)]

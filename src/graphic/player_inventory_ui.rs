@@ -196,7 +196,7 @@ fn generate_inventory_html_file() {
     for i in 1..=PLAYER_INVENTORY_SLOTS {
         let index = format!("{:02}", i);
         slots_html.push_str(&format!(
-            "        <div class=\"inventory-slot\"><img id=\"player-inventory-icon-{index}\" class=\"inventory-slot-icon\" alt=\"\" /><p id=\"player-inventory-slot-{index}\" class=\"inventory-slot-index\"></p></div>\n"
+            "        <div class=\"inventory-slot\"><img id=\"player-inventory-icon-{index}\" class=\"inventory-slot-icon\" alt=\" \" /><p id=\"player-inventory-slot-{index}\" class=\"inventory-slot-index\"></p></div>\n"
         ));
     }
 

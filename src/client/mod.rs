@@ -1,12 +1,17 @@
 use self::manager::ManagerPlugin;
 use crate::core::config::GlobalConfig;
 use crate::core::debug::{BuildInfo, WorldInspectorState};
+use crate::core::entities::player::inventory::PlayerInventory;
 use crate::core::entities::player::{FpsController, Player};
 use crate::core::events::block::block_player_events::{
     BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
+use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::AppState;
+use crate::core::world::block::{
+    BlockRegistry, VOXEL_SIZE, build_block_cube_mesh, get_block_world,
+};
 use crate::core::world::chunk::ChunkMap;
 use crate::core::world::chunk_dimension::{Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local};
 use crate::core::world::fluid::FluidMap;
@@ -14,7 +19,7 @@ use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
 use bevy::log::{BoxedLayer, Level, LogPlugin};
 use bevy::math::primitives::Capsule3d;
-use bevy::mesh::Mesh3d;
+use bevy::mesh::{Mesh3d, VertexAttributeValues};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::*;
 use bevy::render::RenderPlugin;
@@ -29,8 +34,9 @@ use multiplayer::{
     config::NetworkSettings,
     discovery::{LanDiscoveryClient, LanServerInfo},
     protocol::{
-        Auth, ClientBlockBreak, ClientBlockPlace, PlayerJoined, PlayerLeft, PlayerMove,
-        PlayerSnapshot, ServerBlockBreak, ServerBlockPlace, ServerWelcome, protocol,
+        Auth, ClientBlockBreak, ClientBlockPlace, ClientDropPickup, PlayerJoined, PlayerLeft,
+        PlayerMove, PlayerSnapshot, ServerBlockBreak, ServerBlockPlace, ServerDropPicked,
+        ServerDropSpawn, ServerWelcome, protocol,
     },
     world::{NetworkEntity, NetworkWorld},
 };
@@ -69,6 +75,32 @@ struct RemotePlayerVisuals {
     material: Handle<StandardMaterial>,
 }
 
+#[derive(Component, Debug)]
+struct MultiplayerDroppedItem {
+    drop_id: u64,
+    block_id: u16,
+    next_pickup_request_at: f32,
+    resting: bool,
+    velocity: Vec3,
+    angular_velocity: Vec3,
+    spin_axis: Vec3,
+    spin_speed: f32,
+}
+
+#[derive(Resource, Default)]
+struct MultiplayerDropIndex {
+    entities: HashMap<u64, Entity>,
+}
+
+const MULTIPLAYER_DROP_ITEM_SIZE: f32 = 0.32;
+const MULTIPLAYER_DROP_PICKUP_RADIUS: f32 = 1.35;
+const MULTIPLAYER_DROP_GRAVITY: f32 = 12.0;
+const MULTIPLAYER_DROP_POP_MIN_DIST: f32 = 0.1;
+const MULTIPLAYER_DROP_POP_MAX_DIST: f32 = 1.0;
+const MULTIPLAYER_DROP_VISUAL_SCALE_X: f32 = 0.85;
+const MULTIPLAYER_DROP_VISUAL_SCALE_Y: f32 = 0.72;
+const MULTIPLAYER_DROP_VISUAL_SCALE_Z: f32 = 1.14;
+
 struct MultiplayerClientRuntime {
     enabled: bool,
     player_name: String,
@@ -78,6 +110,7 @@ struct MultiplayerClientRuntime {
     world: NetworkWorld,
     local_player_id: Option<u64>,
     remote_players: HashMap<u64, Entity>,
+    next_local_drop_seq: u32,
     send_timer: Timer,
 }
 
@@ -93,6 +126,7 @@ impl MultiplayerClientRuntime {
             world: NetworkWorld::default(),
             local_player_id: None,
             remote_players: HashMap::new(),
+            next_local_drop_seq: 1,
             send_timer: Timer::from_seconds(
                 Duration::from_millis(settings.client.transform_send_interval_ms).as_secs_f32(),
                 TimerMode::Repeating,
@@ -130,6 +164,14 @@ impl MultiplayerClientRuntime {
         self.session_url = session_url;
         self.local_player_id = None;
         self.remote_players.clear();
+        self.next_local_drop_seq = 1;
+    }
+
+    fn allocate_local_drop_id(&mut self) -> Option<u64> {
+        let player_id = self.local_player_id?;
+        let drop_id = (player_id << 32) | (self.next_local_drop_seq as u64);
+        self.next_local_drop_seq = self.next_local_drop_seq.wrapping_add(1).max(1);
+        Some(drop_id)
     }
 }
 
@@ -529,7 +571,8 @@ struct MultiplayerClientPlugin;
 
 impl Plugin for MultiplayerClientPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_remote_player_visuals)
+        app.init_resource::<MultiplayerDropIndex>()
+            .add_systems(Startup, setup_remote_player_visuals)
             .add_systems(
                 Update,
                 (
@@ -537,6 +580,8 @@ impl Plugin for MultiplayerClientPlugin {
                     send_local_block_break_events,
                     send_local_block_place_events,
                     receive_multiplayer_messages,
+                    simulate_multiplayer_drop_items,
+                    send_local_drop_pickup_requests,
                     send_local_player_pose,
                 ),
             );
@@ -619,16 +664,24 @@ fn poll_lan_servers(
 fn receive_multiplayer_messages(
     mut commands: Commands,
     visuals: Res<RemotePlayerVisuals>,
+    registry: Option<Res<BlockRegistry>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut inventory: ResMut<PlayerInventory>,
     mut chunk_map: ResMut<ChunkMap>,
     mut fluids: ResMut<FluidMap>,
     mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
+    mut drops: ResMut<MultiplayerDropIndex>,
+    mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut runtime: NonSendMut<MultiplayerClientRuntime>,
 ) {
     let Some(mut client) = runtime.client.take() else {
+        multiplayer_connection.connected = false;
         return;
     };
 
     if client.connection_status().is_disconnected() {
+        multiplayer_connection.connected = false;
+        clear_multiplayer_drops(&mut commands, &mut drops);
         runtime.client = Some(client);
         return;
     }
@@ -721,6 +774,30 @@ fn receive_multiplayer_messages(
         );
     }
 
+    for message in events.read::<MessageEvent<OrderedReliableChannel, ServerDropSpawn>>() {
+        if let Some(registry) = registry.as_ref() {
+            spawn_multiplayer_drop(
+                &mut commands,
+                registry,
+                &mut meshes,
+                &mut drops,
+                message.drop_id,
+                message.location,
+                message.block_id,
+            );
+        }
+    }
+
+    for message in events.read::<MessageEvent<OrderedReliableChannel, ServerDropPicked>>() {
+        if let Some(entity) = drops.entities.remove(&message.drop_id) {
+            commands.entity(entity).despawn();
+        }
+
+        if Some(message.player_id) == runtime.local_player_id {
+            let _ = inventory.add_block(message.block_id, 1);
+        }
+    }
+
     for error in events.read::<ErrorEvent>() {
         error!("Multiplayer client error: {}", error);
     }
@@ -729,30 +806,60 @@ fn receive_multiplayer_messages(
         for entity in runtime.remote_players.drain().map(|(_, entity)| entity) {
             commands.entity(entity).despawn();
         }
+        clear_multiplayer_drops(&mut commands, &mut drops);
         runtime.local_player_id = None;
+        multiplayer_connection.connected = false;
+    } else {
+        multiplayer_connection.connected =
+            client.connection_status().is_connected() && runtime.local_player_id.is_some();
     }
 
     runtime.client = Some(client);
 }
 
 fn send_local_block_break_events(
+    mut commands: Commands,
+    registry: Option<Res<BlockRegistry>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut drops: ResMut<MultiplayerDropIndex>,
     mut break_events: MessageReader<BlockBreakByPlayerEvent>,
     mut runtime: NonSendMut<MultiplayerClientRuntime>,
 ) {
-    let Some(client) = runtime.client.as_mut() else {
-        for _ in break_events.read() {}
-        return;
-    };
-
-    if !client.connection_status().is_connected() {
+    let is_connected = runtime
+        .client
+        .as_ref()
+        .is_some_and(|client| client.connection_status().is_connected());
+    if !is_connected {
         for _ in break_events.read() {}
         return;
     }
 
     for event in break_events.read() {
-        client.send_message::<OrderedReliableChannel, _>(&ClientBlockBreak::new(
-            event.location.to_array(),
-        ));
+        let mut drop_id = 0;
+        if event.drops_item {
+            if let Some(local_drop_id) = runtime.allocate_local_drop_id() {
+                drop_id = local_drop_id;
+                if let Some(registry) = registry.as_ref() {
+                    spawn_multiplayer_drop(
+                        &mut commands,
+                        registry,
+                        &mut meshes,
+                        &mut drops,
+                        local_drop_id,
+                        event.location.to_array(),
+                        event.block_id,
+                    );
+                }
+            }
+        }
+
+        if let Some(client) = runtime.client.as_mut() {
+            client.send_message::<OrderedReliableChannel, _>(&ClientBlockBreak::new(
+                event.location.to_array(),
+                if event.drops_item { event.block_id } else { 0 },
+                drop_id,
+            ));
+        }
     }
 }
 
@@ -775,6 +882,135 @@ fn send_local_block_place_events(
             event.location.to_array(),
             event.block_id,
         ));
+    }
+}
+
+fn simulate_multiplayer_drop_items(
+    time: Res<Time>,
+    chunk_map: Res<ChunkMap>,
+    mut drops: Query<(&mut MultiplayerDroppedItem, &mut Transform), With<MultiplayerDroppedItem>>,
+) {
+    let delta = time.delta_secs();
+
+    for (mut drop, mut transform) in &mut drops {
+        drop.velocity.y -= MULTIPLAYER_DROP_GRAVITY * delta;
+        let vx = drop.velocity.x;
+        let vz = drop.velocity.z;
+        drop.angular_velocity += Vec3::new(vz, 0.0, -vx) * (1.25 * delta);
+        let max_spin = 36.0;
+        let spin_len = drop.angular_velocity.length();
+        if spin_len > max_spin {
+            drop.angular_velocity = drop.angular_velocity / spin_len * max_spin;
+        }
+        let mut spin = Quat::IDENTITY;
+        if drop.angular_velocity.length_squared() > 0.000_001 {
+            spin = Quat::from_scaled_axis(drop.angular_velocity * delta) * spin;
+        }
+        if !drop.resting
+            && drop.spin_axis.length_squared() > 0.000_001
+            && drop.spin_speed.abs() > 0.001
+        {
+            spin = Quat::from_axis_angle(drop.spin_axis, drop.spin_speed * delta) * spin;
+        }
+        if spin != Quat::IDENTITY {
+            transform.rotation = (spin * transform.rotation).normalize();
+        }
+
+        let half = MULTIPLAYER_DROP_ITEM_SIZE * 0.5;
+        let support_probe = transform.translation - Vec3::Y * (half + 0.06);
+        let support_x = support_probe.x.floor() as i32;
+        let support_y = support_probe.y.floor() as i32;
+        let support_z = support_probe.z.floor() as i32;
+        let has_support =
+            get_block_world(&chunk_map, IVec3::new(support_x, support_y, support_z)) != 0;
+
+        if drop.resting {
+            if has_support {
+                drop.velocity = Vec3::ZERO;
+                let drag = (1.0 - 4.0 * delta).clamp(0.0, 1.0);
+                drop.angular_velocity *= drag;
+                drop.spin_speed *= drag;
+                if drop.angular_velocity.length_squared() < 0.000_1 {
+                    drop.angular_velocity = Vec3::ZERO;
+                }
+                if drop.spin_speed.abs() < 0.01 {
+                    drop.spin_speed = 0.0;
+                }
+                continue;
+            }
+
+            drop.resting = false;
+            drop.velocity = Vec3::new(0.0, drop.velocity.y.min(-0.1), 0.0);
+        }
+
+        transform.translation += drop.velocity * delta;
+
+        let foot = transform.translation - Vec3::Y * (half + 0.03);
+        let wx = foot.x.floor() as i32;
+        let wy = foot.y.floor() as i32;
+        let wz = foot.z.floor() as i32;
+
+        let below_is_solid = get_block_world(&chunk_map, IVec3::new(wx, wy, wz)) != 0;
+        if !below_is_solid || drop.velocity.y > 0.0 {
+            continue;
+        }
+
+        let ground_top = wy as f32 + 1.0;
+        if transform.translation.y - half > ground_top {
+            continue;
+        }
+
+        transform.translation.y = ground_top + half;
+        drop.velocity = Vec3::ZERO;
+        drop.resting = true;
+        drop.angular_velocity *= 0.4;
+        drop.spin_speed *= 0.5;
+    }
+}
+
+fn send_local_drop_pickup_requests(
+    time: Res<Time>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
+    inventory: Res<PlayerInventory>,
+    player: Query<&Transform, With<Player>>,
+    mut drops: Query<(&Transform, &mut MultiplayerDroppedItem), With<MultiplayerDroppedItem>>,
+    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+) {
+    if !multiplayer_connection.connected {
+        return;
+    }
+
+    let Some(client) = runtime.client.as_mut() else {
+        return;
+    };
+
+    if !client.connection_status().is_connected() {
+        return;
+    }
+
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+
+    let radius_sq = MULTIPLAYER_DROP_PICKUP_RADIUS * MULTIPLAYER_DROP_PICKUP_RADIUS;
+    let player_pos = player_transform.translation;
+    let now = time.elapsed_secs();
+
+    for (transform, mut drop) in &mut drops {
+        if now < drop.next_pickup_request_at {
+            continue;
+        }
+
+        if !inventory_can_add_block(&inventory, drop.block_id) {
+            continue;
+        }
+
+        if player_pos.distance_squared(transform.translation) > radius_sq {
+            continue;
+        }
+
+        client.send_message::<OrderedReliableChannel, _>(&ClientDropPickup::new(drop.drop_id));
+        drop.next_pickup_request_at = now + 0.25;
     }
 }
 
@@ -852,6 +1088,175 @@ fn apply_remote_block_place(
     if let Some(fluid_chunk) = fluids.0.get_mut(&chunk_coord) {
         fluid_chunk.set(lx, ly, lz, false);
     }
+}
+
+fn spawn_multiplayer_drop(
+    commands: &mut Commands,
+    registry: &BlockRegistry,
+    meshes: &mut Assets<Mesh>,
+    drops: &mut MultiplayerDropIndex,
+    drop_id: u64,
+    location: [i32; 3],
+    block_id: u16,
+) {
+    if block_id == 0 {
+        return;
+    }
+
+    if drops.entities.contains_key(&drop_id) {
+        return;
+    }
+
+    let mut mesh = build_block_cube_mesh(registry, block_id, MULTIPLAYER_DROP_ITEM_SIZE);
+    center_mesh_vertices(&mut mesh, MULTIPLAYER_DROP_ITEM_SIZE * 0.5);
+
+    let world_loc = IVec3::from_array(location);
+    let pop_velocity = compute_multiplayer_drop_pop_velocity(world_loc, drop_id);
+    let angular_velocity = compute_multiplayer_drop_angular_velocity(world_loc, drop_id);
+    let spin_axis = compute_multiplayer_drop_spin_axis(world_loc, drop_id);
+    let spin_speed = compute_multiplayer_drop_spin_speed(world_loc, drop_id);
+    let initial_rotation = Quat::from_euler(
+        EulerRot::XYZ,
+        hash01_u64(seed_from_world_loc(world_loc) ^ drop_id ^ 0xA11CE) * std::f32::consts::TAU,
+        hash01_u64(seed_from_world_loc(world_loc) ^ drop_id ^ 0xB00B5) * std::f32::consts::TAU,
+        hash01_u64(seed_from_world_loc(world_loc) ^ drop_id ^ 0xC0FFEE) * std::f32::consts::TAU,
+    );
+    let center = Vec3::new(
+        (world_loc.x as f32 + 0.5) * VOXEL_SIZE,
+        (world_loc.y as f32 + 0.5) * VOXEL_SIZE + 0.28,
+        (world_loc.z as f32 + 0.5) * VOXEL_SIZE,
+    );
+
+    let entity = commands
+        .spawn((
+            MultiplayerDroppedItem {
+                drop_id,
+                block_id,
+                next_pickup_request_at: 0.0,
+                resting: false,
+                velocity: pop_velocity,
+                angular_velocity,
+                spin_axis,
+                spin_speed,
+            },
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(registry.material(block_id)),
+            Transform {
+                translation: center,
+                rotation: initial_rotation,
+                scale: Vec3::new(
+                    MULTIPLAYER_DROP_VISUAL_SCALE_X,
+                    MULTIPLAYER_DROP_VISUAL_SCALE_Y,
+                    MULTIPLAYER_DROP_VISUAL_SCALE_Z,
+                ),
+            },
+            Visibility::default(),
+            Name::new(format!("MultiplayerDrop#{drop_id}")),
+        ))
+        .id();
+
+    drops.entities.insert(drop_id, entity);
+}
+
+fn clear_multiplayer_drops(commands: &mut Commands, drops: &mut MultiplayerDropIndex) {
+    for entity in drops.entities.drain().map(|(_, entity)| entity) {
+        commands.entity(entity).despawn();
+    }
+}
+
+fn inventory_can_add_block(inventory: &PlayerInventory, block_id: u16) -> bool {
+    if block_id == 0 {
+        return false;
+    }
+
+    inventory.slots.iter().any(|slot| {
+        slot.is_empty()
+            || (slot.block_id == block_id
+                && slot.count
+                    < crate::core::entities::player::inventory::PLAYER_INVENTORY_STACK_MAX)
+    })
+}
+
+fn center_mesh_vertices(mesh: &mut Mesh, half_extent: f32) {
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    else {
+        return;
+    };
+
+    for position in positions.iter_mut() {
+        position[0] -= half_extent;
+        position[1] -= half_extent;
+        position[2] -= half_extent;
+    }
+}
+
+fn compute_multiplayer_drop_pop_velocity(world_loc: IVec3, drop_id: u64) -> Vec3 {
+    let seed_base = seed_from_world_loc(world_loc) ^ drop_id;
+    let angle = hash01_u64(seed_base ^ 0x10) * std::f32::consts::TAU;
+    let distance = MULTIPLAYER_DROP_POP_MIN_DIST
+        + (MULTIPLAYER_DROP_POP_MAX_DIST - MULTIPLAYER_DROP_POP_MIN_DIST)
+            * hash01_u64(seed_base ^ 0x20);
+    let flight_time = 0.35 + hash01_u64(seed_base ^ 0x30) * 0.25;
+    let horizontal_speed = (distance / flight_time).max(0.2);
+
+    Vec3::new(
+        angle.cos() * horizontal_speed,
+        2.8 + hash01_u64(seed_base ^ 0x40) * 1.2,
+        angle.sin() * horizontal_speed,
+    )
+}
+
+fn compute_multiplayer_drop_angular_velocity(world_loc: IVec3, drop_id: u64) -> Vec3 {
+    let seed_base = seed_from_world_loc(world_loc) ^ drop_id ^ 0x5EED;
+
+    Vec3::new(
+        -8.0 + hash01_u64(seed_base ^ 0x51) * 16.0,
+        -10.0 + hash01_u64(seed_base ^ 0x52) * 20.0,
+        -8.0 + hash01_u64(seed_base ^ 0x53) * 16.0,
+    )
+}
+
+fn compute_multiplayer_drop_spin_axis(world_loc: IVec3, drop_id: u64) -> Vec3 {
+    let seed_base = seed_from_world_loc(world_loc) ^ drop_id ^ 0x7A51_5EED;
+    let axis = Vec3::new(
+        -1.0 + hash01_u64(seed_base ^ 0x71) * 2.0,
+        0.35 + hash01_u64(seed_base ^ 0x72) * 1.3,
+        -1.0 + hash01_u64(seed_base ^ 0x73) * 2.0,
+    );
+    let axis = axis.normalize_or_zero();
+    if axis.length_squared() > 0.000_001 {
+        axis
+    } else {
+        Vec3::new(0.78, 0.44, 0.44).normalize()
+    }
+}
+
+fn compute_multiplayer_drop_spin_speed(world_loc: IVec3, drop_id: u64) -> f32 {
+    let seed_base = seed_from_world_loc(world_loc) ^ drop_id ^ 0x8BAD_F00D;
+    let magnitude = 18.0 + hash01_u64(seed_base ^ 0x81) * 14.0;
+    let sign = if hash01_u64(seed_base ^ 0x82) < 0.5 {
+        -1.0
+    } else {
+        1.0
+    };
+    sign * magnitude
+}
+
+fn seed_from_world_loc(world_loc: IVec3) -> u64 {
+    (world_loc.x as i64 as u64).wrapping_mul(0x9E37_79B1_85EB_CA87)
+        ^ (world_loc.y as i64 as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ (world_loc.z as i64 as u64).wrapping_mul(0x1656_67B1_9E37_79F9)
+}
+
+fn hash01_u64(mut x: u64) -> f32 {
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^= x >> 31;
+
+    (x as f64 / u64::MAX as f64) as f32
 }
 
 fn ensure_remote_player(

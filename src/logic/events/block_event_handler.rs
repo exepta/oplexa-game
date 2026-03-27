@@ -5,6 +5,7 @@ use crate::core::events::block::block_player_events::{
     BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
+use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
 use crate::core::world::block::*;
 use crate::core::world::chunk::*;
@@ -31,6 +32,9 @@ struct DroppedBlockItem {
 
 #[derive(Component, Clone, Copy, Debug)]
 struct DroppedBlockVelocity(Vec3);
+
+#[derive(Component, Clone, Copy, Debug)]
+struct DroppedBlockAngularVelocity(Vec3);
 
 const DROP_ITEM_SIZE: f32 = 0.32;
 const DROP_PICKUP_RADIUS: f32 = 1.35;
@@ -75,7 +79,12 @@ fn block_break_handler(
     mut chunk_map: ResMut<ChunkMap>,
     mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
     mut break_ev: MessageWriter<BlockBreakByPlayerEvent>,
+    multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
 ) {
+    let multiplayer_connected = multiplayer_connection
+        .as_ref()
+        .is_some_and(|state| state.connected);
+
     if game_mode.0.eq(&GameMode::Spectator) {
         return;
     }
@@ -116,6 +125,7 @@ fn block_break_handler(
             chunk_z: lz,
             block_id: id_now,
             block_name: registry.name_opt(id_now).unwrap_or("").to_string(),
+            drops_item: !registry.is_fluid(id_now),
         });
 
         state.target = None;
@@ -181,9 +191,10 @@ fn block_break_handler(
         chunk_z: lz,
         block_id: target.id,
         block_name: registry.name_opt(target.id).unwrap_or("").to_string(),
+        drops_item: !registry.is_fluid(target.id),
     });
 
-    if !registry.is_fluid(target.id) {
+    if !multiplayer_connected && !registry.is_fluid(target.id) {
         spawn_dropped_block_item(
             &mut commands,
             &mut meshes,
@@ -263,6 +274,7 @@ fn simulate_dropped_block_items(
         (
             &mut DroppedBlockItem,
             &mut DroppedBlockVelocity,
+            &mut DroppedBlockAngularVelocity,
             &mut Transform,
         ),
         With<DroppedBlockItem>,
@@ -270,8 +282,20 @@ fn simulate_dropped_block_items(
 ) {
     let delta = time.delta_secs();
 
-    for (mut item, mut velocity, mut transform) in &mut items {
+    for (mut item, mut velocity, mut angular_velocity, mut transform) in &mut items {
         velocity.0.y -= DROP_GRAVITY * delta;
+        angular_velocity.0 += Vec3::new(velocity.0.z, 0.0, -velocity.0.x) * (1.25 * delta);
+        let max_spin = 32.0;
+        let spin_len = angular_velocity.0.length();
+        if spin_len > max_spin {
+            angular_velocity.0 = angular_velocity.0 / spin_len * max_spin;
+        }
+
+        if angular_velocity.0.length_squared() > 0.000_001 {
+            let spin = Quat::from_scaled_axis(angular_velocity.0 * delta);
+            transform.rotation = (spin * transform.rotation).normalize();
+        }
+
         let half = DROP_ITEM_SIZE * 0.5;
         let support_probe = transform.translation - Vec3::Y * (half + 0.06);
         let support_x = support_probe.x.floor() as i32;
@@ -283,6 +307,11 @@ fn simulate_dropped_block_items(
         if item.resting {
             if has_support {
                 velocity.0 = Vec3::ZERO;
+                let drag = (1.0 - 5.0 * delta).clamp(0.0, 1.0);
+                angular_velocity.0 *= drag;
+                if angular_velocity.0.length_squared() < 0.0001 {
+                    angular_velocity.0 = Vec3::ZERO;
+                }
                 continue;
             }
 
@@ -309,6 +338,7 @@ fn simulate_dropped_block_items(
 
         transform.translation.y = ground_top + half;
         velocity.0 = Vec3::ZERO;
+        angular_velocity.0 *= 0.55;
         item.resting = true;
     }
 }
@@ -316,10 +346,18 @@ fn simulate_dropped_block_items(
 fn pick_up_dropped_block_items(
     mut commands: Commands,
     game_mode: Res<GameModeState>,
+    multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
     mut inventory: ResMut<PlayerInventory>,
     player: Query<&Transform, With<Player>>,
     drops: Query<(Entity, &DroppedBlockItem, &Transform), With<DroppedBlockItem>>,
 ) {
+    if multiplayer_connection
+        .as_ref()
+        .is_some_and(|state| state.connected)
+    {
+        return;
+    }
+
     if game_mode.0 == GameMode::Spectator {
         return;
     }
@@ -365,11 +403,12 @@ fn spawn_dropped_block_item(
             resting: false,
         },
         DroppedBlockVelocity(compute_drop_pop_velocity(world_loc, now)),
+        DroppedBlockAngularVelocity(compute_drop_angular_velocity(world_loc, now)),
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(registry.material(block_id)),
         Transform {
             translation: center,
-            rotation: Quat::from_euler(EulerRot::XYZ, std::f32::consts::FRAC_PI_2, 0.0, 0.0),
+            rotation: compute_drop_initial_rotation(world_loc, now),
             scale: Vec3::ONE,
         },
         Visibility::default(),
@@ -397,6 +436,29 @@ fn compute_drop_pop_velocity(world_loc: IVec3, now: f32) -> Vec3 {
         2.8 + seed_base * 1.2,
         angle.sin() * horizontal_speed,
     )
+}
+
+fn compute_drop_angular_velocity(world_loc: IVec3, now: f32) -> Vec3 {
+    let seed_base = hash01(
+        world_loc.x.wrapping_mul(13) ^ world_loc.y.wrapping_mul(29) ^ world_loc.z.wrapping_mul(61),
+        now * 0.91,
+    );
+    let seed_x = hash01(world_loc.x ^ 0x41, now * 1.13);
+    let seed_y = hash01(world_loc.y ^ 0x52, now * 1.31);
+    let seed_z = hash01(world_loc.z ^ 0x63, now * 1.49);
+
+    Vec3::new(
+        -10.0 + seed_x * 20.0,
+        -13.0 + seed_y * 26.0 + seed_base * 4.0,
+        -10.0 + seed_z * 20.0,
+    )
+}
+
+fn compute_drop_initial_rotation(world_loc: IVec3, now: f32) -> Quat {
+    let rx = hash01(world_loc.x ^ world_loc.y ^ 0x71, now * 0.47) * std::f32::consts::TAU;
+    let ry = hash01(world_loc.y ^ world_loc.z ^ 0x82, now * 0.63) * std::f32::consts::TAU;
+    let rz = hash01(world_loc.z ^ world_loc.x ^ 0x93, now * 0.79) * std::f32::consts::TAU;
+    Quat::from_euler(EulerRot::XYZ, rx, ry, rz)
 }
 
 fn hash01(input: i32, time_factor: f32) -> f32 {

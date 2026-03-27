@@ -17,7 +17,6 @@
   align-items: stretch;
   pointer-events: none;
   background: var(--inv-panel-bg-top);
-  backdrop-filter: blur(10px);
 }
 
 #player-inventory-panel {

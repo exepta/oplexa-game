@@ -96,11 +96,17 @@ impl PlayerSnapshot {
 #[derive(Message)]
 pub struct ClientBlockBreak {
     pub location: [i32; 3],
+    pub drop_block_id: u16,
+    pub drop_id: u64,
 }
 
 impl ClientBlockBreak {
-    pub fn new(location: [i32; 3]) -> Self {
-        Self { location }
+    pub fn new(location: [i32; 3], drop_block_id: u16, drop_id: u64) -> Self {
+        Self {
+            location,
+            drop_block_id,
+            drop_id,
+        }
     }
 }
 
@@ -148,6 +154,51 @@ impl ServerBlockPlace {
     }
 }
 
+#[derive(Message)]
+pub struct ServerDropSpawn {
+    pub drop_id: u64,
+    pub location: [i32; 3],
+    pub block_id: u16,
+}
+
+impl ServerDropSpawn {
+    pub fn new(drop_id: u64, location: [i32; 3], block_id: u16) -> Self {
+        Self {
+            drop_id,
+            location,
+            block_id,
+        }
+    }
+}
+
+#[derive(Message)]
+pub struct ClientDropPickup {
+    pub drop_id: u64,
+}
+
+impl ClientDropPickup {
+    pub fn new(drop_id: u64) -> Self {
+        Self { drop_id }
+    }
+}
+
+#[derive(Message)]
+pub struct ServerDropPicked {
+    pub drop_id: u64,
+    pub player_id: u64,
+    pub block_id: u16,
+}
+
+impl ServerDropPicked {
+    pub fn new(drop_id: u64, player_id: u64, block_id: u16) -> Self {
+        Self {
+            drop_id,
+            player_id,
+            block_id,
+        }
+    }
+}
+
 pub fn protocol() -> Protocol {
     Protocol::builder()
         .tick_interval(Duration::from_millis(50))
@@ -163,5 +214,8 @@ pub fn protocol() -> Protocol {
         .add_message::<ClientBlockPlace>()
         .add_message::<ServerBlockBreak>()
         .add_message::<ServerBlockPlace>()
+        .add_message::<ServerDropSpawn>()
+        .add_message::<ClientDropPickup>()
+        .add_message::<ServerDropPicked>()
         .build()
 }
