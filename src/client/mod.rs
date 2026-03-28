@@ -7,6 +7,7 @@ use crate::core::events::block::block_player_events::{
     BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
+use crate::core::events::ui_events::{ConnectToServerRequest, DropItemRequest};
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::AppState;
 use crate::core::world::block::{
@@ -34,9 +35,9 @@ use multiplayer::{
     config::NetworkSettings,
     discovery::{LanDiscoveryClient, LanServerInfo},
     protocol::{
-        Auth, ClientBlockBreak, ClientBlockPlace, ClientDropPickup, PlayerJoined, PlayerLeft,
-        PlayerMove, PlayerSnapshot, ServerBlockBreak, ServerBlockPlace, ServerDropPicked,
-        ServerDropSpawn, ServerWelcome, protocol,
+        Auth, ClientBlockBreak, ClientBlockPlace, ClientDropItem, ClientDropPickup, PlayerJoined,
+        PlayerLeft, PlayerMove, PlayerSnapshot, ServerBlockBreak, ServerBlockPlace,
+        ServerDropPicked, ServerDropSpawn, ServerWelcome, protocol,
     },
     world::{NetworkEntity, NetworkWorld},
 };
@@ -60,9 +61,6 @@ use tracing_subscriber::fmt::writer::BoxMakeWriter;
 
 type NetworkClient = NaiaClient<NetworkEntity>;
 
-#[derive(Resource, Clone)]
-struct MultiplayerSettingsResource(NetworkSettings);
-
 #[derive(Component)]
 struct RemotePlayerAvatar {
     #[allow(dead_code)]
@@ -79,6 +77,7 @@ struct RemotePlayerVisuals {
 struct MultiplayerDroppedItem {
     drop_id: u64,
     block_id: u16,
+    pickup_ready_at: f32,
     next_pickup_request_at: f32,
     resting: bool,
     velocity: Vec3,
@@ -103,6 +102,7 @@ const MULTIPLAYER_DROP_POP_MAX_DIST: f32 = 1.0;
 const MULTIPLAYER_DROP_VISUAL_SCALE_X: f32 = 0.85;
 const MULTIPLAYER_DROP_VISUAL_SCALE_Y: f32 = 0.72;
 const MULTIPLAYER_DROP_VISUAL_SCALE_Z: f32 = 1.14;
+const MULTIPLAYER_DROP_PICKUP_DELAY_SECS: f32 = 0.5;
 
 struct MultiplayerClientRuntime {
     enabled: bool,
@@ -120,7 +120,7 @@ struct MultiplayerClientRuntime {
 impl MultiplayerClientRuntime {
     fn new(settings: &NetworkSettings) -> Self {
         let auto_connect_lan = settings.client.session_url.eq_ignore_ascii_case("lan:auto");
-        let mut runtime = Self {
+        let runtime = Self {
             enabled: settings.client.enabled,
             player_name: settings.client.player_name.clone(),
             session_url: settings.client.session_url.clone(),
@@ -135,10 +135,6 @@ impl MultiplayerClientRuntime {
                 TimerMode::Repeating,
             ),
         };
-
-        if runtime.enabled && settings.client.connect_on_startup && !runtime.auto_connect_lan {
-            runtime.connect(runtime.session_url.clone());
-        }
 
         runtime
     }
@@ -216,7 +212,6 @@ fn init_bevy_app(app: &mut App, config: &GlobalConfig, multiplayer_settings: Net
     };
 
     app.insert_resource(config.clone())
-        .insert_resource(MultiplayerSettingsResource(multiplayer_settings.clone()))
         .insert_resource(build)
         .insert_resource(ClearColor(Color::Srgba(Srgba::rgb_u8(20, 25, 27))))
         .insert_resource(WorldInspectorState(false))
@@ -580,8 +575,10 @@ impl Plugin for MultiplayerClientPlugin {
                 Update,
                 (
                     poll_lan_servers,
+                    connect_to_server_requested,
                     send_local_block_break_events,
                     send_local_block_place_events,
+                    send_local_item_drop_requests,
                     receive_multiplayer_messages,
                     simulate_multiplayer_drop_items,
                     send_local_drop_pickup_requests,
@@ -606,12 +603,7 @@ fn setup_remote_player_visuals(
     });
 }
 
-fn poll_lan_servers(
-    time: Res<Time>,
-    settings: Res<MultiplayerSettingsResource>,
-    mut discovery: NonSendMut<LanDiscoveryRuntime>,
-    mut runtime: NonSendMut<MultiplayerClientRuntime>,
-) {
+fn poll_lan_servers(time: Res<Time>, mut discovery: NonSendMut<LanDiscoveryRuntime>) {
     if discovery.client.is_none() {
         return;
     }
@@ -650,22 +642,36 @@ fn poll_lan_servers(
             );
             discovery.known_servers.push(server.clone());
         }
+    }
+}
 
-        if runtime.auto_connect_lan
-            && settings.0.client.connect_on_startup
-            && runtime
-                .client
-                .as_ref()
-                .is_none_or(|client| client.connection_status().is_disconnected())
-        {
+fn connect_to_server_requested(
+    mut connect_requests: MessageReader<ConnectToServerRequest>,
+    discovery: NonSend<LanDiscoveryRuntime>,
+    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+) {
+    if connect_requests.read().next().is_none() {
+        return;
+    }
+
+    if runtime.session_url.eq_ignore_ascii_case("lan:auto") {
+        if let Some(server) = discovery.known_servers.first() {
             runtime.connect(server.session_url.clone());
             runtime.auto_connect_lan = false;
+        } else {
+            warn!("No LAN server discovered yet. Connect request ignored.");
         }
+        return;
     }
+
+    let session_url = runtime.session_url.clone();
+    runtime.connect(session_url);
+    runtime.auto_connect_lan = false;
 }
 
 fn receive_multiplayer_messages(
     mut commands: Commands,
+    time: Res<Time>,
     visuals: Res<RemotePlayerVisuals>,
     registry: Option<Res<BlockRegistry>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -707,6 +713,9 @@ fn receive_multiplayer_messages(
 
     for message in events.read::<MessageEvent<UnorderedReliableChannel, ServerWelcome>>() {
         runtime.local_player_id = Some(message.player_id);
+        if let Some(entity) = runtime.remote_players.remove(&message.player_id) {
+            commands.entity(entity).despawn();
+        }
         info!(
             "Server '{}' accepted player id {}",
             message.server_name, message.player_id
@@ -787,6 +796,10 @@ fn receive_multiplayer_messages(
                 message.drop_id,
                 message.location,
                 message.block_id,
+                message.has_motion,
+                message.spawn_translation,
+                message.initial_velocity,
+                time.elapsed_secs(),
             );
         }
     }
@@ -822,6 +835,7 @@ fn receive_multiplayer_messages(
 
 fn send_local_block_break_events(
     mut commands: Commands,
+    time: Res<Time>,
     registry: Option<Res<BlockRegistry>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut drops: ResMut<MultiplayerDropIndex>,
@@ -851,6 +865,10 @@ fn send_local_block_break_events(
                         local_drop_id,
                         event.location.to_array(),
                         event.block_id,
+                        false,
+                        [0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0],
+                        time.elapsed_secs(),
                     );
                 }
             }
@@ -888,6 +906,35 @@ fn send_local_block_place_events(
     }
 }
 
+fn send_local_item_drop_requests(
+    mut drop_requests: MessageReader<DropItemRequest>,
+    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+) {
+    let Some(client) = runtime.client.as_mut() else {
+        for _ in drop_requests.read() {}
+        return;
+    };
+
+    if !client.connection_status().is_connected() {
+        for _ in drop_requests.read() {}
+        return;
+    }
+
+    for request in drop_requests.read() {
+        if request.block_id == 0 || request.amount == 0 {
+            continue;
+        }
+
+        client.send_message::<OrderedReliableChannel, _>(&ClientDropItem::new(
+            request.location,
+            request.block_id,
+            request.amount,
+            request.spawn_translation,
+            request.initial_velocity,
+        ));
+    }
+}
+
 fn simulate_multiplayer_drop_items(
     time: Res<Time>,
     chunk_map: Res<ChunkMap>,
@@ -895,6 +942,7 @@ fn simulate_multiplayer_drop_items(
     mut drops: Query<(&mut MultiplayerDroppedItem, &mut Transform), With<MultiplayerDroppedItem>>,
 ) {
     let delta = time.delta_secs();
+    let now = time.elapsed_secs();
     let player_pos = player.single().ok().map(|t| t.translation);
 
     for (mut drop, mut transform) in &mut drops {
@@ -929,22 +977,24 @@ fn simulate_multiplayer_drop_items(
         let has_support =
             get_block_world(&chunk_map, IVec3::new(support_x, support_y, support_z)) != 0;
 
-        if let Some(player_pos) = player_pos {
-            let to_player = player_pos - transform.translation;
-            let dist_sq = to_player.length_squared();
-            if dist_sq <= MULTIPLAYER_DROP_ATTRACT_RADIUS * MULTIPLAYER_DROP_ATTRACT_RADIUS
-                && dist_sq > 0.000_001
-            {
-                let dist = dist_sq.sqrt();
-                let dir = to_player / dist;
-                let t = 1.0 - (dist / MULTIPLAYER_DROP_ATTRACT_RADIUS).clamp(0.0, 1.0);
-                let accel = MULTIPLAYER_DROP_ATTRACT_ACCEL * (0.35 + t * 1.65);
-                drop.velocity += dir * (accel * delta);
-                let speed = drop.velocity.length();
-                if speed > MULTIPLAYER_DROP_ATTRACT_MAX_SPEED {
-                    drop.velocity = drop.velocity / speed * MULTIPLAYER_DROP_ATTRACT_MAX_SPEED;
+        if now >= drop.pickup_ready_at {
+            if let Some(player_pos) = player_pos {
+                let to_player = player_pos - transform.translation;
+                let dist_sq = to_player.length_squared();
+                if dist_sq <= MULTIPLAYER_DROP_ATTRACT_RADIUS * MULTIPLAYER_DROP_ATTRACT_RADIUS
+                    && dist_sq > 0.000_001
+                {
+                    let dist = dist_sq.sqrt();
+                    let dir = to_player / dist;
+                    let t = 1.0 - (dist / MULTIPLAYER_DROP_ATTRACT_RADIUS).clamp(0.0, 1.0);
+                    let accel = MULTIPLAYER_DROP_ATTRACT_ACCEL * (0.35 + t * 1.65);
+                    drop.velocity += dir * (accel * delta);
+                    let speed = drop.velocity.length();
+                    if speed > MULTIPLAYER_DROP_ATTRACT_MAX_SPEED {
+                        drop.velocity = drop.velocity / speed * MULTIPLAYER_DROP_ATTRACT_MAX_SPEED;
+                    }
+                    drop.resting = false;
                 }
-                drop.resting = false;
             }
         }
 
@@ -1021,6 +1071,10 @@ fn send_local_drop_pickup_requests(
     let now = time.elapsed_secs();
 
     for (transform, mut drop) in &mut drops {
+        if now < drop.pickup_ready_at {
+            continue;
+        }
+
         if now < drop.next_pickup_request_at {
             continue;
         }
@@ -1122,6 +1176,10 @@ fn spawn_multiplayer_drop(
     drop_id: u64,
     location: [i32; 3],
     block_id: u16,
+    has_motion: bool,
+    spawn_translation: [f32; 3],
+    initial_velocity: [f32; 3],
+    spawn_now: f32,
 ) {
     if block_id == 0 {
         return;
@@ -1135,7 +1193,11 @@ fn spawn_multiplayer_drop(
     center_mesh_vertices(&mut mesh, MULTIPLAYER_DROP_ITEM_SIZE * 0.5);
 
     let world_loc = IVec3::from_array(location);
-    let pop_velocity = compute_multiplayer_drop_pop_velocity(world_loc, drop_id);
+    let pop_velocity = if has_motion {
+        Vec3::from_array(initial_velocity)
+    } else {
+        compute_multiplayer_drop_pop_velocity(world_loc, drop_id)
+    };
     let angular_velocity = compute_multiplayer_drop_angular_velocity(world_loc, drop_id);
     let spin_axis = compute_multiplayer_drop_spin_axis(world_loc, drop_id);
     let spin_speed = compute_multiplayer_drop_spin_speed(world_loc, drop_id);
@@ -1145,17 +1207,22 @@ fn spawn_multiplayer_drop(
         hash01_u64(seed_from_world_loc(world_loc) ^ drop_id ^ 0xB00B5) * std::f32::consts::TAU,
         hash01_u64(seed_from_world_loc(world_loc) ^ drop_id ^ 0xC0FFEE) * std::f32::consts::TAU,
     );
-    let center = Vec3::new(
-        (world_loc.x as f32 + 0.5) * VOXEL_SIZE,
-        (world_loc.y as f32 + 0.5) * VOXEL_SIZE + 0.28,
-        (world_loc.z as f32 + 0.5) * VOXEL_SIZE,
-    );
+    let center = if has_motion {
+        Vec3::from_array(spawn_translation)
+    } else {
+        Vec3::new(
+            (world_loc.x as f32 + 0.5) * VOXEL_SIZE,
+            (world_loc.y as f32 + 0.5) * VOXEL_SIZE + 0.28,
+            (world_loc.z as f32 + 0.5) * VOXEL_SIZE,
+        )
+    };
 
     let entity = commands
         .spawn((
             MultiplayerDroppedItem {
                 drop_id,
                 block_id,
+                pickup_ready_at: spawn_now + MULTIPLAYER_DROP_PICKUP_DELAY_SECS,
                 next_pickup_request_at: 0.0,
                 resting: false,
                 velocity: pop_velocity,

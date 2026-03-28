@@ -177,7 +177,10 @@ fn grab_cursor_on_click(
     mouse: Res<ButtonInput<MouseButton>>,
     ui_state: Option<Res<UiInteractionState>>,
 ) {
-    if ui_state.as_ref().is_some_and(|state| state.inventory_open) {
+    if ui_state
+        .as_ref()
+        .is_some_and(|state| state.blocks_game_input())
+    {
         return;
     }
 
@@ -293,7 +296,9 @@ fn player_move_simple(
     let right_key = convert(game_config.input.move_right.as_str()).expect("Invalid key");
     let jump_key = convert(game_config.input.jump.as_str()).unwrap_or(KeyCode::Space);
     let down_key = convert(game_config.input.sprint.as_str()).unwrap_or(KeyCode::ShiftLeft);
-    let input_blocked = ui_state.as_ref().is_some_and(|state| state.inventory_open);
+    let input_blocked = ui_state
+        .as_ref()
+        .is_some_and(|state| state.blocks_game_input());
 
     let f = tf.forward();
     let r = tf.right();

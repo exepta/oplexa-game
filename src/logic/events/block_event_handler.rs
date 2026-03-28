@@ -29,6 +29,7 @@ struct MiningOverlayFace;
 struct DroppedBlockItem {
     block_id: BlockId,
     resting: bool,
+    pickup_ready_at: f32,
 }
 
 #[derive(Component, Clone, Copy, Debug)]
@@ -45,6 +46,11 @@ const DROP_ATTRACT_MAX_SPEED: f32 = 12.0;
 const DROP_GRAVITY: f32 = 12.0;
 const DROP_POP_MIN_DIST: f32 = 0.1;
 const DROP_POP_MAX_DIST: f32 = 1.0;
+const DROP_PICKUP_DELAY_SECS: f32 = 0.7;
+const PLAYER_DROP_THROW_DISTANCE: f32 = 2.0;
+const PLAYER_DROP_THROW_HEIGHT: f32 = 0.65;
+const PLAYER_DROP_THROW_SPEED: f32 = 2.5;
+const PLAYER_DROP_THROW_UP_SPEED: f32 = 1.5;
 
 #[derive(Clone, Copy)]
 enum Axis {
@@ -86,7 +92,10 @@ fn block_break_handler(
     multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
     ui_state: Option<Res<UiInteractionState>>,
 ) {
-    if ui_state.as_ref().is_some_and(|state| state.inventory_open) {
+    if ui_state
+        .as_ref()
+        .is_some_and(|state| state.blocks_game_input())
+    {
         state.target = None;
         return;
     }
@@ -135,7 +144,7 @@ fn block_break_handler(
             chunk_z: lz,
             block_id: id_now,
             block_name: registry.name_opt(id_now).unwrap_or("").to_string(),
-            drops_item: !registry.is_fluid(id_now),
+            drops_item: false,
         });
 
         state.target = None;
@@ -233,7 +242,10 @@ fn block_place_handler(
     mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
     mut place_ev: MessageWriter<BlockPlaceByPlayerEvent>,
 ) {
-    if ui_state.as_ref().is_some_and(|state| state.inventory_open) {
+    if ui_state
+        .as_ref()
+        .is_some_and(|state| state.blocks_game_input())
+    {
         return;
     }
 
@@ -360,6 +372,7 @@ fn simulate_dropped_block_items(
     >,
 ) {
     let delta = time.delta_secs();
+    let now = time.elapsed_secs();
     let player_pos = player.single().ok().map(|t| t.translation);
 
     for (mut item, mut velocity, mut angular_velocity, mut transform) in &mut items {
@@ -384,20 +397,22 @@ fn simulate_dropped_block_items(
         let has_support =
             get_block_world(&chunk_map, IVec3::new(support_x, support_y, support_z)) != 0;
 
-        if let Some(player_pos) = player_pos {
-            let to_player = player_pos - transform.translation;
-            let dist_sq = to_player.length_squared();
-            if dist_sq <= DROP_ATTRACT_RADIUS * DROP_ATTRACT_RADIUS && dist_sq > 0.000_001 {
-                let dist = dist_sq.sqrt();
-                let dir = to_player / dist;
-                let t = 1.0 - (dist / DROP_ATTRACT_RADIUS).clamp(0.0, 1.0);
-                let accel = DROP_ATTRACT_ACCEL * (0.35 + t * 1.65);
-                velocity.0 += dir * (accel * delta);
-                let speed = velocity.0.length();
-                if speed > DROP_ATTRACT_MAX_SPEED {
-                    velocity.0 = velocity.0 / speed * DROP_ATTRACT_MAX_SPEED;
+        if now >= item.pickup_ready_at {
+            if let Some(player_pos) = player_pos {
+                let to_player = player_pos - transform.translation;
+                let dist_sq = to_player.length_squared();
+                if dist_sq <= DROP_ATTRACT_RADIUS * DROP_ATTRACT_RADIUS && dist_sq > 0.000_001 {
+                    let dist = dist_sq.sqrt();
+                    let dir = to_player / dist;
+                    let t = 1.0 - (dist / DROP_ATTRACT_RADIUS).clamp(0.0, 1.0);
+                    let accel = DROP_ATTRACT_ACCEL * (0.35 + t * 1.65);
+                    velocity.0 += dir * (accel * delta);
+                    let speed = velocity.0.length();
+                    if speed > DROP_ATTRACT_MAX_SPEED {
+                        velocity.0 = velocity.0 / speed * DROP_ATTRACT_MAX_SPEED;
+                    }
+                    item.resting = false;
                 }
-                item.resting = false;
             }
         }
 
@@ -442,6 +457,7 @@ fn simulate_dropped_block_items(
 
 fn pick_up_dropped_block_items(
     mut commands: Commands,
+    time: Res<Time>,
     game_mode: Res<GameModeState>,
     multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
     mut inventory: ResMut<PlayerInventory>,
@@ -465,8 +481,13 @@ fn pick_up_dropped_block_items(
 
     let radius_sq = DROP_PICKUP_RADIUS * DROP_PICKUP_RADIUS;
     let player_pos = player_transform.translation;
+    let now = time.elapsed_secs();
 
     for (entity, item, transform) in &drops {
+        if now < item.pickup_ready_at {
+            continue;
+        }
+
         if player_pos.distance_squared(transform.translation) > radius_sq {
             continue;
         }
@@ -485,34 +506,22 @@ fn spawn_dropped_block_item(
     world_loc: IVec3,
     now: f32,
 ) {
-    let mut mesh = build_block_cube_mesh(registry, block_id, DROP_ITEM_SIZE);
-    center_mesh_vertices(&mut mesh, DROP_ITEM_SIZE * 0.5);
-
     let center = Vec3::new(
         (world_loc.x as f32 + 0.5) * VOXEL_SIZE,
         (world_loc.y as f32 + 0.5) * VOXEL_SIZE + 0.28,
         (world_loc.z as f32 + 0.5) * VOXEL_SIZE,
     );
 
-    commands.spawn((
-        DroppedBlockItem {
-            block_id,
-            resting: false,
-        },
-        DroppedBlockVelocity(compute_drop_pop_velocity(world_loc, now)),
-        DroppedBlockAngularVelocity(compute_drop_angular_velocity(world_loc, now)),
-        Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(registry.material(block_id)),
-        Transform {
-            translation: center,
-            rotation: compute_drop_initial_rotation(world_loc, now),
-            scale: Vec3::ONE,
-        },
-        Visibility::default(),
-        Name::new(format!("Drop::{}", registry.name(block_id))),
-        NotShadowCaster,
-        NotShadowReceiver,
-    ));
+    spawn_dropped_block_item_with_motion(
+        commands,
+        meshes,
+        registry,
+        block_id,
+        center,
+        compute_drop_pop_velocity(world_loc, now),
+        world_loc,
+        now,
+    );
 }
 
 pub(crate) fn spawn_dropped_block_stack(
@@ -538,6 +547,110 @@ pub(crate) fn spawn_dropped_block_stack(
             now + i as f32 * 0.013,
         );
     }
+}
+
+pub(crate) fn spawn_player_dropped_block_stack(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    registry: &BlockRegistry,
+    block_id: BlockId,
+    amount: u16,
+    player_translation: Vec3,
+    player_forward: Vec3,
+    now: f32,
+) {
+    if block_id == 0 || amount == 0 {
+        return;
+    }
+
+    let (base_center, initial_velocity) =
+        player_drop_spawn_motion(player_translation, player_forward);
+
+    for i in 0..amount {
+        let spawn_now = now + i as f32 * 0.013;
+        let center = base_center + Vec3::Y * (i as f32 * 0.015);
+        let seed_loc = IVec3::new(
+            center.x.floor() as i32,
+            center.y.floor() as i32,
+            center.z.floor() as i32,
+        );
+
+        spawn_dropped_block_item_with_motion(
+            commands,
+            meshes,
+            registry,
+            block_id,
+            center,
+            initial_velocity,
+            seed_loc,
+            spawn_now,
+        );
+    }
+}
+
+pub(crate) fn player_drop_spawn_motion(
+    player_translation: Vec3,
+    player_forward: Vec3,
+) -> (Vec3, Vec3) {
+    let throw_dir = player_drop_throw_direction(player_forward);
+    let center = player_drop_spawn_center(player_translation, player_forward);
+    let velocity = throw_dir * PLAYER_DROP_THROW_SPEED + Vec3::Y * PLAYER_DROP_THROW_UP_SPEED;
+    (center, velocity)
+}
+
+pub(crate) fn player_drop_world_location(player_translation: Vec3, player_forward: Vec3) -> IVec3 {
+    let center = player_drop_spawn_center(player_translation, player_forward);
+    IVec3::new(
+        center.x.floor() as i32,
+        center.y.floor() as i32,
+        center.z.floor() as i32,
+    )
+}
+
+fn player_drop_throw_direction(player_forward: Vec3) -> Vec3 {
+    let horizontal_forward = Vec3::new(player_forward.x, 0.0, player_forward.z);
+    horizontal_forward.try_normalize().unwrap_or(Vec3::Z)
+}
+
+fn player_drop_spawn_center(player_translation: Vec3, player_forward: Vec3) -> Vec3 {
+    player_translation
+        + player_drop_throw_direction(player_forward) * PLAYER_DROP_THROW_DISTANCE
+        + Vec3::Y * PLAYER_DROP_THROW_HEIGHT
+}
+
+fn spawn_dropped_block_item_with_motion(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    registry: &BlockRegistry,
+    block_id: BlockId,
+    center: Vec3,
+    initial_velocity: Vec3,
+    seed_loc: IVec3,
+    now: f32,
+) {
+    let mut mesh = build_block_cube_mesh(registry, block_id, DROP_ITEM_SIZE);
+    center_mesh_vertices(&mut mesh, DROP_ITEM_SIZE * 0.5);
+
+    commands.spawn((
+        DroppedBlockItem {
+            block_id,
+            resting: false,
+            pickup_ready_at: now + DROP_PICKUP_DELAY_SECS,
+        },
+        DroppedBlockVelocity(initial_velocity),
+        DroppedBlockAngularVelocity(compute_drop_angular_velocity(seed_loc, now)),
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(registry.material(block_id)),
+        Transform {
+            translation: center,
+            rotation: compute_drop_initial_rotation(seed_loc, now),
+            scale: Vec3::ONE,
+        },
+        Visibility::default(),
+        Name::new(format!("Drop::{}", registry.name(block_id))),
+        NotShadowCaster,
+        NotShadowReceiver,
+    ));
 }
 
 fn compute_drop_pop_velocity(world_loc: IVec3, now: f32) -> Vec3 {

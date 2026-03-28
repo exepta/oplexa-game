@@ -1,10 +1,10 @@
 :root {
-  --inv-panel-bg-top: rgba(10, 17, 24, 0.3);
-  --inv-panel-bg-bottom: rgba(4, 8, 12, 0.32);
-  --inv-panel-border: rgba(129, 204, 255, 0.32);
-  --inv-slot-bg: rgba(0, 0, 0, 0.0);
-  --inv-slot-border: rgba(140, 224, 255, 0.44);
-  --inv-slot-border-hover: rgba(180, 238, 255, 0.86);
+  --inv-panel-bg-top: #0f1c27;
+  --inv-panel-bg-bottom: #0b141d;
+  --inv-panel-border: #5d8aa6;
+  --inv-slot-bg: #132c3b;
+  --inv-slot-border: #73aec9;
+  --inv-slot-border-hover: #b6ecff;
   --inv-title: #ecf8ff;
   --inv-slot-text: #b2d4e5;
 }
@@ -16,7 +16,7 @@
   justify-content: flex-end;
   align-items: stretch;
   pointer-events: none;
-  background: var(--inv-panel-bg-top);
+  background: transparent;
 }
 
 #player-inventory-panel {
@@ -71,7 +71,7 @@
   border-radius: 6px;
   background: linear-gradient(
     180deg,
-    rgba(18, 42, 58, 0.95) 0%,
+    #1c435c 0%,
     var(--inv-slot-bg) 100%
   );
   display: flex;

@@ -1,11 +1,11 @@
 [client]
 enabled = true
-connect_on_startup = true
+connect_on_startup = false
 session_url = "http://127.0.0.1:14191"
 player_name = "Player"
 lan_discovery = true
 lan_discovery_port = 14192
-transform_send_interval_ms = 50
+transform_send_interval_ms = 10
 
 [server]
 bind_ip = "0.0.0.0"

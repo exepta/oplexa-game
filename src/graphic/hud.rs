@@ -1,7 +1,15 @@
+use crate::core::config::GlobalConfig;
 use crate::core::entities::player::inventory::PlayerInventory;
+use crate::core::entities::player::{GameMode, GameModeState, Player};
+use crate::core::events::ui_events::DropItemRequest;
+use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
-use crate::core::ui::{HOTBAR_SLOTS, HotbarSelectionState};
+use crate::core::ui::{HOTBAR_SLOTS, HotbarSelectionState, UiInteractionState};
 use crate::core::world::block::{BlockRegistry, SelectedBlock};
+use crate::logic::events::block_event_handler::{
+    player_drop_spawn_motion, player_drop_world_location, spawn_player_dropped_block_stack,
+};
+use crate::utils::key_utils::convert;
 use bevy::image::TRANSPARENT_IMAGE_HANDLE;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
@@ -30,6 +38,7 @@ impl Plugin for HudPlugin {
                 Update,
                 (
                     cycle_hotbar_with_scroll,
+                    drop_selected_hotbar_item,
                     sync_hotbar_selected_block,
                     sync_hud_hotbar_ui,
                 )
@@ -115,6 +124,84 @@ fn cycle_hotbar_with_scroll(
         } else {
             hotbar_state.selected_index = (hotbar_state.selected_index + 1) % HOTBAR_SLOTS;
         }
+    }
+}
+
+fn drop_selected_hotbar_item(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    global_config: Res<GlobalConfig>,
+    game_mode: Res<GameModeState>,
+    ui_interaction: Res<UiInteractionState>,
+    hotbar_state: Res<HotbarSelectionState>,
+    multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
+    mut inventory: ResMut<PlayerInventory>,
+    player_q: Query<&Transform, With<Player>>,
+    mut drop_requests: MessageWriter<DropItemRequest>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    registry: Res<BlockRegistry>,
+) {
+    if ui_interaction.menu_open || ui_interaction.inventory_open {
+        return;
+    }
+
+    if !matches!(game_mode.0, GameMode::Survival) {
+        return;
+    }
+
+    let drop_key = convert(global_config.input.drop_item.as_str()).unwrap_or(KeyCode::KeyQ);
+    if !keyboard.just_pressed(drop_key) {
+        return;
+    }
+
+    let slot_index = hotbar_state.selected_index;
+    if slot_index >= HOTBAR_SLOTS || slot_index >= inventory.slots.len() {
+        return;
+    }
+
+    let slot = &mut inventory.slots[slot_index];
+    if slot.is_empty() {
+        return;
+    }
+
+    let Ok(player_tf) = player_q.single() else {
+        return;
+    };
+
+    let dropped_block_id = slot.block_id;
+    if slot.count <= 1 {
+        *slot = Default::default();
+    } else {
+        slot.count -= 1;
+    }
+
+    if multiplayer_connection
+        .as_ref()
+        .is_some_and(|state| state.connected)
+    {
+        let (spawn_center, initial_velocity) =
+            player_drop_spawn_motion(player_tf.translation, player_tf.forward().as_vec3());
+        let world_loc =
+            player_drop_world_location(player_tf.translation, player_tf.forward().as_vec3());
+        drop_requests.write(DropItemRequest::new(
+            dropped_block_id,
+            1,
+            world_loc.to_array(),
+            spawn_center.to_array(),
+            initial_velocity.to_array(),
+        ));
+    } else {
+        spawn_player_dropped_block_stack(
+            &mut commands,
+            &mut meshes,
+            &registry,
+            dropped_block_id,
+            1,
+            player_tf.translation,
+            player_tf.forward().as_vec3(),
+            time.elapsed_secs(),
+        );
     }
 }
 

@@ -1,6 +1,6 @@
 :root {
-  --panel-bg: rgba(7, 12, 18, 0.86);
-  --panel-border: rgba(128, 204, 255, 0.35);
+  --panel-bg: #0c1721;
+  --panel-border: #5f90ab;
   --text-main: #e8f7ff;
   --text-dim: #a7c7d9;
 }

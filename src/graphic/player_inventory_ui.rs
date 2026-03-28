@@ -1,13 +1,16 @@
 use crate::core::config::GlobalConfig;
-use crate::core::entities::player::Player;
 use crate::core::entities::player::inventory::{
     InventorySlot, PLAYER_INVENTORY_SLOTS, PlayerInventory,
 };
+use crate::core::entities::player::{GameMode, GameModeState, Player};
+use crate::core::events::ui_events::DropItemRequest;
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
 use crate::core::ui::UiInteractionState;
 use crate::core::world::block::BlockRegistry;
-use crate::logic::events::block_event_handler::spawn_dropped_block_stack;
+use crate::logic::events::block_event_handler::{
+    player_drop_spawn_motion, player_drop_world_location, spawn_player_dropped_block_stack,
+};
 use crate::utils::key_utils::convert;
 use bevy::image::TRANSPARENT_IMAGE_HANDLE;
 use bevy::prelude::*;
@@ -99,6 +102,10 @@ fn toggle_player_inventory_ui(
         return;
     }
 
+    if ui_interaction.menu_open {
+        return;
+    }
+
     if !keyboard.just_pressed(open_key) {
         return;
     }
@@ -135,24 +142,91 @@ fn close_player_inventory_ui(
 }
 
 fn handle_inventory_drag_and_drop(
+    keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     time: Res<Time>,
+    global_config: Res<GlobalConfig>,
     inventory_ui: Res<PlayerInventoryUiState>,
+    game_mode: Res<GameModeState>,
     multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
     mut drag_state: ResMut<InventoryDragState>,
     mut inventory: ResMut<PlayerInventory>,
     hovered_slots: Query<(&CssID, &UIWidgetState)>,
+    mut slot_frames: Query<(&CssID, &UIWidgetState, &mut BorderColor)>,
     player_q: Query<&Transform, With<Player>>,
+    mut drop_requests: MessageWriter<DropItemRequest>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     registry: Res<BlockRegistry>,
 ) {
+    sync_inventory_slot_hover_border(&mut slot_frames, inventory_ui.open);
+
     if !inventory_ui.open {
         drag_state.source_slot = None;
         return;
     }
 
     let hovered_slot = hovered_inventory_slot(&hovered_slots);
+    let drop_key = convert(global_config.input.drop_item.as_str()).unwrap_or(KeyCode::KeyQ);
+
+    if keyboard.just_pressed(drop_key) {
+        let Some(slot_index) = hovered_slot else {
+            return;
+        };
+
+        if slot_index >= PLAYER_INVENTORY_SLOTS {
+            return;
+        }
+
+        if !matches!(game_mode.0, GameMode::Survival) {
+            return;
+        }
+
+        let slot = &mut inventory.slots[slot_index];
+        if slot.is_empty() {
+            return;
+        }
+
+        let Ok(player_tf) = player_q.single() else {
+            return;
+        };
+
+        let dropped_block_id = slot.block_id;
+        if slot.count <= 1 {
+            *slot = InventorySlot::default();
+        } else {
+            slot.count -= 1;
+        }
+
+        if multiplayer_connection
+            .as_ref()
+            .is_some_and(|state| state.connected)
+        {
+            let (spawn_center, initial_velocity) =
+                player_drop_spawn_motion(player_tf.translation, player_tf.forward().as_vec3());
+            let world_loc =
+                player_drop_world_location(player_tf.translation, player_tf.forward().as_vec3());
+            drop_requests.write(DropItemRequest::new(
+                dropped_block_id,
+                1,
+                world_loc.to_array(),
+                spawn_center.to_array(),
+                initial_velocity.to_array(),
+            ));
+        } else {
+            spawn_player_dropped_block_stack(
+                &mut commands,
+                &mut meshes,
+                &registry,
+                dropped_block_id,
+                1,
+                player_tf.translation,
+                player_tf.forward().as_vec3(),
+                time.elapsed_secs(),
+            );
+        }
+        return;
+    }
 
     if mouse.just_pressed(MouseButton::Left) && drag_state.source_slot.is_none() {
         if let Some(source_index) = hovered_slot {
@@ -190,10 +264,7 @@ fn handle_inventory_drag_and_drop(
         return;
     }
 
-    if multiplayer_connection
-        .as_ref()
-        .is_some_and(|state| state.connected)
-    {
+    if !matches!(game_mode.0, GameMode::Survival) {
         return;
     }
 
@@ -201,24 +272,35 @@ fn handle_inventory_drag_and_drop(
         return;
     };
 
-    let drop_pos = player_tf.translation + player_tf.forward().as_vec3() * 1.1 + Vec3::Y * 0.6;
-    let world_loc = IVec3::new(
-        drop_pos.x.floor() as i32,
-        drop_pos.y.floor() as i32,
-        drop_pos.z.floor() as i32,
-    );
-
     inventory.slots[source_index] = InventorySlot::default();
 
-    spawn_dropped_block_stack(
-        &mut commands,
-        &mut meshes,
-        &registry,
-        dropped_slot.block_id,
-        dropped_slot.count,
-        world_loc,
-        time.elapsed_secs(),
-    );
+    if multiplayer_connection
+        .as_ref()
+        .is_some_and(|state| state.connected)
+    {
+        let (spawn_center, initial_velocity) =
+            player_drop_spawn_motion(player_tf.translation, player_tf.forward().as_vec3());
+        let world_loc =
+            player_drop_world_location(player_tf.translation, player_tf.forward().as_vec3());
+        drop_requests.write(DropItemRequest::new(
+            dropped_slot.block_id,
+            dropped_slot.count,
+            world_loc.to_array(),
+            spawn_center.to_array(),
+            initial_velocity.to_array(),
+        ));
+    } else {
+        spawn_player_dropped_block_stack(
+            &mut commands,
+            &mut meshes,
+            &registry,
+            dropped_slot.block_id,
+            dropped_slot.count,
+            player_tf.translation,
+            player_tf.forward().as_vec3(),
+            time.elapsed_secs(),
+        );
+    }
 }
 
 fn show_player_inventory_ui(registry: &mut UiRegistry, asset_server: &AssetServer) {
@@ -410,4 +492,29 @@ fn hovered_inventory_slot(hovered_slots: &Query<(&CssID, &UIWidgetState)>) -> Op
         let slot_index = slot_number.parse::<usize>().ok()?.checked_sub(1)?;
         (slot_index < PLAYER_INVENTORY_SLOTS).then_some(slot_index)
     })
+}
+
+fn sync_inventory_slot_hover_border(
+    slot_frames: &mut Query<(&CssID, &UIWidgetState, &mut BorderColor)>,
+    inventory_open: bool,
+) {
+    let default_border = Color::srgb_u8(0x73, 0xae, 0xc9);
+    let hovered_border = Color::srgb_u8(0xb6, 0xec, 0xff);
+
+    for (css_id, state, mut border) in slot_frames.iter_mut() {
+        if !css_id.0.starts_with(PLAYER_INVENTORY_FRAME_PREFIX) {
+            continue;
+        }
+
+        let color = if inventory_open && state.hovered {
+            hovered_border
+        } else {
+            default_border
+        };
+
+        border.top = color;
+        border.right = color;
+        border.bottom = color;
+        border.left = color;
+    }
 }

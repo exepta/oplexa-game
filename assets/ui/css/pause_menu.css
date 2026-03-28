@@ -1,0 +1,62 @@
+:root {
+  --pause-overlay: rgba(6, 12, 18, 0.9);
+  --pause-panel-top: #173044;
+  --pause-panel-bottom: #0f1f2d;
+  --pause-panel-border: #9fd2ea;
+  --pause-title: #f5fbff;
+  --pause-button-bg: #21435c;
+  --pause-button-border: #a8d9ef;
+  --pause-button-text: #f5fbff;
+  --pause-button-hover: #2c5a79;
+}
+
+#pause-menu-root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: var(--pause-overlay);
+  pointer-events: auto;
+}
+
+#pause-menu-panel {
+  width: min(460px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px;
+  border: 2px solid var(--pause-panel-border);
+  border-radius: 14px;
+  background: linear-gradient(
+    180deg,
+    var(--pause-panel-top) 0%,
+    var(--pause-panel-bottom) 100%
+  );
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+}
+
+#pause-menu-title {
+  margin: 0 0 6px;
+  color: var(--pause-title);
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.pause-menu-button {
+  width: 100%;
+  height: 46px;
+  margin: 0;
+  border: 1px solid var(--pause-button-border);
+  border-radius: 8px;
+  background: var(--pause-button-bg);
+  color: var(--pause-button-text);
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.pause-menu-button:hover {
+  background: var(--pause-button-hover);
+}

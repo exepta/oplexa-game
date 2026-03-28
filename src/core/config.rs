@@ -187,6 +187,10 @@ pub struct InputConfig {
     /// Key or button mapping for performing a standard world attack.
     pub attack: String,
 
+    /// Key or button mapping for dropping one item from the active slot.
+    #[serde(default = "default_drop_item_key")]
+    pub drop_item: String,
+
     /// Is only used for testing. Remove by finishing the game.
     pub toggle_game_mode: String,
 
@@ -228,6 +232,7 @@ impl Default for InputConfig {
             sprint: String::from("ShiftLeft"),
             interact: String::from("E"),
             attack: String::from("MouseLeft"),
+            drop_item: default_drop_item_key(),
             toggle_game_mode: String::from("F2"),
 
             ui_menu: String::from("Enter"),
@@ -239,6 +244,10 @@ impl Default for InputConfig {
             world_inspector: String::from("F1"),
         }
     }
+}
+
+fn default_drop_item_key() -> String {
+    String::from("Q")
 }
 
 // =======================================================
