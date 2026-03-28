@@ -1,7 +1,9 @@
+mod hud;
 mod player_inventory_ui;
 mod system_last_ui;
 mod world_gen_screen;
 
+use crate::graphic::hud::HudPlugin;
 use crate::graphic::player_inventory_ui::PlayerInventoryUiPlugin;
 use crate::graphic::system_last_ui::SystemLastUiPlugin;
 use crate::graphic::world_gen_screen::WorldGenScreenPlugin;
@@ -15,6 +17,7 @@ impl Plugin for GraphicModule {
             WorldGenScreenPlugin,
             SystemLastUiPlugin,
             PlayerInventoryUiPlugin,
+            HudPlugin,
         ));
     }
 }

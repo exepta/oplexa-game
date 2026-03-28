@@ -7,6 +7,7 @@ use crate::core::events::block::block_player_events::{
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
+use crate::core::ui::{HotbarSelectionState, UiInteractionState};
 use crate::core::world::block::*;
 use crate::core::world::chunk::*;
 use crate::core::world::chunk_dimension::*;
@@ -83,7 +84,13 @@ fn block_break_handler(
     mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
     mut break_ev: MessageWriter<BlockBreakByPlayerEvent>,
     multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
+    ui_state: Option<Res<UiInteractionState>>,
 ) {
+    if ui_state.as_ref().is_some_and(|state| state.inventory_open) {
+        state.target = None;
+        return;
+    }
+
     let multiplayer_connected = multiplayer_connection
         .as_ref()
         .is_some_and(|state| state.connected);
@@ -217,12 +224,19 @@ fn block_place_handler(
     selected: Res<SelectedBlock>,
     registry: Res<BlockRegistry>,
     game_mode: Res<GameModeState>,
+    hotbar_selection: Option<Res<HotbarSelectionState>>,
+    ui_state: Option<Res<UiInteractionState>>,
 
+    mut inventory: ResMut<PlayerInventory>,
     mut fluids: ResMut<FluidMap>,
     mut chunk_map: ResMut<ChunkMap>,
     mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
     mut place_ev: MessageWriter<BlockPlaceByPlayerEvent>,
 ) {
+    if ui_state.as_ref().is_some_and(|state| state.inventory_open) {
+        return;
+    }
+
     if game_mode.0.eq(&GameMode::Spectator) {
         return;
     }
@@ -231,6 +245,11 @@ fn block_place_handler(
     }
     let id = selected.id;
     if id == 0 {
+        return;
+    }
+    let creative_mode = matches!(game_mode.0, GameMode::Creative);
+    if !creative_mode && !can_place_from_selected_slot(&inventory, hotbar_selection.as_deref(), id)
+    {
         return;
     }
     let Some(hit) = sel.hit else {
@@ -260,6 +279,10 @@ fn block_place_handler(
         access.set(id);
     }
 
+    if !creative_mode {
+        let _ = consume_from_selected_slot(&mut inventory, hotbar_selection.as_deref(), id);
+    }
+
     mark_dirty_block_and_neighbors(&mut chunk_map, world_pos, &mut ev_dirty);
 
     let name = registry.name_opt(id).unwrap_or("").to_string();
@@ -268,6 +291,58 @@ fn block_place_handler(
         block_id: id,
         block_name: name,
     });
+}
+
+fn can_place_from_selected_slot(
+    inventory: &PlayerInventory,
+    hotbar_selection: Option<&HotbarSelectionState>,
+    block_id: BlockId,
+) -> bool {
+    if let Some(index) = hotbar_selection.map(|selection| selection.selected_index) {
+        let Some(slot) = inventory.slots.get(index) else {
+            return false;
+        };
+        return !slot.is_empty() && slot.block_id == block_id && slot.count > 0;
+    }
+
+    inventory
+        .slots
+        .iter()
+        .any(|slot| !slot.is_empty() && slot.block_id == block_id && slot.count > 0)
+}
+
+fn consume_from_selected_slot(
+    inventory: &mut PlayerInventory,
+    hotbar_selection: Option<&HotbarSelectionState>,
+    block_id: BlockId,
+) -> bool {
+    if let Some(index) = hotbar_selection.map(|selection| selection.selected_index) {
+        let Some(slot) = inventory.slots.get_mut(index) else {
+            return false;
+        };
+        if slot.is_empty() || slot.block_id != block_id || slot.count == 0 {
+            return false;
+        }
+
+        slot.count -= 1;
+        if slot.count == 0 {
+            slot.block_id = 0;
+        }
+        return true;
+    }
+
+    for slot in &mut inventory.slots {
+        if slot.is_empty() || slot.block_id != block_id || slot.count == 0 {
+            continue;
+        }
+        slot.count -= 1;
+        if slot.count == 0 {
+            slot.block_id = 0;
+        }
+        return true;
+    }
+
+    false
 }
 
 fn simulate_dropped_block_items(
@@ -438,6 +513,31 @@ fn spawn_dropped_block_item(
         NotShadowCaster,
         NotShadowReceiver,
     ));
+}
+
+pub(crate) fn spawn_dropped_block_stack(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    registry: &BlockRegistry,
+    block_id: BlockId,
+    amount: u16,
+    world_loc: IVec3,
+    now: f32,
+) {
+    if block_id == 0 || amount == 0 {
+        return;
+    }
+
+    for i in 0..amount {
+        spawn_dropped_block_item(
+            commands,
+            meshes,
+            registry,
+            block_id,
+            world_loc,
+            now + i as f32 * 0.013,
+        );
+    }
 }
 
 fn compute_drop_pop_velocity(world_loc: IVec3, now: f32) -> Vec3 {

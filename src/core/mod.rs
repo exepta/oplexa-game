@@ -5,12 +5,14 @@ pub mod events;
 pub mod multiplayer;
 pub mod shader;
 pub mod states;
+pub mod ui;
 pub mod world;
 
 use crate::core::config::*;
 use crate::core::entities::EntitiesModule;
 use crate::core::events::EventModule;
 use crate::core::multiplayer::MultiplayerConnectionState;
+use crate::core::ui::{HotbarSelectionState, UiInteractionState};
 use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::*;
 use bevy::prelude::*;
@@ -25,6 +27,8 @@ impl Plugin for CoreModule {
         app.init_resource::<MiningState>();
         app.init_resource::<MiningOverlayRoot>();
         app.init_resource::<MultiplayerConnectionState>();
+        app.init_resource::<UiInteractionState>();
+        app.init_resource::<HotbarSelectionState>();
         app.init_resource::<BiomeRegistry>();
         app.add_plugins((EventModule, EntitiesModule));
     }

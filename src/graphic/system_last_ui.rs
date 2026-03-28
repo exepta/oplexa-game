@@ -192,7 +192,7 @@ fn show_system_last_ui(registry: &mut UiRegistry, asset_server: &AssetServer) {
         );
     }
 
-    registry.use_ui(SYSTEM_LAST_UI_KEY);
+    activate_ui_append(registry, SYSTEM_LAST_UI_KEY);
 }
 
 fn hide_system_last_ui(registry: &mut UiRegistry) {
@@ -217,4 +217,22 @@ fn bytes_to_mib(bytes: u64) -> f64 {
 #[inline]
 fn bool_label(value: bool) -> &'static str {
     if value { "ON" } else { "OFF" }
+}
+
+fn activate_ui_append(registry: &mut UiRegistry, key: &str) {
+    if registry.get(key).is_none() {
+        return;
+    }
+
+    if let Some(current) = registry.current.as_mut() {
+        if current.iter().any(|name| name == key) {
+            return;
+        }
+        current.push(key.to_string());
+        registry.ui_update = true;
+        return;
+    }
+
+    registry.current = Some(vec![key.to_string()]);
+    registry.ui_update = true;
 }

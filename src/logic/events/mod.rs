@@ -1,4 +1,4 @@
-mod block_event_handler;
+pub(crate) mod block_event_handler;
 
 use crate::logic::events::block_event_handler::BlockEventHandler;
 use bevy::prelude::*;

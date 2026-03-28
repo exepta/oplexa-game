@@ -3,6 +3,7 @@ use crate::core::entities::player::{
     FlightState, FpsController, GameMode, GameModeState, Player, PlayerCamera,
 };
 use crate::core::states::states::{AppState, InGameStates};
+use crate::core::ui::UiInteractionState;
 use crate::core::world::block::BlockRegistry;
 use crate::utils::key_utils::convert;
 use bevy::camera::visibility::RenderLayers;
@@ -174,7 +175,12 @@ fn spawn_player(
 fn grab_cursor_on_click(
     mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    ui_state: Option<Res<UiInteractionState>>,
 ) {
+    if ui_state.as_ref().is_some_and(|state| state.inventory_open) {
+        return;
+    }
+
     if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
@@ -251,6 +257,7 @@ fn mouse_look(
 fn player_move_simple(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    ui_state: Option<Res<UiInteractionState>>,
     mut q_player: Query<
         (
             &Transform,
@@ -286,6 +293,7 @@ fn player_move_simple(
     let right_key = convert(game_config.input.move_right.as_str()).expect("Invalid key");
     let jump_key = convert(game_config.input.jump.as_str()).unwrap_or(KeyCode::Space);
     let down_key = convert(game_config.input.sprint.as_str()).unwrap_or(KeyCode::ShiftLeft);
+    let input_blocked = ui_state.as_ref().is_some_and(|state| state.inventory_open);
 
     let f = tf.forward();
     let r = tf.right();
@@ -293,16 +301,16 @@ fn player_move_simple(
     let right = Vec3::new(r.x, 0.0, r.z).normalize_or_zero();
 
     let mut wish = Vec3::ZERO;
-    if keys.pressed(forward_key) {
+    if !input_blocked && keys.pressed(forward_key) {
         wish += forward;
     }
-    if keys.pressed(back_key) {
+    if !input_blocked && keys.pressed(back_key) {
         wish -= forward;
     }
-    if keys.pressed(left_key) {
+    if !input_blocked && keys.pressed(left_key) {
         wish -= right;
     }
-    if keys.pressed(right_key) {
+    if !input_blocked && keys.pressed(right_key) {
         wish += right;
     }
     if wish.length_squared() > 0.0 {
@@ -313,7 +321,7 @@ fn player_move_simple(
     let now = time.elapsed_secs();
     let grounded = kcc_out.map(|o| o.grounded).unwrap_or(false);
 
-    if keys.just_pressed(jump_key) {
+    if !input_blocked && keys.just_pressed(jump_key) {
         if now - tap.last_press <= DOUBLE_TAP_WIN {
             if game_mode_state.0 == GameMode::Creative {
                 flight.flying = !flight.flying;
@@ -337,10 +345,10 @@ fn player_move_simple(
     if flight.flying {
         let mut delta = Vec3::ZERO;
         let mut up_down = 0.0;
-        if keys.pressed(jump_key) {
+        if !input_blocked && keys.pressed(jump_key) {
             up_down += 1.0;
         }
-        if keys.pressed(down_key) {
+        if !input_blocked && keys.pressed(down_key) {
             up_down -= 1.0;
         }
 

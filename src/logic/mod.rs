@@ -1,5 +1,5 @@
 mod entities;
-mod events;
+pub(crate) mod events;
 mod registry;
 mod world;
 
