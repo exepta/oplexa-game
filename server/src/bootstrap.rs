@@ -3,7 +3,7 @@ use log::info;
 use multiplayer::{
     config::NetworkSettings,
     discovery::{LanDiscoveryServer, LanServerInfo},
-    protocol::protocol,
+    protocols::protocol,
 };
 use naia_server::{ServerConfig, transport::udp};
 

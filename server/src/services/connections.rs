@@ -4,7 +4,7 @@ use crate::{
     types::Server,
 };
 use log::{info, warn};
-use multiplayer::protocol::{
+use multiplayer::protocols::{
     PlayerJoined, PlayerLeft, PlayerSnapshot, ServerDropSpawn, ServerWelcome,
 };
 use naia_server::{

@@ -1,5 +1,5 @@
 use crate::{models::HostedDrop, state::ServerState, types::Server};
-use multiplayer::protocol::{
+use multiplayer::protocols::{
     ClientBlockBreak, ClientBlockPlace, ClientDropItem, ClientDropPickup, PlayerMove,
     PlayerSnapshot, ServerBlockBreak, ServerBlockPlace, ServerDropPicked, ServerDropSpawn,
 };

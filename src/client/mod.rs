@@ -34,7 +34,7 @@ use dotenvy::dotenv;
 use multiplayer::{
     config::NetworkSettings,
     discovery::{LanDiscoveryClient, LanServerInfo},
-    protocol::{
+    protocols::{
         Auth, ClientBlockBreak, ClientBlockPlace, ClientDropItem, ClientDropPickup, PlayerJoined,
         PlayerLeft, PlayerMove, PlayerSnapshot, ServerBlockBreak, ServerBlockPlace,
         ServerDropPicked, ServerDropSpawn, ServerWelcome, protocol,

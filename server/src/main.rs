@@ -13,7 +13,7 @@ use crate::{
     state::ServerState,
 };
 use log::{error, warn};
-use multiplayer::protocol::{
+use multiplayer::protocols::{
     Auth, ClientBlockBreak, ClientBlockPlace, ClientDropItem, ClientDropPickup, PlayerMove,
 };
 use naia_server::{
