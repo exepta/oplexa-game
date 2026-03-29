@@ -210,6 +210,7 @@ pub async fn mesh_subchunk_async(
     by_block.into_iter().map(|(k, b)| (k, b)).collect()
 }
 
+#[allow(dead_code)]
 pub fn save_chunk_sync(
     ws: &WorldSave,
     cache: &mut RegionCache,
@@ -222,6 +223,23 @@ pub fn save_chunk_sync(
     let merged = container_upsert(old.as_deref(), TAG_BLK1, &blocks);
 
     cache.write_chunk_replace(ws, coord, &merged)
+}
+
+pub fn save_chunk_at_root_sync(
+    ws_root: PathBuf,
+    coord: IVec2,
+    ch: &ChunkData,
+) -> std::io::Result<()> {
+    let blocks = encode_chunk(ch);
+    let rc = chunk_to_region(coord);
+    let path = ws_root
+        .join("region")
+        .join(format!("r.{}.{}.region", rc.x, rc.y));
+    let mut rf = RegionFile::open(&path)?;
+    let old = rf.read_chunk(coord).ok().flatten();
+    let merged = container_upsert(old.as_deref(), TAG_BLK1, &blocks);
+    let idx = region_slot_index(coord);
+    rf.write_slot_replace(idx, &merged)
 }
 
 pub async fn load_or_gen_chunk_async(

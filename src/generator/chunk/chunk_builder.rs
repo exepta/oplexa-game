@@ -5,7 +5,7 @@ use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::*;
 use crate::core::world::chunk::*;
 use crate::core::world::chunk_dimension::*;
-use crate::core::world::save::{RegionCache, WorldSave};
+use crate::core::world::save::WorldSave;
 use crate::generator::chunk::chunk_struct::*;
 use crate::generator::chunk::chunk_utils::*;
 use bevy::prelude::*;
@@ -15,10 +15,12 @@ use bevy_rapier3d::prelude::{Collider, RigidBody, TriMeshFlags};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-const MAX_COLLIDERS_PER_FRAME: usize = 12;
+const MAX_MESH_APPLY_PER_FRAME: usize = MAX_UPDATE_FRAMES / 2;
+const MAX_COLLIDER_APPLY_PER_FRAME: usize = MAX_UPDATE_FRAMES / 4;
+const MAX_INFLIGHT_COLLIDER_BUILD: usize = 16;
 
 #[derive(Default, Resource)]
-struct ColliderBacklog(Vec<ColliderTodo>);
+struct ColliderBacklog(HashMap<(IVec2, u8), ColliderTodo>);
 
 struct ColliderTodo {
     coord: IVec2,
@@ -28,8 +30,19 @@ struct ColliderTodo {
     indices: Vec<u32>,
 }
 
+struct ColliderBuild {
+    origin: Vec3,
+    collider: Option<Collider>,
+}
+
 #[derive(Resource, Default)]
 struct ChunkColliderIndex(pub HashMap<(IVec2, u8), Entity>);
+
+#[derive(Resource, Default)]
+struct PendingColliderBuild(pub HashMap<(IVec2, u8), bevy::tasks::Task<((IVec2, u8), ColliderBuild)>>);
+
+#[derive(Resource, Default)]
+struct PendingChunkSave(pub HashMap<IVec2, bevy::tasks::Task<IVec2>>);
 
 #[derive(Resource, Default)]
 struct KickQueue(Vec<KickItem>);
@@ -58,6 +71,8 @@ impl Plugin for ChunkBuilder {
             .init_resource::<PendingMesh>()
             .init_resource::<ChunkColliderIndex>()
             .init_resource::<ColliderBacklog>()
+            .init_resource::<PendingColliderBuild>()
+            .init_resource::<PendingChunkSave>()
             .init_resource::<KickQueue>()
             .init_resource::<KickedOnce>()
             .init_resource::<QueuedOnce>()
@@ -65,6 +80,10 @@ impl Plugin for ChunkBuilder {
             .add_systems(
                 Update,
                 (
+                    collect_chunk_save_tasks.run_if(
+                        in_state(AppState::Loading(LoadingStates::BaseGen))
+                            .or(in_state(AppState::InGame(InGameStates::Game))),
+                    ),
                     schedule_chunk_generation.run_if(
                         in_state(AppState::Loading(LoadingStates::BaseGen))
                             .or(in_state(AppState::InGame(InGameStates::Game))),
@@ -75,6 +94,8 @@ impl Plugin for ChunkBuilder {
                     ),
                     (
                         collect_meshed_subchunks,
+                        schedule_collider_build_tasks,
+                        collect_finished_collider_builds,
                         enqueue_kick_for_new_subchunks,
                         process_kick_queue,
                     )
@@ -113,16 +134,6 @@ impl Plugin for ChunkBuilder {
                 Update,
                 check_base_gen_world_ready
                     .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))),
-            )
-            .add_systems(
-                Update,
-                drain_collider_backlog
-                    .after(collect_meshed_subchunks)
-                    .run_if(
-                        in_state(AppState::Loading(LoadingStates::BaseGen))
-                            .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
-                            .or(in_state(AppState::InGame(InGameStates::Game))),
-                    ),
             );
     }
 }
@@ -245,6 +256,7 @@ fn check_base_gen_world_ready(
 fn schedule_chunk_generation(
     mut pending: ResMut<PendingGen>,
     chunk_map: Res<ChunkMap>,
+    pending_save: Res<PendingChunkSave>,
     reg: Res<BlockRegistry>,
     biomes: Res<BiomeRegistry>,
     gen_cfg: Res<WorldGenConfig>,
@@ -294,7 +306,10 @@ fn schedule_chunk_generation(
             }
 
             let c = IVec2::new(center_c.x + dx, center_c.y + dz);
-            if chunk_map.chunks.contains_key(&c) || pending.0.contains_key(&c) {
+            if chunk_map.chunks.contains_key(&c)
+                || pending.0.contains_key(&c)
+                || pending_save.0.contains_key(&c)
+            {
                 continue;
             }
 
@@ -467,6 +482,7 @@ fn collect_meshed_subchunks(
     mut pending_mesh: ResMut<PendingMesh>,
     mut mesh_index: ResMut<ChunkMeshIndex>,
     mut collider_index: ResMut<ChunkColliderIndex>,
+    mut pending_collider: ResMut<PendingColliderBuild>,
     mut meshes: ResMut<Assets<Mesh>>,
     reg: Res<BlockRegistry>,
     mut chunk_map: ResMut<ChunkMap>,
@@ -475,16 +491,9 @@ fn collect_meshed_subchunks(
     mut coll_backlog: ResMut<ColliderBacklog>,
 ) {
     let waiting = is_waiting(&app_state);
-    let apply_cap = if waiting { BIG } else { MAX_UPDATE_FRAMES };
+    let apply_cap = if waiting { BIG } else { MAX_MESH_APPLY_PER_FRAME };
     let mut done_keys = Vec::new();
     let mut applied = 0usize;
-
-    // Per-frame collider budget. If we run out, we queue the rest.
-    let mut collider_budget = if waiting {
-        BIG
-    } else {
-        MAX_COLLIDERS_PER_FRAME
-    };
 
     for (key, task) in pending_mesh.0.iter_mut() {
         if applied >= apply_cap {
@@ -551,48 +560,20 @@ fn collect_meshed_subchunks(
             let need_collider = !phys_positions.is_empty();
 
             if need_collider {
-                // Try to (re)create collider now if we have a budget …
-                if collider_budget > 0 {
-                    // Remove the old collider only if we create a new one immediately.
-                    if let Some(ent) = collider_index.0.remove(&(coord, sub as u8)) {
-                        commands.entity(ent).despawn();
-                    }
-
-                    let flags = TriMeshFlags::FIX_INTERNAL_EDGES
-                        | TriMeshFlags::MERGE_DUPLICATE_VERTICES
-                        | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES
-                        | TriMeshFlags::ORIENTED;
-
-                    if let Some(collider) =
-                        build_trimesh_collider(phys_positions, phys_indices, flags)
-                    {
-                        let cent = commands
-                            .spawn((
-                                RigidBody::Fixed,
-                                collider,
-                                Transform::from_translation(origin),
-                                Name::new(format!(
-                                    "collider chunk({},{}) sub{}",
-                                    coord.x, coord.y, sub
-                                )),
-                            ))
-                            .id();
-                        collider_index.0.insert((coord, sub as u8), cent);
-                        collider_budget = collider_budget.saturating_sub(1);
-                    }
-                } else {
-                    // …otherwise, keep the OLD collider alive (no hole!)
-                    // and queue a rebuild for later.
-                    coll_backlog.0.push(ColliderTodo {
+                coll_backlog.0.insert(
+                    (coord, sub as u8),
+                    ColliderTodo {
                         coord,
                         sub: sub as u8,
                         origin,
                         positions: phys_positions,
                         indices: phys_indices,
-                    });
-                }
+                    },
+                );
             } else {
                 // No geometry → ensure collider is removed (solid gone).
+                coll_backlog.0.remove(&(coord, sub as u8));
+                pending_collider.0.remove(&(coord, sub as u8));
                 if let Some(ent) = collider_index.0.remove(&(coord, sub as u8)) {
                     commands.entity(ent).despawn();
                 }
@@ -609,6 +590,103 @@ fn collect_meshed_subchunks(
 
     for k in done_keys {
         pending_mesh.0.remove(&k);
+    }
+}
+
+fn schedule_collider_build_tasks(
+    mut backlog: ResMut<ColliderBacklog>,
+    mut pending: ResMut<PendingColliderBuild>,
+    app_state: Res<State<AppState>>,
+) {
+    let waiting = is_waiting(&app_state);
+    let max_inflight = if waiting { BIG } else { MAX_INFLIGHT_COLLIDER_BUILD };
+    let pool = AsyncComputeTaskPool::get();
+
+    while pending.0.len() < max_inflight {
+        let Some(key) = backlog.0.keys().next().copied() else {
+            break;
+        };
+        let Some(todo) = backlog.0.remove(&key) else {
+            continue;
+        };
+
+        let task = pool.spawn(async move {
+            let flags = TriMeshFlags::FIX_INTERNAL_EDGES
+                | TriMeshFlags::MERGE_DUPLICATE_VERTICES
+                | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES
+                | TriMeshFlags::ORIENTED;
+            let collider = build_trimesh_collider(todo.positions, todo.indices, flags);
+            (
+                (todo.coord, todo.sub),
+                ColliderBuild {
+                    origin: todo.origin,
+                    collider,
+                },
+            )
+        });
+        pending.0.insert(key, task);
+    }
+}
+
+fn collect_finished_collider_builds(
+    mut commands: Commands,
+    mut pending: ResMut<PendingColliderBuild>,
+    backlog: Res<ColliderBacklog>,
+    mut collider_index: ResMut<ChunkColliderIndex>,
+    chunk_map: Res<ChunkMap>,
+    app_state: Res<State<AppState>>,
+) {
+    let waiting = is_waiting(&app_state);
+    let apply_cap = if waiting {
+        BIG
+    } else {
+        MAX_COLLIDER_APPLY_PER_FRAME
+    };
+    let mut done_keys = Vec::new();
+    let mut applied = 0usize;
+
+    for (key, task) in pending.0.iter_mut() {
+        if applied >= apply_cap {
+            break;
+        }
+
+        if let Some(((coord, sub), build)) = future::block_on(future::poll_once(task)) {
+            done_keys.push(*key);
+
+            if backlog.0.contains_key(&(coord, sub)) {
+                continue;
+            }
+
+            if !chunk_map.chunks.contains_key(&coord) {
+                if let Some(ent) = collider_index.0.remove(&(coord, sub)) {
+                    commands.entity(ent).despawn();
+                }
+                continue;
+            }
+
+            let Some(collider) = build.collider else {
+                continue;
+            };
+
+            if let Some(ent) = collider_index.0.remove(&(coord, sub)) {
+                commands.entity(ent).despawn();
+            }
+
+            let ent = commands
+                .spawn((
+                    RigidBody::Fixed,
+                    collider,
+                    Transform::from_translation(build.origin),
+                    Name::new(format!("collider chunk({},{}) sub{}", coord.x, coord.y, sub)),
+                ))
+                .id();
+            collider_index.0.insert((coord, sub), ent);
+            applied += 1;
+        }
+    }
+
+    for k in done_keys {
+        pending.0.remove(&k);
     }
 }
 
@@ -678,9 +756,10 @@ fn unload_far_chunks(
     mut pending_gen: ResMut<PendingGen>,
     mut pending_mesh: ResMut<PendingMesh>,
     mut backlog: ResMut<MeshBacklog>,
+    mut pending_collider: ResMut<PendingColliderBuild>,
     game_config: Res<GlobalConfig>,
     ws: Res<WorldSave>,
-    mut cache: ResMut<RegionCache>,
+    mut pending_save: ResMut<PendingChunkSave>,
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
     mut ev_water_unload: MessageWriter<ChunkUnloadEvent>,
@@ -710,11 +789,20 @@ fn unload_far_chunks(
 
     for coord in &to_remove {
         if let Some(chunk) = chunk_map.chunks.get(coord) {
-            let _ = save_chunk_sync(&ws, &mut cache, *coord, chunk);
+            let root = ws.root.clone();
+            let chunk_copy = chunk.clone();
+            let c = *coord;
+            let pool = AsyncComputeTaskPool::get();
+            let task = pool.spawn(async move {
+                let _ = save_chunk_at_root_sync(root, c, &chunk_copy);
+                c
+            });
+            pending_save.0.insert(c, task);
         }
 
         pending_gen.0.remove(coord);
         pending_mesh.0.retain(|(c, _), _| c != coord);
+        pending_collider.0.retain(|(c, _), _| c != coord);
 
         let old_keys: Vec<_> = mesh_index
             .map
@@ -746,7 +834,7 @@ fn unload_far_chunks(
 
         chunk_map.chunks.remove(coord);
         backlog.0.retain(|(c, _)| c != coord);
-        coll_backlog.0.retain(|t| t.coord != *coord);
+        coll_backlog.0.retain(|(c, _), _| *c != *coord);
     }
 }
 
@@ -764,44 +852,15 @@ fn cleanup_kick_flags_on_unload(
     }
 }
 
-fn drain_collider_backlog(
-    mut commands: Commands,
-    mut backlog: ResMut<ColliderBacklog>,
-    mut collider_index: ResMut<ChunkColliderIndex>,
-    mut collider_budget: Local<usize>,
-) {
-    if *collider_budget == 0 {
-        *collider_budget = MAX_COLLIDERS_PER_FRAME;
+fn collect_chunk_save_tasks(mut pending: ResMut<PendingChunkSave>) {
+    let mut done = Vec::new();
+    for (coord, task) in pending.0.iter_mut() {
+        if future::block_on(future::poll_once(task)).is_some() {
+            done.push(*coord);
+        }
     }
-
-    let flags = TriMeshFlags::FIX_INTERNAL_EDGES
-        | TriMeshFlags::MERGE_DUPLICATE_VERTICES
-        | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES
-        | TriMeshFlags::ORIENTED;
-
-    let i = 0;
-    while i < backlog.0.len() && *collider_budget > 0 {
-        let todo = backlog.0.remove(i);
-
-        if collider_index.0.contains_key(&(todo.coord, todo.sub)) {
-            continue;
-        }
-
-        if let Some(coll) = build_trimesh_collider(todo.positions, todo.indices, flags) {
-            let cent = commands
-                .spawn((
-                    RigidBody::Fixed,
-                    coll,
-                    Transform::from_translation(todo.origin),
-                    Name::new(format!(
-                        "collider chunk({},{}) sub{}",
-                        todo.coord.x, todo.coord.y, todo.sub
-                    )),
-                ))
-                .id();
-            collider_index.0.insert((todo.coord, todo.sub), cent);
-            *collider_budget -= 1;
-        }
+    for coord in done {
+        pending.0.remove(&coord);
     }
 }
 

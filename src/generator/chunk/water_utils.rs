@@ -14,8 +14,8 @@ use crate::core::world::chunk::{ChunkData, ChunkMap};
 use crate::core::world::chunk_dimension::*;
 use crate::core::world::fluid::{FluidChunk, FluidMap, SolidSnapshot, WaterMeshIndex};
 use crate::core::world::save::{
-    REGION_SIZE, RegionCache, RegionFile, TAG_WAT1, WorldSave, container_find, container_upsert,
-    slot_is_container, unpack_slot_bytes,
+    REGION_SIZE, RegionCache, RegionFile, TAG_WAT1, WorldSave, chunk_to_region, container_find,
+    container_upsert, region_slot_index, slot_is_container, unpack_slot_bytes,
 };
 use crate::generator::chunk::chunk_utils::col_rand_u32;
 use bevy::asset::RenderAssetUsages;
@@ -485,6 +485,21 @@ pub fn save_water_chunk_sync(
     let old = cache.read_chunk(ws, coord).ok().flatten();
     let merged = container_upsert(old.as_deref(), TAG_WAT1, &wat);
     let _ = cache.write_chunk_replace(ws, coord, &merged);
+}
+
+pub fn save_water_chunk_at_root_sync(ws_root: std::path::PathBuf, coord: IVec2, w: &FluidChunk) {
+    let wat = encode_fluid_chunk(w);
+    let rc = chunk_to_region(coord);
+    let path = ws_root
+        .join("region")
+        .join(format!("r.{}.{}.region", rc.x, rc.y));
+    let Ok(mut rf) = RegionFile::open(&path) else {
+        return;
+    };
+    let old = rf.read_chunk(coord).ok().flatten();
+    let merged = container_upsert(old.as_deref(), TAG_WAT1, &wat);
+    let idx = region_slot_index(coord);
+    let _ = rf.write_slot_replace(idx, &merged);
 }
 
 /// Load a water chunk from the disk in any supported format (V2 preferred, V1 legacy).
