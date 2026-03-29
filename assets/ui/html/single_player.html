@@ -1,0 +1,30 @@
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="single-player" />
+    <title>Single Player</title>
+    <link rel="stylesheet" href="../css/single_player.css" />
+  </head>
+  <body id="single-player-root">
+    <div id="single-player-panel">
+      <h2 id="single-player-title">Single Player</h2>
+      <div id="single-player-world-list">
+        <div id="single-player-empty">No worlds found in saves/</div>
+      </div>
+      <div id="single-player-actions">
+        <button id="single-player-create-world" class="single-player-action-button">Create World</button>
+        <button id="single-player-play-world" class="single-player-action-button">Play World</button>
+        <button id="single-player-delete-world" class="single-player-action-button">Delet World</button>
+      </div>
+    </div>
+    <div id="single-player-delete-dialog">
+      <div id="single-player-delete-box">
+        <p id="single-player-delete-text">Ar you sure to delete ``?</p>
+        <div id="single-player-delete-actions">
+          <button id="single-player-delete-confirm" class="single-player-action-button danger">Delete</button>
+          <button id="single-player-delete-cancel" class="single-player-action-button">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

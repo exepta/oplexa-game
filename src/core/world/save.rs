@@ -215,6 +215,29 @@ impl WorldSave {
     }
 }
 
+/// Returns the default saves directory used by UI and world save systems.
+///
+/// Resolution order:
+/// 1) `OPLEXA_SAVES_DIR` environment variable, if set.
+/// 2) `<CARGO_MANIFEST_DIR>/saves` when that path exists.
+/// 3) `<current_dir>/saves` fallback.
+pub fn default_saves_root() -> PathBuf {
+    if let Ok(path) = std::env::var("OPLEXA_SAVES_DIR")
+        && !path.trim().is_empty()
+    {
+        return PathBuf::from(path);
+    }
+
+    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
+        let manifest_saves = PathBuf::from(manifest_dir).join("saves");
+        if manifest_saves.exists() {
+            return manifest_saves;
+        }
+    }
+
+    std::env::current_dir().unwrap_or_default().join("saves")
+}
+
 /// In-memory cache of open region files, keyed by **region** coordinates.
 ///
 /// Lazily opens files on first access via [`RegionCache::get_or_open`].

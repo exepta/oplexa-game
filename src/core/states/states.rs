@@ -42,11 +42,13 @@ pub enum AppState {
 pub enum BeforeUiState {
     /// Splash screen (logo, studio, etc.).
     #[default]
-    Splash,
-    /// Title/menu screen.
-    Title,
-    /// Account login, registration, or account management screen.
-    Account,
+    Menu,
+    /// World selection screen.
+    SinglePlayer,
+    /// Server selection screen.
+    MultiPlayer,
+    /// Settings screen, including volume, graphics, etc.
+    Settings,
 }
 
 /// State for network fetching procedures (e.g., user data, save files, etc.).

@@ -1,0 +1,43 @@
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="create-world" />
+    <title>Create World</title>
+    <link rel="stylesheet" href="../css/create_world.css" />
+  </head>
+  <body id="create-world-root">
+    <div id="create-world-shell">
+      <div id="create-world-glow"></div>
+      <div id="create-world-panel">
+        <h2 id="create-world-title">Create World</h2>
+
+        <div class="create-world-field">
+          <label for="create-world-name-input" class="create-world-label">Name</label>
+          <input
+            id="create-world-name-input"
+            name="name"
+            type="text"
+            maxlength="48"
+            placeholder="Name der Welt"
+          />
+        </div>
+
+        <div class="create-world-field">
+          <label for="create-world-seed-input" class="create-world-label">Seed</label>
+          <input
+            id="create-world-seed-input"
+            name="seed"
+            type="number"
+            maxlength="16"
+            placeholder="Leer = Random"
+          />
+        </div>
+
+        <div id="create-world-actions">
+          <button id="create-world-create" class="create-world-button">Create</button>
+          <button id="create-world-abort" class="create-world-button">Abort</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

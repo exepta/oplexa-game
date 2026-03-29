@@ -1,0 +1,119 @@
+:root {
+  --cw-bg-a: #03111d;
+  --cw-bg-b: #071f30;
+  --cw-panel-top: rgba(9, 33, 49, 0.95);
+  --cw-panel-bottom: rgba(5, 19, 30, 0.98);
+  --cw-border: rgba(121, 203, 244, 0.45);
+  --cw-title: #eaf9ff;
+  --cw-label: #ccf0ff;
+  --cw-input-bg: rgba(11, 33, 49, 0.95);
+  --cw-input-border: rgba(91, 170, 210, 0.92);
+  --cw-input-text: #e8f8ff;
+  --cw-button-bg: #15425e;
+  --cw-button-hover: #255b7b;
+  --cw-button-border: rgba(156, 221, 252, 0.85);
+  --cw-button-text: #ecf9ff;
+}
+
+#create-world-root {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+  background: linear-gradient(150deg, var(--cw-bg-b) 0%, var(--cw-bg-a) 75%);
+}
+
+#create-world-shell {
+  position: relative;
+  width: min(640px, 95vw);
+  padding: 2px;
+  border-radius: 18px;
+  background: linear-gradient(140deg, var(--cw-border) 0%, rgba(255, 255, 255, 0.06) 100%);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.56);
+}
+
+#create-world-glow {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 72%;
+  height: 170px;
+  transform: translateX(-50%);
+  background-color: rgba(104, 216, 255, 0.12);
+  border-radius: 999px;
+  box-shadow: 0 0 80px rgba(104, 216, 255, 0.2);
+}
+
+#create-world-panel {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, var(--cw-panel-top) 0%, var(--cw-panel-bottom) 100%);
+}
+
+#create-world-title {
+  margin: 0 0 4px;
+  color: var(--cw-title);
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.create-world-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.create-world-label {
+  margin: 0;
+  color: var(--cw-label);
+  font-size: 19px;
+  font-weight: 600;
+}
+
+#create-world-name-input,
+#create-world-seed-input {
+  width: 100%;
+  min-height: 46px;
+  margin: 0;
+  border: 2px solid var(--cw-input-border);
+  border-radius: 8px;
+  background: var(--cw-input-bg);
+  color: var(--cw-input-text);
+  font-size: 21px;
+  font-weight: 600;
+}
+
+#create-world-actions {
+  margin-top: 8px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.create-world-button {
+  min-width: 160px;
+  height: 46px;
+  margin: 0;
+  border: 1px solid var(--cw-button-border);
+  border-radius: 9px;
+  background: var(--cw-button-bg);
+  color: var(--cw-button-text);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.create-world-button:hover {
+  background: var(--cw-button-hover);
+}

@@ -31,10 +31,7 @@ impl Plugin for WorldSaveService {
 }
 
 fn setup_world_save(mut commands: Commands) {
-    let world_root = std::env::current_dir()
-        .unwrap_or_default()
-        .join("saves")
-        .join(&"world");
+    let world_root = default_saves_root().join("world");
 
     std::fs::create_dir_all(world_root.join("region")).ok();
 

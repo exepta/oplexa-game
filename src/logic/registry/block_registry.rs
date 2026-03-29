@@ -1,4 +1,4 @@
-use crate::core::states::states::{AppState, LoadingStates};
+use crate::core::states::states::{AppState, BeforeUiState};
 use crate::core::world::block::BlockRegistry;
 use bevy::prelude::*;
 
@@ -18,5 +18,5 @@ fn start_block_registry(
 ) {
     let registry = BlockRegistry::load_all(&asset_server, &mut materials, "assets/blocks");
     commands.insert_resource(registry);
-    next.set(AppState::Loading(LoadingStates::BaseGen));
+    next.set(AppState::Screen(BeforeUiState::Menu));
 }

@@ -1,8 +1,8 @@
 mod auth;
 mod blocks;
 mod drops;
-mod players;
 pub mod mobs;
+mod players;
 
 pub use auth::*;
 pub use blocks::*;
