@@ -1,25 +1,30 @@
 use crate::{state::ServerRuntimeConfig, types::Server};
-use log::info;
-use multiplayer::{
-    config::NetworkSettings,
+use api::core::network::{
+    config::DedicatedServerSettings,
     discovery::{LanDiscoveryServer, LanServerInfo},
     protocols::protocol,
 };
+use api::core::world::spawn::ensure_world_spawn_generated;
+use log::info;
 use naia_server::{ServerConfig, transport::udp};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 pub struct BootstrapResult {
     pub server: Server,
     pub discovery: Option<LanDiscoveryServer>,
     pub runtime_config: ServerRuntimeConfig,
+    pub world_root: PathBuf,
 }
 
 pub fn bootstrap_server() -> BootstrapResult {
-    let settings = NetworkSettings::load_or_create("config/network.toml");
-    let server_settings = settings.server.clone();
+    let settings_path = DedicatedServerSettings::settings_path("server.settings.toml");
+    let server_settings = DedicatedServerSettings::load_or_create(&settings_path);
+    let (world_root, world_seed, spawn_translation) = prepare_server_world(&server_settings);
     let bind_addr = server_settings
         .bind_addr()
         .parse()
-        .expect("Invalid bind address in config/network.toml");
+        .expect("Invalid bind address in server settings");
     let public_url = server_settings.session_url();
 
     let server_addrs = udp::ServerAddrs::new(bind_addr, bind_addr, &public_url);
@@ -29,26 +34,22 @@ pub fn bootstrap_server() -> BootstrapResult {
     let mut server = Server::new(ServerConfig::default(), protocol);
     server.listen(socket);
 
-    let discovery = if server_settings.lan_discovery {
-        Some(
-            LanDiscoveryServer::bind(
-                server_settings.lan_discovery_port,
-                LanServerInfo {
-                    server_name: server_settings.server_name.clone(),
-                    motd: server_settings.motd.clone(),
-                    session_url: public_url.clone(),
-                    observed_addr: None,
-                },
-            )
-            .expect("Failed to start LAN discovery socket"),
+    let discovery = Some(
+        LanDiscoveryServer::bind(
+            server_settings.discovery_port(),
+            LanServerInfo {
+                server_name: server_settings.server_name.clone(),
+                motd: server_settings.motd.clone(),
+                session_url: public_url.clone(),
+                observed_addr: None,
+            },
         )
-    } else {
-        None
-    };
+        .expect("Failed to start LAN discovery socket"),
+    );
 
     info!(
-        "Server listening on {} (session URL: {})",
-        bind_addr, public_url
+        "Server listening on {} (session URL: {}, world: {:?}, seed: {})",
+        bind_addr, public_url, world_root, world_seed
     );
 
     BootstrapResult {
@@ -58,6 +59,56 @@ pub fn bootstrap_server() -> BootstrapResult {
             server_name: server_settings.server_name,
             motd: server_settings.motd,
             max_players: server_settings.max_players,
+            client_timeout: server_settings.client_timeout,
+            world_name: server_settings.world_name,
+            world_seed,
+            spawn_translation,
         },
+        world_root,
+    }
+}
+
+fn prepare_server_world(settings: &DedicatedServerSettings) -> (PathBuf, i32, [f32; 3]) {
+    let world_root =
+        PathBuf::from("worlds").join(normalize_world_name(settings.world_name.as_str()));
+    if let Err(error) = fs::create_dir_all(world_root.join("region")) {
+        panic!(
+            "Failed to create server world at {:?}: {}",
+            world_root, error
+        );
+    }
+
+    let seed_file = world_root.join("seed.txt");
+    let world_seed = read_world_seed(&seed_file).unwrap_or_else(|| {
+        if let Err(error) = fs::write(&seed_file, settings.world_seed.to_string()) {
+            panic!("Failed to write world seed file {:?}: {}", seed_file, error);
+        }
+        settings.world_seed
+    });
+
+    let spawn_translation = ensure_world_spawn_generated(&world_root, world_seed);
+
+    (world_root, world_seed, spawn_translation)
+}
+
+fn read_world_seed(path: &Path) -> Option<i32> {
+    let text = fs::read_to_string(path).ok()?;
+    text.trim().parse::<i32>().ok()
+}
+
+fn normalize_world_name(raw_name: &str) -> String {
+    let normalized = raw_name
+        .trim()
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            _ => c,
+        })
+        .collect::<String>();
+
+    if normalized.is_empty() {
+        "world".to_string()
+    } else {
+        normalized
     }
 }

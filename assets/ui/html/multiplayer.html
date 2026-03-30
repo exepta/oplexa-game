@@ -1,0 +1,55 @@
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="multi-player" />
+    <title>Multi Player</title>
+    <link rel="stylesheet" href="../css/multiplayer.css" />
+  </head>
+  <body id="multi-player-root">
+    <div id="multi-player-panel">
+      <h2 id="multi-player-title">Multi Player</h2>
+      <div id="multi-player-server-list">
+        <div id="multi-player-empty">No servers found.</div>
+      </div>
+      <div id="multi-player-actions">
+        <button id="multi-player-join-server" class="multi-player-action-button">Join Server</button>
+        <button id="multi-player-refresh-server-list" class="multi-player-action-button">Refresh</button>
+        <button id="multi-player-add-server" class="multi-player-action-button">Add Server</button>
+        <button id="multi-player-edit-server" class="multi-player-action-button">Edit Server</button>
+        <button id="multi-player-delete-server" class="multi-player-action-button danger">Delete Server</button>
+      </div>
+    </div>
+    <div id="multi-player-form-dialog">
+      <div id="multi-player-form-box">
+        <p id="multi-player-form-title">Add Server</p>
+        <div class="multi-player-form-field">
+          <label for="multi-player-form-name-input" class="multi-player-form-label">Server Name</label>
+          <input id="multi-player-form-name-input" name="server-name" type="text" maxlength="48" placeholder="Server Name" />
+        </div>
+        <div class="multi-player-form-field">
+          <label for="multi-player-form-address-input" class="multi-player-form-label">Server IP</label>
+          <input id="multi-player-form-address-input" name="server-address" type="text" maxlength="64" placeholder="192.111.222.23 or 192.111.222.23:14191" />
+        </div>
+        <div id="multi-player-form-actions">
+          <button id="multi-player-form-add" class="multi-player-action-button">Add</button>
+          <button id="multi-player-form-edit" class="multi-player-action-button">Edit</button>
+          <button id="multi-player-form-abort" class="multi-player-action-button">Abort</button>
+        </div>
+      </div>
+    </div>
+    <div id="multi-player-delete-dialog">
+      <div id="multi-player-delete-box">
+        <p id="multi-player-delete-text">Ar you sure to delete ``?</p>
+        <div id="multi-player-delete-actions">
+          <button id="multi-player-delete-confirm" class="multi-player-action-button danger">Confirm</button>
+          <button id="multi-player-delete-abort" class="multi-player-action-button">Abort</button>
+        </div>
+      </div>
+    </div>
+    <div id="multi-player-connect-dialog">
+      <div id="multi-player-connect-box">
+        <p id="multi-player-connect-text">Connect to Server</p>
+      </div>
+    </div>
+  </body>
+</html>

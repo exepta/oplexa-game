@@ -92,7 +92,9 @@ fn handle_main_menu_buttons(
         MainMenuAction::SinglePlayer => {
             next_state.set(AppState::Screen(BeforeUiState::SinglePlayer));
         }
-        MainMenuAction::MultiPlayer => info!("Multi Player clicked (not implemented yet)."),
+        MainMenuAction::MultiPlayer => {
+            next_state.set(AppState::Screen(BeforeUiState::MultiPlayer));
+        }
         MainMenuAction::Settings => info!("Settings clicked (not implemented yet)."),
         MainMenuAction::QuitGame => info!("Quit Game clicked (not implemented yet)."),
     }

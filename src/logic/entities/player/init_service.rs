@@ -2,6 +2,7 @@ use crate::core::config::GlobalConfig;
 use crate::core::entities::player::{
     FlightState, FpsController, GameMode, GameModeState, Player, PlayerCamera,
 };
+use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
 use crate::core::ui::UiInteractionState;
 use crate::core::world::block::BlockRegistry;
@@ -113,6 +114,7 @@ fn spawn_scene(mut commands: Commands, existing_sun: Query<Entity, With<MainSun>
 fn spawn_player(
     mut commands: Commands,
     game_config: Res<GlobalConfig>,
+    multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
     existing_players: Query<Entity, With<Player>>,
     existing_player_cams: Query<Entity, With<PlayerCamera>>,
 ) {
@@ -122,6 +124,11 @@ fn spawn_player(
     for entity in &existing_player_cams {
         safe_despawn_entity(&mut commands, entity);
     }
+
+    let spawn_translation = multiplayer_connection
+        .as_ref()
+        .and_then(|connection| connection.spawn_translation)
+        .unwrap_or([0.0, 180.0, 0.0]);
 
     let fov_deg: f32 = 80.0;
     let half_h = (EYE_HEIGHT + HEADROOM - RADIUS).max(0.60);
@@ -134,7 +141,11 @@ fn spawn_player(
         .spawn((
             Player,
             Name::new("Player"),
-            Transform::from_xyz(0.0, 180.0, 0.0),
+            Transform::from_xyz(
+                spawn_translation[0],
+                spawn_translation[1],
+                spawn_translation[2],
+            ),
             Visibility::default(),
             InheritedVisibility::default(),
             ViewVisibility::default(),

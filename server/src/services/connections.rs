@@ -1,27 +1,26 @@
-use crate::{
-    models::{HostedPlayer, PLAYER_STALE_TIMEOUT},
-    state::ServerState,
-    types::Server,
+use crate::{models::HostedPlayer, state::ServerState, types::Server};
+use api::core::network::protocols::{
+    PlayerJoined, PlayerLeft, PlayerSnapshot, ServerBlockBreak, ServerBlockPlace, ServerDropSpawn,
+    ServerWelcome,
 };
 use log::{info, warn};
-use multiplayer::protocols::{
-    PlayerJoined, PlayerLeft, PlayerSnapshot, ServerDropSpawn, ServerWelcome,
-};
 use naia_server::{
     UserKey,
     shared::default_channels::{
         OrderedReliableChannel, UnorderedReliableChannel, UnorderedUnreliableChannel,
     },
 };
+use std::collections::HashSet;
 use std::time::Instant;
 
-pub fn purge_stale_players(server: &mut Server, state: &mut ServerState) {
+pub fn purge_stale_players(server: &mut Server, state: &mut ServerState, timeout_secs: u64) {
     let now = Instant::now();
+    let timeout = std::time::Duration::from_secs(timeout_secs.max(1));
     let stale_user_keys: Vec<UserKey> = state
         .players
         .iter()
         .filter_map(|(user_key, player)| {
-            (now.duration_since(player.last_seen) > PLAYER_STALE_TIMEOUT).then_some(*user_key)
+            (now.duration_since(player.last_seen) > timeout).then_some(*user_key)
         })
         .collect();
 
@@ -30,12 +29,7 @@ pub fn purge_stale_players(server: &mut Server, state: &mut ServerState) {
             server.user_mut(&user_key).disconnect();
         }
 
-        handle_player_disconnect(
-            server,
-            state,
-            user_key,
-            format!("timeout ({:?})", PLAYER_STALE_TIMEOUT),
-        );
+        handle_player_disconnect(server, state, user_key, format!("timeout ({:?})", timeout));
     }
 }
 
@@ -68,6 +62,9 @@ pub fn handle_connect(
     user_key: UserKey,
     server_name: &str,
     motd: &str,
+    world_name: &str,
+    world_seed: i32,
+    spawn_translation: [f32; 3],
 ) {
     let username = state
         .pending_auth
@@ -77,16 +74,24 @@ pub fn handle_connect(
     let player = HostedPlayer {
         player_id: state.next_player_id,
         username: username.clone(),
-        translation: [0.0, 180.0, 0.0],
+        translation: spawn_translation,
         yaw: 0.0,
         pitch: 0.0,
         last_seen: Instant::now(),
+        streamed_chunks: HashSet::new(),
     };
     state.next_player_id = state.next_player_id.wrapping_add(1);
 
     server.send_message::<UnorderedReliableChannel, _>(
         &user_key,
-        &ServerWelcome::new(player.player_id, server_name.to_string(), motd.to_string()),
+        &ServerWelcome {
+            player_id: player.player_id,
+            server_name: server_name.to_string(),
+            motd: motd.to_string(),
+            world_name: world_name.to_string(),
+            world_seed,
+            spawn_translation,
+        },
     );
 
     for other in state.players.values() {
@@ -98,6 +103,20 @@ pub fn handle_connect(
             &user_key,
             &PlayerSnapshot::new(other.player_id, other.translation, other.yaw, other.pitch),
         );
+    }
+
+    for (location, block_id) in &state.block_overrides {
+        if *block_id == 0 {
+            server.send_message::<OrderedReliableChannel, _>(
+                &user_key,
+                &ServerBlockBreak::new(0, *location),
+            );
+        } else {
+            server.send_message::<OrderedReliableChannel, _>(
+                &user_key,
+                &ServerBlockPlace::new(0, *location, *block_id),
+            );
+        }
     }
 
     for drop in state.drops.values() {
@@ -121,6 +140,12 @@ pub fn handle_connect(
     info!("{} joined as id {}", username, player_id);
     server
         .broadcast_message::<UnorderedReliableChannel, _>(&PlayerJoined::new(player_id, username));
+    server.broadcast_message::<UnorderedUnreliableChannel, _>(&PlayerSnapshot::new(
+        player_id,
+        spawn_translation,
+        0.0,
+        0.0,
+    ));
 }
 
 pub fn handle_player_disconnect(

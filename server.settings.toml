@@ -1,0 +1,8 @@
+ip = "auto"
+port = 14191
+world-name = "world"
+world-seed = 1337
+server-name = "Oplexa Server"
+motd = "Welcome to Oplexa"
+max-players = 10
+client-timeout = 60

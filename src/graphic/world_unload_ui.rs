@@ -113,18 +113,13 @@ fn tick_world_unload_ui(
     state.active = false;
 }
 
-fn reset_world_unload_ui(
-    mut registry: ResMut<UiRegistry>,
-    mut state: ResMut<WorldUnloadUiState>,
-) {
+fn reset_world_unload_ui(mut registry: ResMut<UiRegistry>, mut state: ResMut<WorldUnloadUiState>) {
     hide_world_unload_ui(&mut registry);
     state.active = false;
     state.timer.reset();
 }
 
-fn world_unload_ui_should_tick(
-    state: Res<WorldUnloadUiState>,
-) -> bool {
+fn world_unload_ui_should_tick(state: Res<WorldUnloadUiState>) -> bool {
     state.active
 }
 

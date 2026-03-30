@@ -114,9 +114,8 @@ impl Plugin for SinglePlayerUiPlugin {
             )
             .add_systems(
                 Update,
-                ensure_single_player_ui_hidden_when_not_active.run_if(not(in_state(
-                    AppState::Screen(BeforeUiState::SinglePlayer),
-                ))),
+                ensure_single_player_ui_hidden_when_not_active
+                    .run_if(not(in_state(AppState::Screen(BeforeUiState::SinglePlayer)))),
             )
             .add_systems(
                 OnExit(AppState::Screen(BeforeUiState::SinglePlayer)),

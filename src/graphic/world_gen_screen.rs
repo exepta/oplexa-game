@@ -1,4 +1,4 @@
-use crate::core::states::states::{AppState, LoadingStates};
+use crate::core::states::states::{AppState, InGameStates, LoadingStates};
 use crate::core::states::world_gen::{LoadingPhase, LoadingProgress};
 use bevy::prelude::*;
 use bevy_extended_ui::html::HtmlSource;
@@ -37,6 +37,10 @@ impl Plugin for WorldGenScreenPlugin {
             )
             .add_systems(
                 OnExit(AppState::Loading(LoadingStates::CaveGen)),
+                hide_world_gen_ui,
+            )
+            .add_systems(
+                OnEnter(AppState::InGame(InGameStates::Game)),
                 hide_world_gen_ui,
             )
             .add_systems(Update, sync_world_gen_progress.run_if(is_loading_state));

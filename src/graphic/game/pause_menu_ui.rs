@@ -61,10 +61,7 @@ impl Plugin for PauseMenuUiPlugin {
     }
 }
 
-fn register_pause_menu_ui(
-    mut registry: ResMut<UiRegistry>,
-    asset_server: Res<AssetServer>,
-) {
+fn register_pause_menu_ui(mut registry: ResMut<UiRegistry>, asset_server: Res<AssetServer>) {
     if registry.get(PAUSE_MENU_UI_KEY).is_none() {
         let handle: Handle<HtmlAsset> = asset_server.load(PAUSE_MENU_UI_PATH);
         registry.add(
@@ -112,7 +109,11 @@ fn toggle_pause_menu(
     ui_interaction.menu_open = pause_menu.open;
     set_pause_menu_cursor(pause_menu.open, &mut cursor_q);
     if pause_menu.open {
-        show_pause_menu_ui(&mut registry, &asset_server, multiplayer_connection.connected);
+        show_pause_menu_ui(
+            &mut registry,
+            &asset_server,
+            multiplayer_connection.connected,
+        );
     } else {
         hide_pause_menu_ui(&mut registry);
     }
@@ -132,7 +133,11 @@ fn enforce_pause_menu_visibility(
 
     ui_interaction.menu_open = true;
     if !pause_menu_ui_in_stack(&registry, multiplayer_connection.connected) {
-        show_pause_menu_ui(&mut registry, &asset_server, multiplayer_connection.connected);
+        show_pause_menu_ui(
+            &mut registry,
+            &asset_server,
+            multiplayer_connection.connected,
+        );
     }
     set_pause_menu_cursor(true, &mut cursor_q);
 }
@@ -175,7 +180,11 @@ fn handle_pause_menu_buttons(
         }
         PauseMenuAction::Settings => {
             info!("Settings button clicked (not implemented yet).");
-            show_pause_menu_ui(&mut registry, &asset_server, multiplayer_connection.connected);
+            show_pause_menu_ui(
+                &mut registry,
+                &asset_server,
+                multiplayer_connection.connected,
+            );
         }
         PauseMenuAction::ExitToMenu => {
             if multiplayer_connection.connected {
@@ -280,9 +289,7 @@ fn activate_pause_menu_ui(registry: &mut UiRegistry, key: &str) {
     let mut changed = false;
     if let Some(current) = registry.current.as_mut() {
         let original_len = current.len();
-        current.retain(|name| {
-            name != PAUSE_MENU_UI_KEY && name != PAUSE_MENU_MULTIPLAYER_UI_KEY
-        });
+        current.retain(|name| name != PAUSE_MENU_UI_KEY && name != PAUSE_MENU_MULTIPLAYER_UI_KEY);
         changed |= current.len() != original_len;
 
         if current.iter().all(|name| name != key) {

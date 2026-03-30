@@ -7,15 +7,17 @@ mod types;
 use crate::{
     bootstrap::bootstrap_server,
     services::{
-        handle_auth, handle_block_break, handle_block_place, handle_connect, handle_drop_item,
-        handle_drop_pickup, handle_player_disconnect, handle_player_move, purge_stale_players,
+        flush_chunk_streaming, handle_auth, handle_block_break, handle_block_place,
+        handle_chunk_interest, handle_connect, handle_drop_item, handle_drop_pickup,
+        handle_player_disconnect, handle_player_move, purge_stale_players,
     },
     state::ServerState,
 };
-use log::{error, warn};
-use multiplayer::protocols::{
-    Auth, ClientBlockBreak, ClientBlockPlace, ClientDropItem, ClientDropPickup, PlayerMove,
+use api::core::network::protocols::{
+    Auth, ClientBlockBreak, ClientBlockPlace, ClientChunkInterest, ClientDropItem,
+    ClientDropPickup, PlayerMove,
 };
+use log::{error, warn};
 use naia_server::{
     AuthEvent, ConnectEvent, DisconnectEvent, ErrorEvent, MessageEvent,
     shared::default_channels::{OrderedReliableChannel, UnorderedUnreliableChannel},
@@ -32,7 +34,7 @@ fn main() {
     let mut server = bootstrap.server;
     let discovery = bootstrap.discovery;
     let runtime_config = bootstrap.runtime_config;
-    let mut state = ServerState::new();
+    let mut state = ServerState::new(bootstrap.world_root, runtime_config.world_seed);
 
     loop {
         if let Some(discovery) = &discovery {
@@ -44,7 +46,7 @@ fn main() {
         let mut events = server.receive(state.world.proxy_mut());
         let mut busy = false;
 
-        purge_stale_players(&mut server, &mut state);
+        purge_stale_players(&mut server, &mut state, runtime_config.client_timeout);
 
         for (user_key, auth) in events.read::<AuthEvent<Auth>>() {
             busy = true;
@@ -65,6 +67,9 @@ fn main() {
                 user_key,
                 &runtime_config.server_name,
                 &runtime_config.motd,
+                &runtime_config.world_name,
+                runtime_config.world_seed,
+                runtime_config.spawn_translation,
             );
         }
 
@@ -73,6 +78,13 @@ fn main() {
         {
             busy = true;
             handle_player_move(&mut server, &mut state, user_key, &movement);
+        }
+
+        for (user_key, message) in
+            events.read::<MessageEvent<OrderedReliableChannel, ClientChunkInterest>>()
+        {
+            busy = true;
+            handle_chunk_interest(&mut server, &mut state, user_key, &message);
         }
 
         for (user_key, message) in
@@ -117,6 +129,8 @@ fn main() {
             busy = true;
             error!("Naia server error: {}", error);
         }
+
+        flush_chunk_streaming(&mut server, &mut state);
 
         server.send_all_updates(state.world.proxy());
 
