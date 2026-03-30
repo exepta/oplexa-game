@@ -9,13 +9,14 @@ use crate::{
     services::{
         flush_chunk_streaming, handle_auth, handle_block_break, handle_block_place,
         handle_chunk_interest, handle_connect, handle_drop_item, handle_drop_pickup,
+        handle_keepalive,
         handle_player_disconnect, handle_player_move, purge_stale_players,
     },
     state::ServerState,
 };
 use api::core::network::protocols::{
     Auth, ClientBlockBreak, ClientBlockPlace, ClientChunkInterest, ClientDropItem,
-    ClientDropPickup, PlayerMove,
+    ClientDropPickup, ClientKeepAlive, PlayerMove,
 };
 use log::{error, warn};
 use naia_server::{
@@ -78,6 +79,13 @@ fn main() {
         {
             busy = true;
             handle_player_move(&mut server, &mut state, user_key, &movement);
+        }
+
+        for (user_key, message) in
+            events.read::<MessageEvent<UnorderedUnreliableChannel, ClientKeepAlive>>()
+        {
+            busy = true;
+            handle_keepalive(&mut server, &mut state, user_key, &message);
         }
 
         for (user_key, message) in

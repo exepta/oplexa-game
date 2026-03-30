@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 pub const BIG: usize = 175;
-pub const MAX_UPDATE_FRAMES: usize = 32;
+pub const MAX_UPDATE_FRAMES: usize = 48;
 
 pub const SEA_LEVEL: i32 = 60;
 

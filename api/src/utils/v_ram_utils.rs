@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Cross-platform V-RAM detection helpers.
 //!
 //! This module exposes vendor/OS specific ways to query *actual* V-RAM usage,

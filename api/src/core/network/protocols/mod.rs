@@ -24,6 +24,7 @@ pub fn protocol() -> Protocol {
         .add_message::<PlayerJoined>()
         .add_message::<PlayerLeft>()
         .add_message::<PlayerMove>()
+        .add_message::<ClientKeepAlive>()
         .add_message::<PlayerSnapshot>()
         .add_message::<ClientChunkInterest>()
         .add_message::<ServerChunkData>()

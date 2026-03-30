@@ -1,2 +1,2 @@
 pub mod key_utils;
-mod v_ram_utils;
+pub mod v_ram_utils;

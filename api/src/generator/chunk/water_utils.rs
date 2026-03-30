@@ -83,7 +83,7 @@ pub struct WaterSnap {
 
 /// Minimal cross-chunk border snapshot for meshing a vertical range.
 #[derive(Clone)]
-pub(crate) struct WaterBorderSnapshot {
+pub struct WaterBorderSnapshot {
     pub(crate) y0: usize,
     pub(crate) y1: usize,
 

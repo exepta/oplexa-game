@@ -8,6 +8,8 @@ Cargo.lock
 # Runtime generated
 /logs/
 /saves/
+/worlds/
+server.settings.toml
 
 # OS
 .DS_Store

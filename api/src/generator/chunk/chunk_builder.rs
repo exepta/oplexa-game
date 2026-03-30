@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 const MAX_MESH_APPLY_PER_FRAME: usize = MAX_UPDATE_FRAMES / 2;
 const MAX_COLLIDER_APPLY_PER_FRAME: usize = MAX_UPDATE_FRAMES / 4;
-const MAX_INFLIGHT_COLLIDER_BUILD: usize = 16;
+const MAX_INFLIGHT_COLLIDER_BUILD: usize = 20;
 
 #[derive(Default, Resource)]
 struct ColliderBacklog(HashMap<(IVec2, u8), ColliderTodo>);

@@ -525,31 +525,6 @@ fn spawn_dropped_block_item(
     );
 }
 
-pub(crate) fn spawn_dropped_block_stack(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    registry: &BlockRegistry,
-    block_id: BlockId,
-    amount: u16,
-    world_loc: IVec3,
-    now: f32,
-) {
-    if block_id == 0 || amount == 0 {
-        return;
-    }
-
-    for i in 0..amount {
-        spawn_dropped_block_item(
-            commands,
-            meshes,
-            registry,
-            block_id,
-            world_loc,
-            now + i as f32 * 0.013,
-        );
-    }
-}
-
 pub(crate) fn spawn_player_dropped_block_stack(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,

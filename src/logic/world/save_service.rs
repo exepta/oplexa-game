@@ -37,9 +37,6 @@ impl Plugin for WorldSaveService {
 
 fn setup_world_save(mut commands: Commands) {
     let world_root = default_saves_root().join("world");
-
-    std::fs::create_dir_all(world_root.join("region")).ok();
-
     commands.insert_resource(WorldSave { root: world_root });
 }
 

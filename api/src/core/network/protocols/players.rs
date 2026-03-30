@@ -44,6 +44,17 @@ impl PlayerMove {
 }
 
 #[derive(Message)]
+pub struct ClientKeepAlive {
+    pub stamp_ms: u32,
+}
+
+impl ClientKeepAlive {
+    pub fn new(stamp_ms: u32) -> Self {
+        Self { stamp_ms }
+    }
+}
+
+#[derive(Message)]
 pub struct PlayerSnapshot {
     pub player_id: u64,
     pub translation: [f32; 3],

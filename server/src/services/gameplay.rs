@@ -1,7 +1,8 @@
 use crate::{models::HostedDrop, state::ServerState, types::Server};
 use api::core::network::protocols::{
     ClientBlockBreak, ClientBlockPlace, ClientChunkInterest, ClientDropItem, ClientDropPickup,
-    PlayerMove, PlayerSnapshot, ServerBlockBreak, ServerBlockPlace, ServerChunkData,
+    ClientKeepAlive, PlayerMove, PlayerSnapshot, ServerBlockBreak, ServerBlockPlace,
+    ServerChunkData,
     ServerDropPicked, ServerDropSpawn,
 };
 use bevy_math::IVec2;
@@ -35,6 +36,17 @@ pub fn handle_player_move(
             player.yaw,
             player.pitch,
         ));
+    }
+}
+
+pub fn handle_keepalive(
+    _server: &mut Server,
+    state: &mut ServerState,
+    user_key: UserKey,
+    _message: &ClientKeepAlive,
+) {
+    if let Some(player) = state.players.get_mut(&user_key) {
+        player.last_seen = Instant::now();
     }
 }
 

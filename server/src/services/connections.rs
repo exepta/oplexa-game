@@ -40,6 +40,8 @@ pub fn handle_auth(
     username: String,
     max_players: usize,
 ) {
+    info!("Auth request from {:?} with username '{}'", user_key, username);
+
     if username.trim().is_empty() {
         warn!("Rejected empty username for {:?}", user_key);
         server.reject_connection(&user_key);
@@ -53,6 +55,7 @@ pub fn handle_auth(
     }
 
     state.pending_auth.insert(user_key, username);
+    info!("Accepted auth for {:?}", user_key);
     server.accept_connection(&user_key);
 }
 
@@ -66,6 +69,8 @@ pub fn handle_connect(
     world_seed: i32,
     spawn_translation: [f32; 3],
 ) {
+    info!("Connect event for {:?}", user_key);
+
     let username = state
         .pending_auth
         .remove(&user_key)

@@ -29,9 +29,9 @@ use api::core::network::{
     discovery::{LanDiscoveryClient, LanServerInfo},
     protocols::{
         Auth, ClientBlockBreak, ClientBlockPlace, ClientChunkInterest, ClientDropItem,
-        ClientDropPickup, PlayerJoined, PlayerLeft, PlayerMove, PlayerSnapshot, ServerBlockBreak,
-        ServerBlockPlace, ServerChunkData, ServerDropPicked, ServerDropSpawn, ServerWelcome,
-        protocol,
+        ClientDropPickup, ClientKeepAlive, PlayerJoined, PlayerLeft, PlayerMove, PlayerSnapshot,
+        ServerBlockBreak, ServerBlockPlace, ServerChunkData, ServerDropPicked, ServerDropSpawn,
+        ServerWelcome, protocol,
     },
     world::{NetworkEntity, NetworkWorld},
 };
@@ -57,7 +57,7 @@ use naia_client::{
     },
     transport::udp,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -74,6 +74,68 @@ type NetworkClient = NaiaClient<NetworkEntity>;
 struct RemotePlayerAvatar {
     #[allow(dead_code)]
     player_id: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RemotePlayerSnapshotPoint {
+    at_secs: f32,
+    translation: Vec3,
+    yaw: f32,
+}
+
+#[derive(Debug, Default)]
+struct RemotePlayerSmoothing {
+    snapshots: VecDeque<RemotePlayerSnapshotPoint>,
+}
+
+impl RemotePlayerSmoothing {
+    fn with_initial_snapshot(at_secs: f32, translation: Vec3, yaw: f32) -> Self {
+        let mut snapshots = VecDeque::with_capacity(REMOTE_PLAYER_MAX_SNAPSHOT_POINTS);
+        snapshots.push_back(RemotePlayerSnapshotPoint {
+            at_secs,
+            translation,
+            yaw,
+        });
+        Self { snapshots }
+    }
+
+    fn reset_snapshot(&mut self, at_secs: f32, translation: Vec3, yaw: f32) {
+        self.snapshots.clear();
+        self.snapshots.push_back(RemotePlayerSnapshotPoint {
+            at_secs,
+            translation,
+            yaw,
+        });
+    }
+
+    fn push_snapshot(&mut self, at_secs: f32, translation: Vec3, yaw: f32) {
+        let next = RemotePlayerSnapshotPoint {
+            at_secs,
+            translation,
+            yaw,
+        };
+
+        if let Some(last) = self.snapshots.back_mut() {
+            if at_secs <= last.at_secs {
+                if (last.at_secs - at_secs).abs() <= 0.0001 {
+                    *last = next;
+                }
+                return;
+            }
+
+            if last.translation.distance_squared(translation) <= 0.000001
+                && angle_abs_diff(last.yaw, yaw) <= 0.0001
+            {
+                last.at_secs = at_secs;
+                return;
+            }
+        }
+
+        self.snapshots.push_back(next);
+        while self.snapshots.len() > REMOTE_PLAYER_MAX_SNAPSHOT_POINTS {
+            self.snapshots.pop_front();
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -118,6 +180,10 @@ const MULTIPLAYER_DROP_VISUAL_SCALE_X: f32 = 0.85;
 const MULTIPLAYER_DROP_VISUAL_SCALE_Y: f32 = 0.72;
 const MULTIPLAYER_DROP_VISUAL_SCALE_Z: f32 = 1.14;
 const MULTIPLAYER_DROP_PICKUP_DELAY_SECS: f32 = 0.5;
+const REMOTE_PLAYER_INTERP_BACK_TIME_SECS: f32 = 0.10;
+const REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS: f32 = 0.08;
+const REMOTE_PLAYER_MAX_SNAPSHOT_POINTS: usize = 24;
+const REMOTE_PLAYER_SMOOTHING_HZ: f32 = 18.0;
 
 struct MultiplayerClientRuntime {
     enabled: bool,
@@ -128,7 +194,9 @@ struct MultiplayerClientRuntime {
     world: NetworkWorld,
     local_player_id: Option<u64>,
     remote_players: HashMap<u64, Entity>,
+    remote_player_smoothing: HashMap<u64, RemotePlayerSmoothing>,
     next_local_drop_seq: u32,
+    keepalive_timer: Timer,
     send_timer: Timer,
 }
 
@@ -144,7 +212,9 @@ impl MultiplayerClientRuntime {
             world: NetworkWorld::default(),
             local_player_id: None,
             remote_players: HashMap::new(),
+            remote_player_smoothing: HashMap::new(),
             next_local_drop_seq: 1,
+            keepalive_timer: Timer::from_seconds(2.0, TimerMode::Repeating),
             send_timer: Timer::from_seconds(
                 Duration::from_millis(settings.client.transform_send_interval_ms).as_secs_f32(),
                 TimerMode::Repeating,
@@ -178,14 +248,9 @@ impl MultiplayerClientRuntime {
         self.session_url = session_url;
         self.local_player_id = None;
         self.remote_players.clear();
+        self.remote_player_smoothing.clear();
         self.next_local_drop_seq = 1;
-    }
-
-    fn allocate_local_drop_id(&mut self) -> Option<u64> {
-        let player_id = self.local_player_id?;
-        let drop_id = (player_id << 32) | (self.next_local_drop_seq as u64);
-        self.next_local_drop_seq = self.next_local_drop_seq.wrapping_add(1).max(1);
-        Some(drop_id)
+        self.keepalive_timer.reset();
     }
 }
 
@@ -719,13 +784,15 @@ impl Plugin for MultiplayerClientPlugin {
                     send_local_block_break_events,
                     send_local_block_place_events,
                     send_local_item_drop_requests,
+                    send_client_keepalive,
                     receive_multiplayer_messages,
                     simulate_multiplayer_drop_items,
                     send_local_drop_pickup_requests,
                     send_chunk_interest_updates,
                     send_local_player_pose,
                 ),
-            );
+            )
+            .add_systems(Update, smooth_remote_players);
     }
 }
 
@@ -957,6 +1024,7 @@ fn receive_multiplayer_messages(
     }
 
     let mut events = client.receive(runtime.world.proxy_mut());
+    let now = time.elapsed_secs();
 
     for server_addr in events.read::<ConnectEvent>() {
         info!("Connected to multiplayer server at {}", server_addr);
@@ -1026,9 +1094,16 @@ fn receive_multiplayer_messages(
             translation,
             0.0,
         );
+
+        runtime
+            .remote_player_smoothing
+            .entry(message.player_id)
+            .or_default()
+            .reset_snapshot(now, translation, 0.0);
     }
 
     for message in events.read::<MessageEvent<UnorderedReliableChannel, PlayerLeft>>() {
+        runtime.remote_player_smoothing.remove(&message.player_id);
         if let Some(entity) = runtime.remote_players.remove(&message.player_id) {
             safe_despawn_entity(&mut commands, entity);
         }
@@ -1039,7 +1114,7 @@ fn receive_multiplayer_messages(
             continue;
         }
 
-        let entity = ensure_remote_player(
+        ensure_remote_player(
             &mut commands,
             &visuals,
             &mut runtime.remote_players,
@@ -1048,11 +1123,14 @@ fn receive_multiplayer_messages(
             message.yaw,
         );
 
-        commands.entity(entity).insert(Transform {
-            translation: Vec3::from_array(message.translation),
-            rotation: Quat::from_rotation_y(message.yaw),
-            scale: Vec3::ONE,
-        });
+        let translation = Vec3::from_array(message.translation);
+        let smoothing = runtime
+            .remote_player_smoothing
+            .entry(message.player_id)
+            .or_insert_with(|| {
+                RemotePlayerSmoothing::with_initial_snapshot(now, translation, message.yaw)
+            });
+        smoothing.push_snapshot(now, translation, message.yaw);
     }
 
     for message in events.read::<MessageEvent<UnorderedReliableChannel, ServerChunkData>>() {
@@ -1150,6 +1228,7 @@ fn receive_multiplayer_messages(
         for entity in runtime.remote_players.drain().map(|(_, entity)| entity) {
             safe_despawn_entity(&mut commands, entity);
         }
+        runtime.remote_player_smoothing.clear();
         clear_multiplayer_drops(&mut commands, &mut drops);
         runtime.local_player_id = None;
         multiplayer_connection.clear_session();
@@ -1220,6 +1299,70 @@ fn send_chunk_interest_updates(
     ));
     chunk_stream.last_requested_center = Some(center);
     chunk_stream.last_requested_radius = Some(radius);
+}
+
+fn smooth_remote_players(
+    time: Res<Time>,
+    mut remote_players: Query<(&RemotePlayerAvatar, &mut Transform)>,
+    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+) {
+    let now = time.elapsed_secs();
+    let render_at = (now - REMOTE_PLAYER_INTERP_BACK_TIME_SECS).max(0.0);
+    let alpha = (1.0 - (-REMOTE_PLAYER_SMOOTHING_HZ * time.delta_secs()).exp()).clamp(0.0, 1.0);
+
+    for (avatar, mut transform) in &mut remote_players {
+        let Some(smoothing) = runtime.remote_player_smoothing.get_mut(&avatar.player_id) else {
+            continue;
+        };
+        let Some(front) = smoothing.snapshots.front().copied() else {
+            continue;
+        };
+
+        while smoothing.snapshots.len() >= 2 {
+            let next = smoothing.snapshots.get(1).copied();
+            if match next {
+                Some(snapshot) => snapshot.at_secs > render_at,
+                None => true,
+            } {
+                break;
+            }
+            smoothing.snapshots.pop_front();
+        }
+
+        let (target_translation, target_yaw) = if let Some(next) = smoothing.snapshots.get(1) {
+            let from = smoothing.snapshots[0];
+            let to = *next;
+            let span = (to.at_secs - from.at_secs).max(0.0001);
+            let t = ((render_at - from.at_secs) / span).clamp(0.0, 1.0);
+            (
+                from.translation.lerp(to.translation, t),
+                lerp_angle_radians(from.yaw, to.yaw, t),
+            )
+        } else {
+            let latest = smoothing.snapshots.back().copied().unwrap_or(front);
+            let extrapolated = if let Some(previous) = smoothing
+                .snapshots
+                .iter()
+                .rev()
+                .nth(1)
+                .copied()
+            {
+                let dt = (latest.at_secs - previous.at_secs).max(0.0001);
+                let velocity = (latest.translation - previous.translation) / dt;
+                let ahead =
+                    (render_at - latest.at_secs).clamp(0.0, REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS);
+                latest.translation + velocity * ahead
+            } else {
+                latest.translation
+            };
+            (extrapolated, latest.yaw)
+        };
+
+        transform.translation = transform.translation.lerp(target_translation, alpha);
+        let current_yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
+        let smoothed_yaw = lerp_angle_radians(current_yaw, target_yaw, alpha);
+        transform.rotation = Quat::from_rotation_y(smoothed_yaw);
+    }
 }
 
 fn send_local_block_break_events(
@@ -1483,6 +1626,24 @@ fn send_local_player_pose(
     ));
 }
 
+fn send_client_keepalive(time: Res<Time>, mut runtime: NonSendMut<MultiplayerClientRuntime>) {
+    runtime.keepalive_timer.tick(time.delta());
+    if !runtime.keepalive_timer.just_finished() {
+        return;
+    }
+
+    let Some(client) = runtime.client.as_mut() else {
+        return;
+    };
+
+    if !client.connection_status().is_connected() {
+        return;
+    }
+
+    let stamp_ms = (time.elapsed_secs_f64() * 1000.0) as u32;
+    client.send_message::<UnorderedUnreliableChannel, _>(&ClientKeepAlive::new(stamp_ms));
+}
+
 fn apply_remote_block_break(
     location: [i32; 3],
     chunk_map: &mut ChunkMap,
@@ -1694,6 +1855,20 @@ fn compute_multiplayer_drop_spin_speed(world_loc: IVec3, drop_id: u64) -> f32 {
         1.0
     };
     sign * magnitude
+}
+
+#[inline]
+fn angle_abs_diff(from: f32, to: f32) -> f32 {
+    let wrapped = (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
+    wrapped.abs()
+}
+
+#[inline]
+fn lerp_angle_radians(from: f32, to: f32, t: f32) -> f32 {
+    let wrapped = (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
+    from + wrapped * t.clamp(0.0, 1.0)
 }
 
 fn seed_from_world_loc(world_loc: IVec3) -> u64 {
