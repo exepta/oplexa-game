@@ -4,6 +4,7 @@ use crate::core::ui::UiInteractionState;
 use crate::core::world::chunk::ChunkMap;
 use crate::core::world::fluid::{FluidMap, WaterMeshIndex};
 use crate::core::world::save::{RegionCache, WorldSave, default_saves_root};
+use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use crate::utils::key_utils::convert;
 use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
@@ -180,7 +181,7 @@ fn enter_single_player_screen(
     );
     register_create_world_ui(&mut registry, &asset_server);
     clear_create_world_inputs(&mut create_inputs);
-    registry.use_ui(SINGLE_PLAYER_UI_KEY);
+    activate_single_player_ui(&mut registry, SINGLE_PLAYER_UI_KEY);
 }
 
 fn set_single_player_interaction(
@@ -466,13 +467,13 @@ fn enforce_active_single_player_page_ui(
                 );
             }
             if !is_ui_active(&registry, SINGLE_PLAYER_UI_KEY) {
-                registry.use_ui(SINGLE_PLAYER_UI_KEY);
+                activate_single_player_ui(&mut registry, SINGLE_PLAYER_UI_KEY);
             }
         }
         SinglePlayerPage::CreateWorld => {
             register_create_world_ui(&mut registry, &asset_server);
             if !is_ui_active(&registry, CREATE_WORLD_UI_KEY) {
-                registry.use_ui(CREATE_WORLD_UI_KEY);
+                activate_single_player_ui(&mut registry, CREATE_WORLD_UI_KEY);
             }
         }
     }
@@ -610,6 +611,22 @@ fn remove_single_player_ui_from_registry(registry: &mut UiRegistry) {
     }
 }
 
+fn activate_single_player_ui(registry: &mut UiRegistry, key: &str) {
+    if registry.get(key).is_none() {
+        return;
+    }
+
+    if let Some(current) = registry.current.as_mut() {
+        current.retain(|name| name != SINGLE_PLAYER_UI_KEY && name != CREATE_WORLD_UI_KEY);
+        current.push(key.to_string());
+        registry.ui_update = true;
+        return;
+    }
+
+    registry.current = Some(vec![key.to_string()]);
+    registry.ui_update = true;
+}
+
 fn ensure_single_player_ui_hidden_when_not_active(
     mut visibility_sets: ParamSet<(
         Query<(&CssID, &mut Visibility)>,
@@ -685,7 +702,7 @@ fn despawn_single_player_body_roots(
         };
 
         if key == SINGLE_PLAYER_UI_KEY || key == CREATE_WORLD_UI_KEY {
-            commands.entity(entity).despawn();
+            safe_despawn_entity(commands, entity);
         }
     }
 }

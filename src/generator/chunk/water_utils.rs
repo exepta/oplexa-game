@@ -16,8 +16,9 @@ use crate::core::world::fluid::{FluidChunk, FluidMap, SolidSnapshot, WaterMeshIn
 use crate::core::world::save::{
     REGION_SIZE, RegionCache, RegionFile, TAG_WAT1, WorldSave, chunk_to_region, container_find,
     container_upsert, region_slot_index, slot_is_container, unpack_slot_bytes,
+    world_save_io_guard,
 };
-use crate::generator::chunk::chunk_utils::col_rand_u32;
+use crate::generator::chunk::chunk_utils::{col_rand_u32, safe_despawn_entity};
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
@@ -481,6 +482,7 @@ pub fn save_water_chunk_sync(
     coord: IVec2,
     w: &FluidChunk,
 ) {
+    let _guard = world_save_io_guard();
     let wat = encode_fluid_chunk(w);
     let old = cache.read_chunk(ws, coord).ok().flatten();
     let merged = container_upsert(old.as_deref(), TAG_WAT1, &wat);
@@ -488,6 +490,7 @@ pub fn save_water_chunk_sync(
 }
 
 pub fn save_water_chunk_at_root_sync(ws_root: std::path::PathBuf, coord: IVec2, w: &FluidChunk) {
+    let _guard = world_save_io_guard();
     let wat = encode_fluid_chunk(w);
     let rc = chunk_to_region(coord);
     let path = ws_root
@@ -507,6 +510,7 @@ pub fn load_water_chunk_from_disk_any(
     ws_root: std::path::PathBuf,
     coord: IVec2,
 ) -> Option<(FluidChunk, u32)> {
+    let _guard = world_save_io_guard();
     let (r_coord, _) = chunk_to_region_slot(coord);
     let path = ws_root
         .join("region")
@@ -628,7 +632,7 @@ pub(crate) fn despawn_water_mesh(
         if let Ok(Mesh3d(handle)) = q_mesh.get(ent) {
             meshes.remove(handle.id());
         }
-        commands.entity(ent).despawn();
+        safe_despawn_entity(commands, ent);
     }
 }
 

@@ -68,7 +68,7 @@ fn show_world_gen_ui(mut registry: ResMut<UiRegistry>, asset_server: Res<AssetSe
         );
     }
 
-    registry.use_ui(WORLD_GEN_UI_KEY);
+    activate_world_gen_ui(&mut registry);
 }
 
 fn hide_world_gen_ui(mut registry: ResMut<UiRegistry>) {
@@ -83,6 +83,24 @@ fn hide_world_gen_ui(mut registry: ResMut<UiRegistry>) {
     if clear_current {
         registry.current = None;
     }
+}
+
+fn activate_world_gen_ui(registry: &mut UiRegistry) {
+    if registry.get(WORLD_GEN_UI_KEY).is_none() {
+        return;
+    }
+
+    if let Some(current) = registry.current.as_mut() {
+        if current.iter().any(|name| name == WORLD_GEN_UI_KEY) {
+            return;
+        }
+        current.push(WORLD_GEN_UI_KEY.to_string());
+        registry.ui_update = true;
+        return;
+    }
+
+    registry.current = Some(vec![WORLD_GEN_UI_KEY.to_string()]);
+    registry.ui_update = true;
 }
 
 fn sync_world_gen_progress(

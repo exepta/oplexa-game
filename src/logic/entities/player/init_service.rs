@@ -5,6 +5,7 @@ use crate::core::entities::player::{
 use crate::core::states::states::{AppState, InGameStates};
 use crate::core::ui::UiInteractionState;
 use crate::core::world::block::BlockRegistry;
+use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use crate::utils::key_utils::convert;
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::prepass::DepthPrepass;
@@ -42,7 +43,11 @@ impl Plugin for PlayerInitialize {
         })
         .add_systems(
             OnEnter(AppState::InGame(InGameStates::Game)),
-            (spawn_scene, spawn_player),
+            (enable_physics_pipeline, spawn_scene, spawn_player),
+        )
+        .add_systems(
+            OnExit(AppState::InGame(InGameStates::Game)),
+            (disable_physics_pipeline, despawn_player_entities),
         )
         .add_systems(
             Update,
@@ -55,6 +60,31 @@ impl Plugin for PlayerInitialize {
             )
                 .run_if(resource_exists::<BlockRegistry>),
         );
+    }
+}
+
+fn enable_physics_pipeline(mut configs: Query<&mut RapierConfiguration>) {
+    for mut config in &mut configs {
+        config.physics_pipeline_active = true;
+    }
+}
+
+fn disable_physics_pipeline(mut configs: Query<&mut RapierConfiguration>) {
+    for mut config in &mut configs {
+        config.physics_pipeline_active = false;
+    }
+}
+
+fn despawn_player_entities(
+    mut commands: Commands,
+    existing_players: Query<Entity, With<Player>>,
+    existing_player_cams: Query<Entity, With<PlayerCamera>>,
+) {
+    for entity in &existing_players {
+        safe_despawn_entity(&mut commands, entity);
+    }
+    for entity in &existing_player_cams {
+        safe_despawn_entity(&mut commands, entity);
     }
 }
 
@@ -87,10 +117,10 @@ fn spawn_player(
     existing_player_cams: Query<Entity, With<PlayerCamera>>,
 ) {
     for entity in &existing_players {
-        commands.entity(entity).despawn();
+        safe_despawn_entity(&mut commands, entity);
     }
     for entity in &existing_player_cams {
-        commands.entity(entity).despawn();
+        safe_despawn_entity(&mut commands, entity);
     }
 
     let fov_deg: f32 = 80.0;

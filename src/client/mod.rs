@@ -7,7 +7,10 @@ use crate::core::events::block::block_player_events::{
     BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
-use crate::core::events::ui_events::{ConnectToServerRequest, DropItemRequest};
+use crate::core::events::ui_events::{
+    ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest, OpenToLanRequest,
+    StopLanHostRequest,
+};
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::AppState;
 use crate::core::world::block::{
@@ -17,6 +20,7 @@ use crate::core::world::chunk::ChunkMap;
 use crate::core::world::chunk_dimension::{Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local};
 use crate::core::world::fluid::FluidMap;
 use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
+use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
 use bevy::log::{BoxedLayer, Level, LogPlugin};
 use bevy::math::primitives::Capsule3d;
@@ -54,6 +58,7 @@ use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing_subscriber::Layer;
@@ -196,6 +201,101 @@ impl LanDiscoveryRuntime {
     }
 }
 
+struct LocalLanHost {
+    child: Option<Child>,
+    session_url: Option<String>,
+    connect_timer: Option<Timer>,
+}
+
+impl Default for LocalLanHost {
+    fn default() -> Self {
+        Self {
+            child: None,
+            session_url: None,
+            connect_timer: None,
+        }
+    }
+}
+
+impl LocalLanHost {
+    fn refresh(&mut self) {
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                self.child = None;
+                self.session_url = None;
+                self.connect_timer = None;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                warn!("Failed to poll LAN host process: {}", error);
+                self.child = None;
+                self.session_url = None;
+                self.connect_timer = None;
+            }
+        }
+    }
+
+    fn stop(&mut self) {
+        self.refresh();
+        let Some(mut child) = self.child.take() else {
+            self.session_url = None;
+            self.connect_timer = None;
+            return;
+        };
+
+        if let Err(error) = child.kill() {
+            warn!("Failed to stop LAN host process: {}", error);
+        }
+        let _ = child.wait();
+        self.session_url = None;
+        self.connect_timer = None;
+    }
+}
+
+fn lan_server_binary_path() -> Option<PathBuf> {
+    let current = env::current_exe().ok()?;
+    let exe_name = format!("oplexa-game-server{}", env::consts::EXE_SUFFIX);
+    let direct = current.with_file_name(&exe_name);
+    if direct.exists() {
+        return Some(direct);
+    }
+
+    let parent = current.parent()?;
+    let sibling = parent.join(&exe_name);
+    if sibling.exists() {
+        return Some(sibling);
+    }
+
+    let workspace_debug = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("debug")
+        .join(&exe_name);
+    if workspace_debug.exists() {
+        return Some(workspace_debug);
+    }
+
+    None
+}
+
+fn spawn_lan_host_process() -> std::io::Result<Child> {
+    let Some(binary) = lan_server_binary_path() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "oplexa-game-server binary not found",
+        ));
+    };
+
+    Command::new(binary)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+}
+
 pub fn run() {
     GlobalConfig::ensure_config_files_exist();
     let graphics_config = GlobalConfig::new();
@@ -265,6 +365,7 @@ fn init_bevy_app(app: &mut App, config: &GlobalConfig, multiplayer_settings: Net
 
     app.insert_non_send_resource(MultiplayerClientRuntime::new(&multiplayer_settings))
         .insert_non_send_resource(LanDiscoveryRuntime::new(&multiplayer_settings))
+        .insert_non_send_resource(LocalLanHost::default())
         .init_state::<AppState>()
         .add_plugins(EguiPlugin::default())
         .add_plugins(WorldInspectorPlugin::default().run_if(check_world_inspector_state))
@@ -576,6 +677,10 @@ impl Plugin for MultiplayerClientPlugin {
                 (
                     poll_lan_servers,
                     connect_to_server_requested,
+                    disconnect_from_server_requested,
+                    open_to_lan_requested,
+                    finish_open_to_lan_connect,
+                    stop_lan_host_requested,
                     send_local_block_break_events,
                     send_local_block_place_events,
                     send_local_item_drop_requests,
@@ -669,6 +774,100 @@ fn connect_to_server_requested(
     runtime.auto_connect_lan = false;
 }
 
+fn disconnect_from_server_requested(
+    mut disconnect_requests: MessageReader<DisconnectFromServerRequest>,
+    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+) {
+    if disconnect_requests.read().next().is_none() {
+        return;
+    }
+
+    let Some(client) = runtime.client.as_mut() else {
+        return;
+    };
+
+    let status = client.connection_status();
+    if status.is_connected() {
+        client.disconnect();
+    }
+}
+
+fn open_to_lan_requested(
+    mut requests: MessageReader<OpenToLanRequest>,
+    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+    mut local_host: NonSendMut<LocalLanHost>,
+) {
+    if requests.read().next().is_none() {
+        return;
+    }
+
+    local_host.refresh();
+
+    if runtime
+        .client
+        .as_ref()
+        .is_some_and(|client| !client.connection_status().is_disconnected())
+    {
+        warn!("Open to LAN ignored because the client is already connected.");
+        return;
+    }
+
+    let settings = NetworkSettings::load_or_create("config/network.toml");
+    let session_url = settings.server.session_url();
+
+    if local_host.child.is_none() {
+        match spawn_lan_host_process() {
+            Ok(child) => {
+                info!("Started LAN host at {}", session_url);
+                local_host.child = Some(child);
+            }
+            Err(error) => {
+                warn!("Failed to start LAN host: {}", error);
+                return;
+            }
+        }
+    }
+
+    local_host.session_url = Some(session_url.clone());
+    local_host.connect_timer = Some(Timer::from_seconds(0.75, TimerMode::Once));
+    runtime.auto_connect_lan = false;
+}
+
+fn finish_open_to_lan_connect(
+    time: Res<Time>,
+    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+    mut local_host: NonSendMut<LocalLanHost>,
+) {
+    local_host.refresh();
+
+    let Some(timer) = local_host.connect_timer.as_mut() else {
+        return;
+    };
+    timer.tick(time.delta());
+    if !timer.is_finished() {
+        return;
+    }
+
+    let Some(session_url) = local_host.session_url.clone() else {
+        local_host.connect_timer = None;
+        return;
+    };
+
+    runtime.connect(session_url);
+    local_host.connect_timer = None;
+}
+
+fn stop_lan_host_requested(
+    mut requests: MessageReader<StopLanHostRequest>,
+    mut local_host: NonSendMut<LocalLanHost>,
+) {
+    if requests.read().next().is_none() {
+        return;
+    }
+
+    local_host.stop();
+}
+
 fn receive_multiplayer_messages(
     mut commands: Commands,
     time: Res<Time>,
@@ -714,7 +913,7 @@ fn receive_multiplayer_messages(
     for message in events.read::<MessageEvent<UnorderedReliableChannel, ServerWelcome>>() {
         runtime.local_player_id = Some(message.player_id);
         if let Some(entity) = runtime.remote_players.remove(&message.player_id) {
-            commands.entity(entity).despawn();
+            safe_despawn_entity(&mut commands, entity);
         }
         info!(
             "Server '{}' accepted player id {}",
@@ -739,7 +938,7 @@ fn receive_multiplayer_messages(
 
     for message in events.read::<MessageEvent<UnorderedReliableChannel, PlayerLeft>>() {
         if let Some(entity) = runtime.remote_players.remove(&message.player_id) {
-            commands.entity(entity).despawn();
+            safe_despawn_entity(&mut commands, entity);
         }
     }
 
@@ -806,7 +1005,7 @@ fn receive_multiplayer_messages(
 
     for message in events.read::<MessageEvent<OrderedReliableChannel, ServerDropPicked>>() {
         if let Some(entity) = drops.entities.remove(&message.drop_id) {
-            commands.entity(entity).despawn();
+            safe_despawn_entity(&mut commands, entity);
         }
 
         if Some(message.player_id) == runtime.local_player_id {
@@ -820,7 +1019,7 @@ fn receive_multiplayer_messages(
 
     if disconnect_received {
         for entity in runtime.remote_players.drain().map(|(_, entity)| entity) {
-            commands.entity(entity).despawn();
+            safe_despawn_entity(&mut commands, entity);
         }
         clear_multiplayer_drops(&mut commands, &mut drops);
         runtime.local_player_id = None;
@@ -1251,7 +1450,7 @@ fn spawn_multiplayer_drop(
 
 fn clear_multiplayer_drops(commands: &mut Commands, drops: &mut MultiplayerDropIndex) {
     for entity in drops.entities.drain().map(|(_, entity)| entity) {
-        commands.entity(entity).despawn();
+        safe_despawn_entity(commands, entity);
     }
 }
 

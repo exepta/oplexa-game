@@ -217,6 +217,7 @@ pub fn save_chunk_sync(
     coord: IVec2,
     ch: &ChunkData,
 ) -> std::io::Result<()> {
+    let _guard = world_save_io_guard();
     let blocks = encode_chunk(ch);
 
     let old = cache.read_chunk(ws, coord).ok().flatten();
@@ -230,6 +231,7 @@ pub fn save_chunk_at_root_sync(
     coord: IVec2,
     ch: &ChunkData,
 ) -> std::io::Result<()> {
+    let _guard = world_save_io_guard();
     let blocks = encode_chunk(ch);
     let rc = chunk_to_region(coord);
     let path = ws_root
@@ -254,17 +256,20 @@ pub async fn load_or_gen_chunk_async(
     let path = ws_root
         .join("region")
         .join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
-    if let Ok(mut rf) = RegionFile::open(&path) {
-        if let Ok(Some(buf)) = rf.read_chunk(coord) {
-            // Detect legacy container-wrapped blobs
-            let data = if slot_is_container(&buf) {
-                container_find(&buf, TAG_BLK1).map(|b| b.to_vec())
-            } else {
-                Some(buf)
-            };
-            if let Some(b) = data {
-                if let Ok(c) = decode_chunk(&b) {
-                    return c;
+    {
+        let _guard = world_save_io_guard();
+        if let Ok(mut rf) = RegionFile::open(&path) {
+            if let Ok(Some(buf)) = rf.read_chunk(coord) {
+                // Detect legacy container-wrapped blobs
+                let data = if slot_is_container(&buf) {
+                    container_find(&buf, TAG_BLK1).map(|b| b.to_vec())
+                } else {
+                    Some(buf)
+                };
+                if let Some(b) = data {
+                    if let Ok(c) = decode_chunk(&b) {
+                        return c;
+                    }
                 }
             }
         }
@@ -371,9 +376,17 @@ pub fn despawn_mesh_set(
             if let Ok(Mesh3d(handle)) = q_mesh.get(ent) {
                 meshes.remove(handle.id());
             }
-            commands.entity(ent).despawn();
+            safe_despawn_entity(commands, ent);
         }
     }
+}
+
+pub fn safe_despawn_entity(commands: &mut Commands, ent: Entity) {
+    commands.queue(move |world: &mut World| {
+        if world.get_entity(ent).is_ok() {
+            let _ = world.despawn(ent);
+        }
+    });
 }
 
 pub fn can_spawn_mesh(pending_mesh: &PendingMesh) -> bool {

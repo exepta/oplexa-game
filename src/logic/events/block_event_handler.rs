@@ -13,6 +13,7 @@ use crate::core::world::chunk::*;
 use crate::core::world::chunk_dimension::*;
 use crate::core::world::fluid::FluidMap;
 use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
+use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -493,7 +494,7 @@ fn pick_up_dropped_block_items(
         }
 
         if inventory.add_block(item.block_id, 1) == 0 {
-            commands.entity(entity).despawn();
+            safe_despawn_entity(&mut commands, entity);
         }
     }
 }
@@ -730,7 +731,7 @@ fn sync_mining_overlay(
 ) {
     let Some(target) = state.target else {
         if let Some(e) = root.0.take() {
-            commands.entity(e).despawn();
+            safe_despawn_entity(&mut commands, e);
         }
         return;
     };
@@ -774,7 +775,7 @@ fn sync_mining_overlay(
 
     if progress >= 1.0 {
         if let Some(e) = root.0.take() {
-            commands.entity(e).despawn();
+            safe_despawn_entity(&mut commands, e);
         }
     }
 }

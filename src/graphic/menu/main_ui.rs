@@ -66,7 +66,7 @@ fn show_main_menu_ui(mut registry: ResMut<UiRegistry>, asset_server: Res<AssetSe
         );
     }
 
-    registry.use_ui(MAIN_MENU_UI_KEY);
+    activate_main_menu_ui(&mut registry);
 }
 
 fn set_main_menu_interaction(
@@ -114,6 +114,24 @@ fn hide_main_menu_ui(mut registry: ResMut<UiRegistry>) {
 
 fn clear_main_menu_interaction(mut ui_interaction: ResMut<UiInteractionState>) {
     ui_interaction.menu_open = false;
+}
+
+fn activate_main_menu_ui(registry: &mut UiRegistry) {
+    if registry.get(MAIN_MENU_UI_KEY).is_none() {
+        return;
+    }
+
+    if let Some(current) = registry.current.as_mut() {
+        if current.iter().any(|name| name == MAIN_MENU_UI_KEY) {
+            return;
+        }
+        current.push(MAIN_MENU_UI_KEY.to_string());
+        registry.ui_update = true;
+        return;
+    }
+
+    registry.current = Some(vec![MAIN_MENU_UI_KEY.to_string()]);
+    registry.ui_update = true;
 }
 
 fn consume_main_menu_action(

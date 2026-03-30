@@ -4,6 +4,15 @@ use bevy::prelude::*;
 pub struct ConnectToServerRequest;
 
 #[derive(Message, Clone, Copy, Debug, Default)]
+pub struct DisconnectFromServerRequest;
+
+#[derive(Message, Clone, Copy, Debug, Default)]
+pub struct OpenToLanRequest;
+
+#[derive(Message, Clone, Copy, Debug, Default)]
+pub struct StopLanHostRequest;
+
+#[derive(Message, Clone, Copy, Debug, Default)]
 pub struct DropItemRequest {
     pub block_id: u16,
     pub amount: u16,

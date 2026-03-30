@@ -61,6 +61,10 @@ impl Plugin for CaveBuilder {
             .add_systems(
                 OnExit(AppState::Loading(LoadingStates::CaveGen)),
                 clear_cave_queue,
+            )
+            .add_systems(
+                OnExit(AppState::InGame(InGameStates::Game)),
+                clear_cave_runtime,
             );
     }
 }
@@ -96,6 +100,12 @@ fn enqueue_newly_loaded_chunks_during_game(
 /// Clear the queue when leaving the state (safety net).
 fn clear_cave_queue(mut tracker: ResMut<CaveTracker>) {
     tracker.pending.clear();
+}
+
+fn clear_cave_runtime(mut tracker: ResMut<CaveTracker>, mut jobs: ResMut<CaveJobs>) {
+    tracker.pending.clear();
+    tracker.done.clear();
+    jobs.running.clear();
 }
 
 /* =========================

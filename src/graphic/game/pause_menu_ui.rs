@@ -1,10 +1,12 @@
 use crate::core::config::GlobalConfig;
-use crate::core::events::ui_events::ConnectToServerRequest;
+use crate::core::events::ui_events::{
+    DisconnectFromServerRequest, OpenToLanRequest, StopLanHostRequest,
+};
 use crate::core::multiplayer::MultiplayerConnectionState;
-use crate::core::states::states::{AppState, InGameStates, is_state_in_game};
+use crate::core::states::states::{AppState, BeforeUiState, InGameStates, is_state_in_game};
 use crate::core::ui::UiInteractionState;
+use crate::graphic::world_unload_ui::{WorldUnloadUiState, trigger_world_unload_ui};
 use crate::utils::key_utils::convert;
-use bevy::app::AppExit;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy_extended_ui::html::HtmlSource;
@@ -14,7 +16,9 @@ use bevy_extended_ui::styles::CssID;
 use bevy_extended_ui::widgets::UIWidgetState;
 
 const PAUSE_MENU_UI_KEY: &str = "pause-menu";
+const PAUSE_MENU_MULTIPLAYER_UI_KEY: &str = "pause-menu-multiplayer";
 const PAUSE_MENU_UI_PATH: &str = "ui/html/pause_menu.html";
+const PAUSE_MENU_MULTIPLAYER_UI_PATH: &str = "ui/html/pause_menu_disconnect.html";
 const PAUSE_PLAY_ID: &str = "pause-menu-play";
 const PAUSE_CONNECT_ID: &str = "pause-menu-connect";
 const PAUSE_SETTINGS_ID: &str = "pause-menu-settings";
@@ -29,10 +33,10 @@ struct PauseMenuState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseMenuAction {
-    Play,
-    ConnectToServer,
+    BackToGame,
+    OpenToLan,
     Settings,
-    GameClose,
+    ExitToMenu,
 }
 
 impl Plugin for PauseMenuUiPlugin {
@@ -57,22 +61,32 @@ impl Plugin for PauseMenuUiPlugin {
     }
 }
 
-fn register_pause_menu_ui(mut registry: ResMut<UiRegistry>, asset_server: Res<AssetServer>) {
-    if registry.get(PAUSE_MENU_UI_KEY).is_some() {
-        return;
+fn register_pause_menu_ui(
+    mut registry: ResMut<UiRegistry>,
+    asset_server: Res<AssetServer>,
+) {
+    if registry.get(PAUSE_MENU_UI_KEY).is_none() {
+        let handle: Handle<HtmlAsset> = asset_server.load(PAUSE_MENU_UI_PATH);
+        registry.add(
+            PAUSE_MENU_UI_KEY.to_string(),
+            HtmlSource::from_handle(handle),
+        );
     }
 
-    let handle: Handle<HtmlAsset> = asset_server.load(PAUSE_MENU_UI_PATH);
-    registry.add(
-        PAUSE_MENU_UI_KEY.to_string(),
-        HtmlSource::from_handle(handle),
-    );
+    if registry.get(PAUSE_MENU_MULTIPLAYER_UI_KEY).is_none() {
+        let handle: Handle<HtmlAsset> = asset_server.load(PAUSE_MENU_MULTIPLAYER_UI_PATH);
+        registry.add(
+            PAUSE_MENU_MULTIPLAYER_UI_KEY.to_string(),
+            HtmlSource::from_handle(handle),
+        );
+    }
 }
 
 fn toggle_pause_menu(
     keyboard: Res<ButtonInput<KeyCode>>,
     global_config: Res<GlobalConfig>,
     asset_server: Res<AssetServer>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
     mut ui_interaction: ResMut<UiInteractionState>,
     mut pause_menu: ResMut<PauseMenuState>,
     mut registry: ResMut<UiRegistry>,
@@ -98,7 +112,7 @@ fn toggle_pause_menu(
     ui_interaction.menu_open = pause_menu.open;
     set_pause_menu_cursor(pause_menu.open, &mut cursor_q);
     if pause_menu.open {
-        show_pause_menu_ui(&mut registry, &asset_server);
+        show_pause_menu_ui(&mut registry, &asset_server, multiplayer_connection.connected);
     } else {
         hide_pause_menu_ui(&mut registry);
     }
@@ -106,6 +120,7 @@ fn toggle_pause_menu(
 
 fn enforce_pause_menu_visibility(
     asset_server: Res<AssetServer>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
     pause_menu: Res<PauseMenuState>,
     mut ui_interaction: ResMut<UiInteractionState>,
     mut registry: ResMut<UiRegistry>,
@@ -116,21 +131,25 @@ fn enforce_pause_menu_visibility(
     }
 
     ui_interaction.menu_open = true;
-    if !pause_menu_ui_in_stack(&registry) {
-        show_pause_menu_ui(&mut registry, &asset_server);
+    if !pause_menu_ui_in_stack(&registry, multiplayer_connection.connected) {
+        show_pause_menu_ui(&mut registry, &asset_server, multiplayer_connection.connected);
     }
     set_pause_menu_cursor(true, &mut cursor_q);
 }
 
 fn handle_pause_menu_buttons(
+    multiplayer_connection: Res<MultiplayerConnectionState>,
     mut ui_interaction: ResMut<UiInteractionState>,
     mut pause_menu: ResMut<PauseMenuState>,
     mut widgets: Query<(&CssID, &mut UIWidgetState)>,
     mut registry: ResMut<UiRegistry>,
     asset_server: Res<AssetServer>,
+    mut world_unload_ui: ResMut<WorldUnloadUiState>,
     mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
-    mut connect_writer: MessageWriter<ConnectToServerRequest>,
-    mut app_exit_writer: MessageWriter<AppExit>,
+    mut next_state: ResMut<NextState<AppState>>,
+    mut open_to_lan_writer: MessageWriter<OpenToLanRequest>,
+    mut disconnect_writer: MessageWriter<DisconnectFromServerRequest>,
+    mut stop_host_writer: MessageWriter<StopLanHostRequest>,
 ) {
     if !pause_menu.open {
         return;
@@ -141,14 +160,14 @@ fn handle_pause_menu_buttons(
     };
 
     match action {
-        PauseMenuAction::Play => {
+        PauseMenuAction::BackToGame => {
             pause_menu.open = false;
             ui_interaction.menu_open = false;
             hide_pause_menu_ui(&mut registry);
             set_pause_menu_cursor(false, &mut cursor_q);
         }
-        PauseMenuAction::ConnectToServer => {
-            connect_writer.write(ConnectToServerRequest);
+        PauseMenuAction::OpenToLan => {
+            open_to_lan_writer.write(OpenToLanRequest);
             pause_menu.open = false;
             ui_interaction.menu_open = false;
             hide_pause_menu_ui(&mut registry);
@@ -156,10 +175,19 @@ fn handle_pause_menu_buttons(
         }
         PauseMenuAction::Settings => {
             info!("Settings button clicked (not implemented yet).");
-            show_pause_menu_ui(&mut registry, &asset_server);
+            show_pause_menu_ui(&mut registry, &asset_server, multiplayer_connection.connected);
         }
-        PauseMenuAction::GameClose => {
-            app_exit_writer.write(AppExit::Success);
+        PauseMenuAction::ExitToMenu => {
+            if multiplayer_connection.connected {
+                disconnect_writer.write(DisconnectFromServerRequest);
+            }
+            stop_host_writer.write(StopLanHostRequest);
+            pause_menu.open = false;
+            ui_interaction.menu_open = false;
+            hide_pause_menu_ui(&mut registry);
+            set_pause_menu_cursor(true, &mut cursor_q);
+            trigger_world_unload_ui(&mut registry, &asset_server, &mut world_unload_ui);
+            next_state.set(AppState::Screen(BeforeUiState::Menu));
         }
     }
 }
@@ -206,20 +234,25 @@ fn close_pause_menu(
     set_pause_menu_cursor(false, &mut cursor_q);
 }
 
-fn show_pause_menu_ui(registry: &mut UiRegistry, asset_server: &AssetServer) {
-    if registry.get(PAUSE_MENU_UI_KEY).is_none() {
-        let handle: Handle<HtmlAsset> = asset_server.load(PAUSE_MENU_UI_PATH);
-        registry.add(
-            PAUSE_MENU_UI_KEY.to_string(),
-            HtmlSource::from_handle(handle),
-        );
+fn show_pause_menu_ui(
+    registry: &mut UiRegistry,
+    asset_server: &AssetServer,
+    multiplayer_connected: bool,
+) {
+    let target_key = pause_menu_ui_key(multiplayer_connected);
+    let target_path = pause_menu_ui_path(multiplayer_connected);
+
+    if registry.get(target_key).is_none() {
+        let handle: Handle<HtmlAsset> = asset_server.load(target_path);
+        registry.add(target_key.to_string(), HtmlSource::from_handle(handle));
     }
 
-    set_pause_menu_ui_active(registry, true);
+    activate_pause_menu_ui(registry, target_key);
 }
 
 fn hide_pause_menu_ui(registry: &mut UiRegistry) {
-    set_pause_menu_ui_active(registry, false);
+    remove_pause_menu_ui(registry, PAUSE_MENU_UI_KEY);
+    remove_pause_menu_ui(registry, PAUSE_MENU_MULTIPLAYER_UI_KEY);
 }
 
 fn set_pause_menu_cursor(
@@ -239,23 +272,73 @@ fn set_pause_menu_cursor(
     }
 }
 
-fn set_pause_menu_ui_active(registry: &mut UiRegistry, active: bool) {
-    let mut active_uis = registry.current.clone().unwrap_or_default();
-    active_uis.retain(|name| name != PAUSE_MENU_UI_KEY);
-
-    if active {
-        active_uis.push(PAUSE_MENU_UI_KEY.to_string());
+fn activate_pause_menu_ui(registry: &mut UiRegistry, key: &str) {
+    if registry.get(key).is_none() {
+        return;
     }
 
-    registry.use_uis(active_uis);
+    let mut changed = false;
+    if let Some(current) = registry.current.as_mut() {
+        let original_len = current.len();
+        current.retain(|name| {
+            name != PAUSE_MENU_UI_KEY && name != PAUSE_MENU_MULTIPLAYER_UI_KEY
+        });
+        changed |= current.len() != original_len;
+
+        if current.iter().all(|name| name != key) {
+            current.push(key.to_string());
+            changed = true;
+        }
+
+        if changed {
+            registry.ui_update = true;
+        }
+        return;
+    }
+
+    registry.current = Some(vec![key.to_string()]);
+    registry.ui_update = true;
 }
 
-fn pause_menu_ui_in_stack(registry: &UiRegistry) -> bool {
-    registry.current.as_ref().is_some_and(|current| {
-        current
-            .iter()
-            .any(|name| name.as_str() == PAUSE_MENU_UI_KEY)
-    })
+fn remove_pause_menu_ui(registry: &mut UiRegistry, key: &str) {
+    let mut clear_current = false;
+
+    if let Some(current) = registry.current.as_mut() {
+        let original_len = current.len();
+        current.retain(|name| name != key);
+        if current.len() != original_len {
+            registry.ui_update = true;
+        }
+        clear_current = current.is_empty();
+    }
+
+    if clear_current {
+        registry.current = None;
+    }
+}
+
+fn pause_menu_ui_in_stack(registry: &UiRegistry, multiplayer_connected: bool) -> bool {
+    let expected = pause_menu_ui_key(multiplayer_connected);
+    registry
+        .current
+        .as_ref()
+        .is_some_and(|current| current.iter().any(|name| name.as_str() == expected))
+}
+
+fn pause_menu_ui_key(multiplayer_connected: bool) -> &'static str {
+    if multiplayer_connected {
+        PAUSE_MENU_MULTIPLAYER_UI_KEY
+    } else {
+        PAUSE_MENU_UI_KEY
+    }
+}
+
+fn pause_menu_ui_path(multiplayer_connected: bool) -> &'static str {
+    if multiplayer_connected {
+        PAUSE_MENU_MULTIPLAYER_UI_PATH
+    } else {
+        PAUSE_MENU_UI_PATH
+    }
 }
 
 fn consume_pause_menu_action(
@@ -269,10 +352,10 @@ fn consume_pause_menu_action(
         state.checked = false;
 
         match css_id.0.as_str() {
-            PAUSE_PLAY_ID => Some(PauseMenuAction::Play),
-            PAUSE_CONNECT_ID => Some(PauseMenuAction::ConnectToServer),
+            PAUSE_PLAY_ID => Some(PauseMenuAction::BackToGame),
+            PAUSE_CONNECT_ID => Some(PauseMenuAction::OpenToLan),
             PAUSE_SETTINGS_ID => Some(PauseMenuAction::Settings),
-            PAUSE_CLOSE_ID => Some(PauseMenuAction::GameClose),
+            PAUSE_CLOSE_ID => Some(PauseMenuAction::ExitToMenu),
             _ => None,
         }
     })

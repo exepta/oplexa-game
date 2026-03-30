@@ -1,5 +1,6 @@
 use crate::core::config::{GlobalConfig, WorldGenConfig};
 use crate::core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent};
+use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates, LoadingStates};
 use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::*;
@@ -8,6 +9,7 @@ use crate::core::world::chunk_dimension::*;
 use crate::core::world::save::WorldSave;
 use crate::generator::chunk::chunk_struct::*;
 use crate::generator::chunk::chunk_utils::*;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy::tasks::futures_lite::future;
@@ -60,6 +62,31 @@ struct KickedOnce(HashSet<(IVec2, u8)>);
 
 #[derive(Resource, Default)]
 struct QueuedOnce(HashSet<(IVec2, u8)>);
+
+#[derive(SystemParam)]
+struct ChunkUnloadState<'w, 's> {
+    pending_gen: ResMut<'w, PendingGen>,
+    pending_mesh: ResMut<'w, PendingMesh>,
+    backlog: ResMut<'w, MeshBacklog>,
+    pending_collider: ResMut<'w, PendingColliderBuild>,
+    pending_save: ResMut<'w, PendingChunkSave>,
+    coll_backlog: ResMut<'w, ColliderBacklog>,
+    _marker: std::marker::PhantomData<&'s ()>,
+}
+
+#[derive(SystemParam)]
+struct ChunkCleanupState<'w, 's> {
+    pending_gen: ResMut<'w, PendingGen>,
+    pending_mesh: ResMut<'w, PendingMesh>,
+    backlog: ResMut<'w, MeshBacklog>,
+    pending_collider: ResMut<'w, PendingColliderBuild>,
+    pending_save: ResMut<'w, PendingChunkSave>,
+    coll_backlog: ResMut<'w, ColliderBacklog>,
+    kick_queue: ResMut<'w, KickQueue>,
+    kicked: ResMut<'w, KickedOnce>,
+    queued: ResMut<'w, QueuedOnce>,
+    _marker: std::marker::PhantomData<&'s ()>,
+}
 
 pub struct ChunkBuilder;
 
@@ -134,6 +161,10 @@ impl Plugin for ChunkBuilder {
                 Update,
                 check_base_gen_world_ready
                     .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))),
+            )
+            .add_systems(
+                OnExit(AppState::InGame(InGameStates::Game)),
+                cleanup_chunk_runtime_on_exit,
             );
     }
 }
@@ -575,7 +606,7 @@ fn collect_meshed_subchunks(
                 coll_backlog.0.remove(&(coord, sub as u8));
                 pending_collider.0.remove(&(coord, sub as u8));
                 if let Some(ent) = collider_index.0.remove(&(coord, sub as u8)) {
-                    commands.entity(ent).despawn();
+                    safe_despawn_entity(&mut commands, ent);
                 }
             }
 
@@ -659,7 +690,7 @@ fn collect_finished_collider_builds(
 
             if !chunk_map.chunks.contains_key(&coord) {
                 if let Some(ent) = collider_index.0.remove(&(coord, sub)) {
-                    commands.entity(ent).despawn();
+                    safe_despawn_entity(&mut commands, ent);
                 }
                 continue;
             }
@@ -669,7 +700,7 @@ fn collect_finished_collider_builds(
             };
 
             if let Some(ent) = collider_index.0.remove(&(coord, sub)) {
-                commands.entity(ent).despawn();
+                safe_despawn_entity(&mut commands, ent);
             }
 
             let ent = commands
@@ -753,17 +784,13 @@ fn unload_far_chunks(
     mut mesh_index: ResMut<ChunkMeshIndex>,
     mut collider_index: ResMut<ChunkColliderIndex>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut pending_gen: ResMut<PendingGen>,
-    mut pending_mesh: ResMut<PendingMesh>,
-    mut backlog: ResMut<MeshBacklog>,
-    mut pending_collider: ResMut<PendingColliderBuild>,
+    mut unload_state: ChunkUnloadState,
     game_config: Res<GlobalConfig>,
     ws: Res<WorldSave>,
-    mut pending_save: ResMut<PendingChunkSave>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
     mut ev_water_unload: MessageWriter<ChunkUnloadEvent>,
-    mut coll_backlog: ResMut<ColliderBacklog>,
 ) {
     let cam = if let Ok(t) = q_cam.single() {
         t
@@ -788,21 +815,26 @@ fn unload_far_chunks(
         .collect();
 
     for coord in &to_remove {
-        if let Some(chunk) = chunk_map.chunks.get(coord) {
-            let root = ws.root.clone();
-            let chunk_copy = chunk.clone();
-            let c = *coord;
-            let pool = AsyncComputeTaskPool::get();
-            let task = pool.spawn(async move {
-                let _ = save_chunk_at_root_sync(root, c, &chunk_copy);
-                c
-            });
-            pending_save.0.insert(c, task);
+        if !multiplayer_connection.connected {
+            if let Some(chunk) = chunk_map.chunks.get(coord) {
+                let root = ws.root.clone();
+                let chunk_copy = chunk.clone();
+                let c = *coord;
+                let pool = AsyncComputeTaskPool::get();
+                let task = pool.spawn(async move {
+                    let _ = save_chunk_at_root_sync(root, c, &chunk_copy);
+                    c
+                });
+                unload_state.pending_save.0.insert(c, task);
+            }
         }
 
-        pending_gen.0.remove(coord);
-        pending_mesh.0.retain(|(c, _), _| c != coord);
-        pending_collider.0.retain(|(c, _), _| c != coord);
+        unload_state.pending_gen.0.remove(coord);
+        unload_state.pending_mesh.0.retain(|(c, _), _| c != coord);
+        unload_state
+            .pending_collider
+            .0
+            .retain(|(c, _), _| c != coord);
 
         let old_keys: Vec<_> = mesh_index
             .map
@@ -826,16 +858,65 @@ fn unload_far_chunks(
             .collect();
         for k in col_keys {
             if let Some(ent) = collider_index.0.remove(&k) {
-                commands.entity(ent).despawn();
+                safe_despawn_entity(&mut commands, ent);
             }
         }
 
         ev_water_unload.write(ChunkUnloadEvent { coord: *coord });
 
         chunk_map.chunks.remove(coord);
-        backlog.0.retain(|(c, _)| c != coord);
-        coll_backlog.0.retain(|(c, _), _| *c != *coord);
+        unload_state.backlog.0.retain(|(c, _)| c != coord);
+        unload_state
+            .coll_backlog
+            .0
+            .retain(|(c, _), _| *c != *coord);
     }
+}
+
+fn cleanup_chunk_runtime_on_exit(
+    mut commands: Commands,
+    mut chunk_map: ResMut<ChunkMap>,
+    mut mesh_index: ResMut<ChunkMeshIndex>,
+    mut collider_index: ResMut<ChunkColliderIndex>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    ws: Option<Res<WorldSave>>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
+    mut cleanup: ChunkCleanupState,
+    q_mesh: Query<&Mesh3d>,
+) {
+    let should_save = ws.is_some() && !multiplayer_connection.connected;
+
+    if should_save && let Some(ws) = ws {
+        let root = ws.root.clone();
+        for (&coord, chunk) in &chunk_map.chunks {
+            let _ = save_chunk_at_root_sync(root.clone(), coord, chunk);
+        }
+    }
+
+    let old_keys: Vec<_> = mesh_index.map.keys().cloned().collect();
+    despawn_mesh_set(
+        old_keys,
+        &mut mesh_index,
+        &mut commands,
+        &q_mesh,
+        &mut meshes,
+    );
+
+    for (_, ent) in collider_index.0.drain() {
+        safe_despawn_entity(&mut commands, ent);
+    }
+
+    chunk_map.chunks.clear();
+    cleanup.pending_gen.0.clear();
+    cleanup.pending_mesh.0.clear();
+    cleanup.backlog.0.clear();
+    cleanup.pending_collider.0.clear();
+    cleanup.pending_save.0.clear();
+    cleanup.coll_backlog.0.clear();
+    cleanup.kick_queue.0.clear();
+    cleanup.kicked.0.clear();
+    cleanup.queued.0.clear();
+    commands.remove_resource::<LoadCenter>();
 }
 
 fn cleanup_kick_flags_on_unload(

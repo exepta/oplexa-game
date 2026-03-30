@@ -1,6 +1,7 @@
 use crate::core::config::WorldGenConfig;
 use crate::core::events::block::block_player_events::BlockBreakByPlayerEvent;
 use crate::core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent};
+use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::shader::water_shader::{WaterMatHandle, WaterMaterial};
 use crate::core::states::states::{AppState, InGameStates, LoadingStates};
 use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, id_any};
@@ -9,6 +10,7 @@ use crate::core::world::chunk_dimension::*;
 use crate::core::world::fluid::*;
 use crate::core::world::save::{RegionCache, WorldSave};
 use crate::generator::chunk::water_utils::*;
+use bevy::ecs::system::SystemParam;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
@@ -66,6 +68,21 @@ impl WaterFlowIds {
     }
 }
 
+#[derive(SystemParam)]
+struct WaterCleanupState<'w, 's> {
+    boot: ResMut<'w, WaterBoot>,
+    q: ResMut<'w, WaterGenQueue>,
+    todo: ResMut<'w, WaterMeshingTodo>,
+    pending_load: ResMut<'w, PendingWaterLoad>,
+    backlog: ResMut<'w, WaterMeshBacklog>,
+    pending_mesh: ResMut<'w, PendingWaterMesh>,
+    pending_save: ResMut<'w, PendingWaterSave>,
+    flow_q: ResMut<'w, WaterFlowQueue>,
+    pending_flow: ResMut<'w, PendingWaterFlow>,
+    flow_ids: ResMut<'w, WaterFlowIds>,
+    _marker: std::marker::PhantomData<&'s ()>,
+}
+
 pub struct WaterBuilder;
 
 impl Plugin for WaterBuilder {
@@ -113,7 +130,11 @@ impl Plugin for WaterBuilder {
                     ),
             );
 
-        app.add_systems(Last, save_all_water_on_exit.run_if(on_message::<AppExit>));
+        app.add_systems(
+            OnExit(AppState::InGame(InGameStates::Game)),
+            cleanup_water_runtime_on_exit,
+        )
+        .add_systems(Last, save_all_water_on_exit.run_if(on_message::<AppExit>));
     }
 }
 
@@ -608,6 +629,7 @@ fn water_unload_on_event(
     q_mesh: Query<&Mesh3d>,
     chunk_map: Res<ChunkMap>,
     ws: Res<WorldSave>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
     mut pending_save: ResMut<PendingWaterSave>,
     mut todo: Option<ResMut<WaterMeshingTodo>>,
     mut backlog: Option<ResMut<WaterMeshBacklog>>,
@@ -634,15 +656,17 @@ fn water_unload_on_event(
         }
 
         if let Some(mut wc) = water.0.remove(&coord) {
-            if let Some(ch) = chunk_map.chunks.get(&coord) {
-                water_mask_with_solids(&mut wc, ch);
+            if !multiplayer_connection.connected {
+                if let Some(ch) = chunk_map.chunks.get(&coord) {
+                    water_mask_with_solids(&mut wc, ch);
+                }
+                let root = ws.root.clone();
+                let task = AsyncComputeTaskPool::get().spawn(async move {
+                    save_water_chunk_at_root_sync(root, coord, &wc);
+                    coord
+                });
+                pending_save.0.insert(coord, task);
             }
-            let root = ws.root.clone();
-            let task = AsyncComputeTaskPool::get().spawn(async move {
-                save_water_chunk_at_root_sync(root, coord, &wc);
-                coord
-            });
-            pending_save.0.insert(coord, task);
         }
 
         let dead: Vec<_> = windex
@@ -659,6 +683,50 @@ fn water_unload_on_event(
             q.work.retain(|c| *c != coord);
         }
     }
+}
+
+fn cleanup_water_runtime_on_exit(
+    mut commands: Commands,
+    mut water: ResMut<FluidMap>,
+    mut windex: ResMut<WaterMeshIndex>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    q_mesh: Query<&Mesh3d>,
+    mut cleanup: WaterCleanupState,
+    ws: Option<Res<WorldSave>>,
+    chunk_map: Option<Res<ChunkMap>>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
+) {
+    let should_save = ws.is_some() && !multiplayer_connection.connected;
+
+    if should_save && let Some(ws) = ws {
+        let root = ws.root.clone();
+        for (&coord, fluid_chunk) in &water.0 {
+            let mut chunk_copy = fluid_chunk.clone();
+            if let Some(chunk_map) = chunk_map.as_ref()
+                && let Some(chunk) = chunk_map.chunks.get(&coord)
+            {
+                water_mask_with_solids(&mut chunk_copy, chunk);
+            }
+            save_water_chunk_at_root_sync(root.clone(), coord, &chunk_copy);
+        }
+    }
+
+    let dead: Vec<_> = windex.0.keys().copied().collect();
+    for key in dead {
+        despawn_water_mesh(key, &mut windex, &mut commands, &q_mesh, &mut meshes);
+    }
+
+    water.0.clear();
+    cleanup.boot.started = false;
+    cleanup.q.work.clear();
+    cleanup.todo.0.clear();
+    cleanup.pending_load.0.clear();
+    cleanup.backlog.0.clear();
+    cleanup.pending_mesh.0.clear();
+    cleanup.pending_save.0.clear();
+    cleanup.flow_q.0.clear();
+    cleanup.pending_flow.0.clear();
+    cleanup.flow_ids.next = 0;
 }
 
 fn collect_water_save_tasks(mut pending: ResMut<PendingWaterSave>) {

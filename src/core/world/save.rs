@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::*;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 
 /// Side length of a region in chunks (region is `REGION_SIZE x REGION_SIZE`).
 pub const REGION_SIZE: i32 = 64;
@@ -13,8 +14,16 @@ const SLOT_MAGIC: u32 = 0x5653_4C54;
 pub const TAG_BLK1: u32 = 0x314B_4C42;
 pub const TAG_WAT1: u32 = 0x3154_4157;
 
+static WORLD_SAVE_IO_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
 /// Number of addressable slots per region file (`REGION_SIZE^2`).
 const REGION_SLOTS: usize = (REGION_SIZE as usize) * (REGION_SIZE as usize);
+
+pub fn world_save_io_guard() -> MutexGuard<'static, ()> {
+    WORLD_SAVE_IO_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Header entry for one chunk payload within a region file.
 ///
@@ -380,14 +389,18 @@ pub fn container_find(buf: &[u8], tag: u32) -> Option<&[u8]> {
 }
 
 pub fn container_upsert(existing: Option<&[u8]>, tag: u32, payload: &[u8]) -> Vec<u8> {
-    if existing.is_none() {
+    fn single_record_container(tag: u32, payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(8 + 8 + payload.len());
         out.extend_from_slice(&SLOT_MAGIC.to_le_bytes());
         out.extend_from_slice(&1u32.to_le_bytes());
         out.extend_from_slice(&tag.to_le_bytes());
         out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         out.extend_from_slice(payload);
-        return out;
+        out
+    }
+
+    if existing.is_none() {
+        return single_record_container(tag, payload);
     }
     let src = existing.unwrap();
 
@@ -406,15 +419,25 @@ pub fn container_upsert(existing: Option<&[u8]>, tag: u32, payload: &[u8]) -> Ve
         return out;
     }
 
+    if src.len() < 8 {
+        return single_record_container(tag, payload);
+    }
+
     let count = u32::from_le_bytes(src[4..8].try_into().unwrap()) as usize;
     let mut p = 8usize;
     let mut recs: Vec<(u32, &[u8])> = Vec::with_capacity(count + 1);
     let mut had = false;
     for _ in 0..count {
+        if p + 8 > src.len() {
+            return single_record_container(tag, payload);
+        }
         let t = u32::from_le_bytes(src[p..p + 4].try_into().unwrap());
         p += 4;
         let ln = u32::from_le_bytes(src[p..p + 4].try_into().unwrap()) as usize;
         p += 4;
+        if p + ln > src.len() {
+            return single_record_container(tag, payload);
+        }
         let data = &src[p..p + ln];
         p += ln;
         if t == tag {

@@ -1,9 +1,11 @@
 use crate::core::entities::player::PlayerCamera;
 use crate::core::states::states::{AppState, InGameStates};
+use crate::core::ui::UiInteractionState;
 use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, fluid_at_world, get_block_world};
 use crate::core::world::chunk::ChunkMap;
 use crate::core::world::chunk::SEA_LEVEL;
 use crate::core::world::fluid::FluidMap;
+use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use bevy::prelude::*;
 
 pub struct UnderwaterFxPlugin;
@@ -35,6 +37,7 @@ struct UnderwaterOverlay;
 fn update_underwater_fx(
     mut commands: Commands,
     mut state: ResMut<UnderwaterFxState>,
+    ui_interaction: Res<UiInteractionState>,
     fluids: Option<Res<FluidMap>>,
     chunk_map: Option<Res<ChunkMap>>,
     blocks: Option<Res<BlockRegistry>>,
@@ -89,7 +92,7 @@ fn update_underwater_fx(
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.12, 0.35, 0.7, 0.35)),
-                    GlobalZIndex(9999),
+                    GlobalZIndex(-10),
                     UnderwaterOverlay,
                 ))
                 .id();
@@ -97,7 +100,7 @@ fn update_underwater_fx(
         }
     } else if !underwater && state.was_underwater {
         if let Some(e) = state.overlay.take() {
-            commands.entity(e).despawn();
+            safe_despawn_entity(&mut commands, e);
         }
     }
 
@@ -150,7 +153,11 @@ fn update_underwater_fx(
         let base = 0.45;
         let extra_look = 0.30 * t;
         let extra_depth = 0.25 * depth_factor;
-        let alpha = (base + extra_look + extra_depth).clamp(0.0, 0.85);
+        let alpha = if ui_interaction.blocks_game_input() {
+            0.0
+        } else {
+            (base + extra_look + extra_depth).clamp(0.0, 0.85)
+        };
 
         if let Some(mut bg) = overlay_q.iter_mut().next() {
             let mut c = bg.0.to_linear();
