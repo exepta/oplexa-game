@@ -126,7 +126,57 @@ fn world_unload_ui_should_tick(state: Res<WorldUnloadUiState>) -> bool {
     state.active
 }
 
+/// `sync_scrollbar_from_content` (bevy_extended_ui) sets Scrollbar to `Visibility::Visible`
+/// whenever content overflows, even when the containing menu root is Hidden.
+/// Because `Visibility::Visible` ignores parent visibility, the scrollbar stays on screen.
+/// This PostUpdate system overrides that: if the menu root is Hidden, force all direct
+/// Scrollbar children of the list Div to Hidden as well.
+fn suppress_stale_scrollbars(
+    sp_root: Query<&Visibility, With<SinglePlayerRoot>>,
+    mp_root: Query<&Visibility, With<MultiplayerRoot>>,
+    sp_list: Query<&Children, With<SinglePlayerWorldList>>,
+    mp_list: Query<&Children, With<MultiplayerServerList>>,
+    scrollbar_check: Query<(), With<Scrollbar>>,
+    mut vis_q: Query<
+        &mut Visibility,
+        (
+            With<Scrollbar>,
+            Without<SinglePlayerRoot>,
+            Without<MultiplayerRoot>,
+        ),
+    >,
+) {
+    if let (Ok(root_vis), Ok(children)) = (sp_root.single(), sp_list.single()) {
+        if *root_vis == Visibility::Hidden {
+            for child in children.iter() {
+                if scrollbar_check.get(child).is_ok() {
+                    if let Ok(mut vis) = vis_q.get_mut(child) {
+                        if *vis == Visibility::Visible {
+                            *vis = Visibility::Hidden;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let (Ok(root_vis), Ok(children)) = (mp_root.single(), mp_list.single()) {
+        if *root_vis == Visibility::Hidden {
+            for child in children.iter() {
+                if scrollbar_check.get(child).is_ok() {
+                    if let Ok(mut vis) = vis_q.get_mut(child) {
+                        if *vis == Visibility::Visible {
+                            *vis = Visibility::Hidden;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn hide_menu_roots_for_ingame(
+    mut commands: Commands,
     mut roots: ParamSet<(
         Query<&mut Visibility, With<MainMenuRoot>>,
         Query<&mut Visibility, With<SinglePlayerRoot>>,
@@ -136,6 +186,8 @@ fn hide_menu_roots_for_ingame(
     mut ui_interaction: ResMut<UiInteractionState>,
     mut single_player_state: ResMut<SinglePlayerUiState>,
     mut multiplayer_state: ResMut<MultiplayerUiState>,
+    sp_items: Query<Entity, With<SinglePlayerListItem>>,
+    mp_items: Query<Entity, With<MultiplayerListItem>>,
 ) {
     if let Ok(mut visible) = roots.p0().single_mut() {
         *visible = Visibility::Hidden;
@@ -148,6 +200,13 @@ fn hide_menu_roots_for_ingame(
     }
     if let Ok(mut visible) = roots.p3().single_mut() {
         *visible = Visibility::Hidden;
+    }
+
+    for entity in sp_items.iter() {
+        commands.entity(entity).despawn();
+    }
+    for entity in mp_items.iter() {
+        commands.entity(entity).despawn();
     }
 
     ui_interaction.menu_open = false;

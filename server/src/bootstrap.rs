@@ -1,38 +1,37 @@
-use crate::{state::ServerRuntimeConfig, types::Server};
+use crate::state::ServerRuntimeConfig;
 use api::core::network::{
     config::DedicatedServerSettings,
     discovery::{LanDiscoveryServer, LanServerInfo},
-    protocols::protocol,
 };
 use api::core::world::spawn::ensure_world_spawn_generated;
+use bevy::ecs::event::EntityTrigger;
+use bevy::prelude::*;
+use lightyear::connection::server::Start;
+use lightyear::prelude::server::*;
+use lightyear::prelude::*;
 use log::info;
-use naia_server::{ServerConfig, transport::udp};
 use std::fs;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 pub struct BootstrapResult {
-    pub server: Server,
     pub discovery: Option<LanDiscoveryServer>,
     pub runtime_config: ServerRuntimeConfig,
     pub world_root: PathBuf,
+    pub bind_addr: SocketAddr,
 }
 
-pub fn bootstrap_server() -> BootstrapResult {
+pub fn load_bootstrap() -> BootstrapResult {
     let settings_path = DedicatedServerSettings::settings_path("server.settings.toml");
     let server_settings = DedicatedServerSettings::load_or_create(&settings_path);
     let (world_root, world_seed, spawn_translation) = prepare_server_world(&server_settings);
-    let bind_addr = server_settings
+
+    let bind_addr: SocketAddr = server_settings
         .bind_addr()
         .parse()
         .expect("Invalid bind address in server settings");
+
     let public_url = server_settings.session_url();
-
-    let server_addrs = udp::ServerAddrs::new(bind_addr, bind_addr, &public_url);
-    let protocol = protocol();
-    let socket = udp::Socket::new(&server_addrs, protocol.socket.link_condition.clone());
-
-    let mut server = Server::new(ServerConfig::default(), protocol);
-    server.listen(socket);
 
     let discovery = Some(
         LanDiscoveryServer::bind(
@@ -48,12 +47,11 @@ pub fn bootstrap_server() -> BootstrapResult {
     );
 
     info!(
-        "Server listening on {} (session URL: {}, world: {:?}, seed: {})",
+        "Server will listen on {} (session URL: {}, world: {:?}, seed: {})",
         bind_addr, public_url, world_root, world_seed
     );
 
     BootstrapResult {
-        server,
         discovery,
         runtime_config: ServerRuntimeConfig {
             server_name: server_settings.server_name,
@@ -65,8 +63,32 @@ pub fn bootstrap_server() -> BootstrapResult {
             spawn_translation,
         },
         world_root,
+        bind_addr,
     }
 }
+
+/// Startup system: spawn the lightyear Server entity and trigger `Start`.
+pub fn spawn_server(mut commands: Commands, config: Res<ServerBootstrapConfig>) {
+    let server_entity = commands
+        .spawn((
+            Name::new("NetworkServer"),
+            NetcodeServer::new(NetcodeConfig::default()),
+            LocalAddr(config.bind_addr),
+            ServerUdpIo::default(),
+        ))
+        .id();
+
+    commands.trigger_with(Start { entity: server_entity }, EntityTrigger);
+    info!("Lightyear server started on {}", config.bind_addr);
+}
+
+/// Resource injected before App::run() so `spawn_server` can read the bind address.
+#[derive(Resource)]
+pub struct ServerBootstrapConfig {
+    pub bind_addr: SocketAddr,
+}
+
+// ── World preparation helpers ─────────────────────────────────────────────────
 
 fn prepare_server_world(settings: &DedicatedServerSettings) -> (PathBuf, i32, [f32; 3]) {
     let world_root =

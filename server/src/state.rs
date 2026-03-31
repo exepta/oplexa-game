@@ -1,5 +1,4 @@
 use crate::models::{HostedDrop, HostedPlayer};
-use api::core::network::world::NetworkWorld;
 use api::{
     core::{
         config::WorldGenConfig,
@@ -12,16 +11,18 @@ use api::{
     },
     generator::chunk::chunk_utils::{encode_chunk, load_or_gen_chunk_async},
 };
-use bevy_math::IVec2;
-use bevy_tasks::{AsyncComputeTaskPool, Task, TaskPool};
+use bevy::ecs::entity::Entity;
+use bevy::math::IVec2;
+use bevy::prelude::Resource;
+use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool};
 use futures_lite::future;
-use naia_server::UserKey;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const STREAM_CHUNK_CACHE_LIMIT: usize = 512;
 
+#[derive(Resource)]
 pub struct ServerRuntimeConfig {
     pub server_name: String,
     pub motd: String,
@@ -32,8 +33,8 @@ pub struct ServerRuntimeConfig {
     pub spawn_translation: [f32; 3],
 }
 
+#[derive(Resource)]
 pub struct ServerState {
-    pub world: NetworkWorld,
     pub world_root: PathBuf,
     pub block_registry: BlockRegistry,
     pub biome_registry: BiomeRegistry,
@@ -42,12 +43,13 @@ pub struct ServerState {
     pub streamed_chunk_cache: HashMap<IVec2, Vec<u8>>,
     pub streamed_chunk_cache_order: VecDeque<IVec2>,
     pub pending_stream_chunk_tasks: HashMap<IVec2, Task<(IVec2, ChunkData)>>,
-    pub pending_stream_chunk_waiters: HashMap<IVec2, HashSet<UserKey>>,
-    pub pending_chunk_sends: VecDeque<(UserKey, IVec2)>,
+    pub pending_stream_chunk_waiters: HashMap<IVec2, HashSet<Entity>>,
+    pub pending_chunk_sends: VecDeque<(Entity, IVec2)>,
     pub next_player_id: u64,
     pub next_drop_id: u64,
-    pub pending_auth: HashMap<UserKey, String>,
-    pub players: HashMap<UserKey, HostedPlayer>,
+    /// Connection entities waiting for their Auth message
+    pub pending_auth: HashMap<Entity, String>,
+    pub players: HashMap<Entity, HostedPlayer>,
     pub drops: HashMap<u64, HostedDrop>,
 }
 
@@ -59,7 +61,6 @@ impl ServerState {
         let block_overrides = load_block_overrides(world_root.join("blocks.txt").as_path());
         AsyncComputeTaskPool::get_or_init(TaskPool::default);
         Self {
-            world: NetworkWorld::default(),
             world_root,
             block_registry,
             biome_registry,
@@ -97,16 +98,16 @@ impl ServerState {
         }
     }
 
-    pub fn queue_chunk_for_stream(&mut self, user_key: UserKey, coord: IVec2) {
+    pub fn queue_chunk_for_stream(&mut self, entity: Entity, coord: IVec2) {
         if self.streamed_chunk_cache.contains_key(&coord) {
-            self.pending_chunk_sends.push_back((user_key, coord));
+            self.pending_chunk_sends.push_back((entity, coord));
             return;
         }
 
         self.pending_stream_chunk_waiters
             .entry(coord)
             .or_default()
-            .insert(user_key);
+            .insert(entity);
 
         if self.pending_stream_chunk_tasks.contains_key(&coord) {
             return;
@@ -153,8 +154,8 @@ impl ServerState {
             self.store_stream_chunk(ready_coord, encoded);
 
             if let Some(waiters) = self.pending_stream_chunk_waiters.remove(&ready_coord) {
-                for user_key in waiters {
-                    self.pending_chunk_sends.push_back((user_key, ready_coord));
+                for entity in waiters {
+                    self.pending_chunk_sends.push_back((entity, ready_coord));
                 }
             }
         }

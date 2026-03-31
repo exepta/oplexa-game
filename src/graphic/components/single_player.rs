@@ -6,6 +6,8 @@ fn enter_single_player_screen(
     world_gen_config: Res<WorldGenConfig>,
     item_entities: Query<Entity, With<SinglePlayerListItem>>,
     mut create_inputs: Query<(&CssID, &mut InputField, &mut InputValue)>,
+    children_q: Query<&Children>,
+    names_q: Query<&Name>,
     mut roots: ParamSet<(
         Query<&mut Visibility, With<SinglePlayerRoot>>,
         Query<&mut Visibility, With<CreateWorldRoot>>,
@@ -27,6 +29,8 @@ fn enter_single_player_screen(
         ui_entities.single_player_world_list,
         &ui_state.worlds,
         &item_entities,
+        &children_q,
+        &names_q,
     );
     clear_create_world_inputs(&mut create_inputs);
 
@@ -177,6 +181,8 @@ fn handle_single_player_actions(
     mut widgets: Query<(&CssID, &mut UIWidgetState), With<Button>>,
     item_entities: Query<Entity, With<SinglePlayerListItem>>,
     mut create_inputs: Query<(&CssID, &mut InputField, &mut InputValue)>,
+    children_q: Query<&Children>,
+    names_q: Query<&Name>,
     mut next_state: ResMut<NextState<AppState>>,
     mut region_cache: ResMut<RegionCache>,
     mut chunk_map: ResMut<ChunkMap>,
@@ -291,6 +297,8 @@ fn handle_single_player_actions(
                     ui_entities.single_player_world_list,
                     &ui_state.worlds,
                     &item_entities,
+                    &children_q,
+                    &names_q,
                 );
             }
             SinglePlayerAction::CancelDelete => {
@@ -378,16 +386,40 @@ fn refresh_single_player_content(ui_state: &mut SinglePlayerUiState, default_see
         .filter(|&index| index < ui_state.worlds.len());
 }
 
+/// Finds the `Div-ScrollContent-*` child of a Div wrapper entity, if it exists.
+/// Cards must be inserted there directly so the scroll container can measure them.
+fn find_scroll_content_child(
+    parent: Entity,
+    children_q: &Query<&Children>,
+    names_q: &Query<&Name>,
+) -> Option<Entity> {
+    if let Ok(children) = children_q.get(parent) {
+        for child in children.iter() {
+            if let Ok(name) = names_q.get(child) {
+                if name.as_str().starts_with("Div-ScrollContent-") {
+                    return Some(child);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn rebuild_single_player_cards(
     commands: &mut Commands,
     list_entity: Entity,
     worlds: &[SavedWorldEntry],
     existing_items: &Query<Entity, With<SinglePlayerListItem>>,
+    children_q: &Query<&Children>,
+    names_q: &Query<&Name>,
 ) {
+    let target = find_scroll_content_child(list_entity, children_q, names_q)
+        .unwrap_or(list_entity);
+
     for entity in existing_items.iter() {
         commands.entity(entity).despawn();
     }
-    commands.entity(list_entity).with_children(|list| {
+    commands.entity(target).with_children(|list| {
         if worlds.is_empty() {
             list.spawn((
                 Paragraph {

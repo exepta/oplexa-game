@@ -11,30 +11,85 @@ pub use chunks::*;
 pub use drops::*;
 pub use players::*;
 
-use naia_shared::{LinkConditionerConfig, Protocol};
-use std::time::Duration;
+use bevy::prelude::*;
+use lightyear::prelude::*;
 
-pub fn protocol() -> Protocol {
-    Protocol::builder()
-        .tick_interval(Duration::from_millis(50))
-        .link_condition(LinkConditionerConfig::good_condition())
-        .add_default_channels()
-        .add_message::<Auth>()
-        .add_message::<ServerWelcome>()
-        .add_message::<PlayerJoined>()
-        .add_message::<PlayerLeft>()
-        .add_message::<PlayerMove>()
-        .add_message::<ClientKeepAlive>()
-        .add_message::<PlayerSnapshot>()
-        .add_message::<ClientChunkInterest>()
-        .add_message::<ServerChunkData>()
-        .add_message::<ClientBlockBreak>()
-        .add_message::<ClientBlockPlace>()
-        .add_message::<ServerBlockBreak>()
-        .add_message::<ServerBlockPlace>()
-        .add_message::<ServerDropSpawn>()
-        .add_message::<ClientDropItem>()
-        .add_message::<ClientDropPickup>()
-        .add_message::<ServerDropPicked>()
-        .build()
+// ── Channel marker types ──────────────────────────────────────────────────────
+
+/// Reliable and ordered: block interactions, drops, chunk interest
+pub struct OrderedReliable;
+/// Reliable but unordered: player join/leave, welcome, chunk data
+pub struct UnorderedReliable;
+/// Unreliable and unordered: position snapshots, keep-alives
+pub struct UnorderedUnreliable;
+
+// ── Protocol registration plugin ─────────────────────────────────────────────
+
+pub struct ProtocolPlugin;
+
+impl Plugin for ProtocolPlugin {
+    fn build(&self, app: &mut App) {
+        // Channels
+        app.add_channel::<OrderedReliable>(ChannelSettings {
+            mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
+            ..default()
+        })
+        .add_direction(NetworkDirection::Bidirectional);
+
+        app.add_channel::<UnorderedReliable>(ChannelSettings {
+            mode: ChannelMode::UnorderedReliable(ReliableSettings::default()),
+            ..default()
+        })
+        .add_direction(NetworkDirection::Bidirectional);
+
+        app.add_channel::<UnorderedUnreliable>(ChannelSettings {
+            mode: ChannelMode::UnorderedUnreliable,
+            ..default()
+        })
+        .add_direction(NetworkDirection::Bidirectional);
+
+        // Messages – auth
+        app.register_message::<Auth>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<ServerWelcome>()
+            .add_direction(NetworkDirection::ServerToClient);
+
+        // Messages – players
+        app.register_message::<PlayerJoined>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<PlayerLeft>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<PlayerMove>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<ClientKeepAlive>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<PlayerSnapshot>()
+            .add_direction(NetworkDirection::ServerToClient);
+
+        // Messages – chunks
+        app.register_message::<ClientChunkInterest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<ServerChunkData>()
+            .add_direction(NetworkDirection::ServerToClient);
+
+        // Messages – blocks
+        app.register_message::<ClientBlockBreak>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<ClientBlockPlace>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<ServerBlockBreak>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<ServerBlockPlace>()
+            .add_direction(NetworkDirection::ServerToClient);
+
+        // Messages – drops
+        app.register_message::<ServerDropSpawn>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<ClientDropItem>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<ClientDropPickup>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<ServerDropPicked>()
+            .add_direction(NetworkDirection::ServerToClient);
+    }
 }

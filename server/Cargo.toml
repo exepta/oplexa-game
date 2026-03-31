@@ -3,11 +3,14 @@ name = "oplexa-game-server"
 version = "0.1.0"
 edition = "2024"
 
+[dependencies.bevy]
+version = "0.18.1"
+default-features = false
+features = ["multi_threaded", "bevy_log"]
+
 [dependencies]
-bevy_math = "0.18.1"
-bevy_tasks = "0.18.1"
+lightyear = { version = "0.26.4", features = ["udp", "netcode"] }
 futures-lite = "2.6.1"
 log = "0.4.28"
 api = { path = "../api" }
-naia-server = { version = "0.24.0", features = ["transport_udp"] }
 simple_logger = "5.0.0"

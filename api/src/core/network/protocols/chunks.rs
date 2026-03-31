@@ -1,6 +1,6 @@
-use naia_shared::Message;
+use serde::{Deserialize, Serialize};
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientChunkInterest {
     pub center: [i32; 2],
     pub radius: i32,
@@ -12,7 +12,7 @@ impl ClientChunkInterest {
     }
 }
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerChunkData {
     pub coord: [i32; 2],
     pub blocks: Vec<u8>,

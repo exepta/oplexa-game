@@ -1,6 +1,6 @@
-use naia_shared::Message;
+use serde::{Deserialize, Serialize};
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerJoined {
     pub player_id: u64,
     pub username: String,
@@ -15,7 +15,7 @@ impl PlayerJoined {
     }
 }
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerLeft {
     pub player_id: u64,
 }
@@ -26,7 +26,7 @@ impl PlayerLeft {
     }
 }
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerMove {
     pub translation: [f32; 3],
     pub yaw: f32,
@@ -43,7 +43,7 @@ impl PlayerMove {
     }
 }
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientKeepAlive {
     pub stamp_ms: u32,
 }
@@ -54,7 +54,7 @@ impl ClientKeepAlive {
     }
 }
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerSnapshot {
     pub player_id: u64,
     pub translation: [f32; 3],

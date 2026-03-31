@@ -1,6 +1,6 @@
-use naia_shared::Message;
+use serde::{Deserialize, Serialize};
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Auth {
     pub username: String,
 }
@@ -13,7 +13,7 @@ impl Auth {
     }
 }
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerWelcome {
     pub player_id: u64,
     pub server_name: String,

@@ -441,6 +441,7 @@ impl Plugin for HardcodedUiPlugin {
                 ),
             )
             .add_systems(PostUpdate, style_button_icons)
+            .add_systems(PostUpdate, suppress_stale_scrollbars)
             .add_systems(Last, style_scroll_div_contents)
             .add_systems(
                 OnEnter(AppState::Screen(BeforeUiState::Menu)),
@@ -513,6 +514,10 @@ impl Plugin for HardcodedUiPlugin {
             )
             .add_systems(
                 OnEnter(AppState::InGame(InGameStates::Game)),
+                hide_menu_roots_for_ingame,
+            )
+            .add_systems(
+                OnEnter(AppState::Loading(LoadingStates::BaseGen)),
                 hide_menu_roots_for_ingame,
             )
             .add_systems(Update, sync_world_gen_progress.run_if(is_loading_state))

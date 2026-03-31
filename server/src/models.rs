@@ -1,4 +1,4 @@
-use bevy_math::IVec2;
+use bevy::math::IVec2;
 use std::collections::HashSet;
 use std::time::Instant;
 

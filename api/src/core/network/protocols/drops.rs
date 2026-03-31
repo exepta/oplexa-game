@@ -1,6 +1,6 @@
-use naia_shared::Message;
+use serde::{Deserialize, Serialize};
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerDropSpawn {
     pub drop_id: u64,
     pub location: [i32; 3],
@@ -30,7 +30,7 @@ impl ServerDropSpawn {
     }
 }
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientDropPickup {
     pub drop_id: u64,
 }
@@ -41,7 +41,7 @@ impl ClientDropPickup {
     }
 }
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientDropItem {
     pub location: [i32; 3],
     pub block_id: u16,
@@ -68,7 +68,7 @@ impl ClientDropItem {
     }
 }
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerDropPicked {
     pub drop_id: u64,
     pub player_id: u64,

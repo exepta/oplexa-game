@@ -1,6 +1,6 @@
-use naia_shared::Message;
+use serde::{Deserialize, Serialize};
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientBlockBreak {
     pub location: [i32; 3],
     pub drop_block_id: u16,
@@ -17,7 +17,7 @@ impl ClientBlockBreak {
     }
 }
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientBlockPlace {
     pub location: [i32; 3],
     pub block_id: u16,
@@ -29,7 +29,7 @@ impl ClientBlockPlace {
     }
 }
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerBlockBreak {
     pub player_id: u64,
     pub location: [i32; 3],
@@ -44,7 +44,7 @@ impl ServerBlockBreak {
     }
 }
 
-#[derive(Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerBlockPlace {
     pub player_id: u64,
     pub location: [i32; 3],

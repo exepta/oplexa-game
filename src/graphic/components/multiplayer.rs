@@ -5,6 +5,8 @@ fn enter_multiplayer_screen(
     mut probe_runtime: NonSendMut<ServerProbeRuntime>,
     item_entities: Query<Entity, With<MultiplayerListItem>>,
     mut form_inputs: Query<(&CssID, &mut InputField, &mut InputValue)>,
+    children_q: Query<&Children>,
+    names_q: Query<&Name>,
     mut roots: ParamSet<(
         Query<&mut Visibility, With<MultiplayerRoot>>,
         Query<&mut Visibility, With<MainMenuRoot>>,
@@ -27,6 +29,8 @@ fn enter_multiplayer_screen(
         ui_entities.multiplayer_server_list,
         &mut ui_state,
         &item_entities,
+        &children_q,
+        &names_q,
     );
     clear_server_form_inputs(&mut form_inputs);
     probe_runtime.configure();
@@ -83,6 +87,8 @@ fn handle_multiplayer_actions(
     mut widgets: Query<(&CssID, &mut UIWidgetState), With<Button>>,
     item_entities: Query<Entity, With<MultiplayerListItem>>,
     mut form_inputs: Query<(&CssID, &mut InputField, &mut InputValue)>,
+    children_q: Query<&Children>,
+    names_q: Query<&Name>,
     mut connect_writer: MessageWriter<ConnectToServerRequest>,
     mut probe_runtime: NonSendMut<ServerProbeRuntime>,
 ) {
@@ -188,6 +194,8 @@ fn handle_multiplayer_actions(
                         ui_entities.multiplayer_server_list,
                         &mut ui_state,
                         &item_entities,
+                        &children_q,
+                        &names_q,
                     );
                 }
             }
@@ -248,6 +256,8 @@ fn handle_multiplayer_actions(
                         ui_entities.multiplayer_server_list,
                         &mut ui_state,
                         &item_entities,
+                        &children_q,
+                        &names_q,
                     );
                 }
             }
@@ -265,6 +275,8 @@ fn poll_multiplayer_servers(
     mut ui_state: ResMut<MultiplayerUiState>,
     mut probe_runtime: NonSendMut<ServerProbeRuntime>,
     item_entities: Query<Entity, With<MultiplayerListItem>>,
+    children_q: Query<&Children>,
+    names_q: Query<&Name>,
 ) {
     if probe_runtime.client.is_none() {
         return;
@@ -328,6 +340,8 @@ fn poll_multiplayer_servers(
             ui_entities.multiplayer_server_list,
             &mut ui_state,
             &item_entities,
+            &children_q,
+            &names_q,
         );
     } else {
         let _ = rebuild_display_servers(&mut ui_state, now);
@@ -339,11 +353,16 @@ fn rebuild_multiplayer_cards(
     list_entity: Entity,
     ui_state: &mut MultiplayerUiState,
     existing_items: &Query<Entity, With<MultiplayerListItem>>,
+    children_q: &Query<&Children>,
+    names_q: &Query<&Name>,
 ) {
+    let target = find_scroll_content_child(list_entity, children_q, names_q)
+        .unwrap_or(list_entity);
+
     for entity in existing_items.iter() {
         commands.entity(entity).despawn();
     }
-    commands.entity(list_entity).with_children(|list| {
+    commands.entity(target).with_children(|list| {
         if ui_state.display_servers.is_empty() {
             list.spawn((
                 Paragraph {
@@ -394,9 +413,21 @@ fn sync_multiplayer_dialogs(
         Query<&mut Visibility, With<MultiplayerFormEditButton>>,
         Query<&mut Visibility, With<MultiplayerDeleteDialog>>,
         Query<&mut Visibility, With<MultiplayerConnectDialog>>,
+        Query<&mut Visibility, With<MultiplayerRoot>>,
     )>,
     mut form_title: Query<(&CssID, &mut Paragraph)>,
 ) {
+    let connecting = ui_state.joining_key.is_some()
+        || connection_state.phase == MultiplayerConnectionPhase::Connecting;
+
+    if let Ok(mut visible) = visibilities.p5().single_mut() {
+        *visible = if connecting {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+    }
+
     if let Ok(mut visible) = visibilities.p0().single_mut() {
         *visible = if ui_state.form_dialog.is_some() {
             Visibility::Inherited
@@ -449,9 +480,7 @@ fn sync_multiplayer_dialogs(
     }
 
     if let Ok(mut visible) = visibilities.p4().single_mut() {
-        *visible = if ui_state.joining_key.is_some()
-            || connection_state.phase == MultiplayerConnectionPhase::Connecting
-        {
+        *visible = if connecting {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -543,13 +572,20 @@ fn sync_multiplayer_card_style(
 }
 
 fn exit_multiplayer_screen(
+    mut commands: Commands,
     mut ui_interaction: ResMut<UiInteractionState>,
     mut ui_state: ResMut<MultiplayerUiState>,
     mut root: Query<&mut Visibility, With<MultiplayerRoot>>,
+    item_entities: Query<Entity, With<MultiplayerListItem>>,
 ) {
     if let Ok(mut visible) = root.single_mut() {
         *visible = Visibility::Hidden;
     }
+
+    for entity in item_entities.iter() {
+        commands.entity(entity).despawn();
+    }
+
     ui_interaction.menu_open = false;
     ui_state.form_dialog = None;
     ui_state.pending_delete_key = None;

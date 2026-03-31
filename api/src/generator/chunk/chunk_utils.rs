@@ -8,7 +8,6 @@ use crate::core::world::save::*;
 use crate::generator::chunk::chunk_gen::generate_chunk_async_biome;
 use crate::generator::chunk::chunk_struct::*;
 use bevy::prelude::*;
-use bincode::{config, decode_from_slice, encode_to_vec};
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -411,17 +410,14 @@ pub fn enqueue_mesh(backlog: &mut MeshBacklog, pending: &PendingMesh, key: (IVec
 }
 
 pub fn encode_chunk(ch: &ChunkData) -> Vec<u8> {
-    let cfg = config::standard();
-    let ser = encode_to_vec(&ch.blocks, cfg).expect("encode blocks");
+    let ser = wincode::serialize(&ch.blocks).expect("encode blocks");
     compress_prepend_size(&ser)
 }
 
 pub fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
     let de = decompress_size_prepended(buf)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    config::standard();
-
-    let (blocks, _len): (Vec<BlockId>, usize) = decode_from_slice(&de, config::standard())
+    let blocks: Vec<BlockId> = wincode::deserialize(&de)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
 
     if blocks.len() != CX * CY * CZ {
