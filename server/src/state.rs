@@ -19,6 +19,7 @@ use futures_lite::future;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 const STREAM_CHUNK_CACHE_LIMIT: usize = 512;
 
@@ -31,6 +32,12 @@ pub struct ServerRuntimeConfig {
     pub world_name: String,
     pub world_seed: i32,
     pub spawn_translation: [f32; 3],
+    pub chunk_stream_sends_per_tick_base: usize,
+    pub chunk_stream_sends_per_tick_per_client: usize,
+    pub chunk_stream_sends_per_tick_max: usize,
+    pub chunk_stream_inflight_per_client: usize,
+    pub chunk_flight_timeout_ms: u64,
+    pub max_stream_radius: i32,
 }
 
 #[derive(Resource)]
@@ -45,6 +52,8 @@ pub struct ServerState {
     pub pending_stream_chunk_tasks: HashMap<IVec2, Task<(IVec2, ChunkData)>>,
     pub pending_stream_chunk_waiters: HashMap<IVec2, HashSet<Entity>>,
     pub pending_chunk_sends: VecDeque<(Entity, IVec2)>,
+    /// Per-client timestamps of recently sent chunks; used to limit in-flight reliable data.
+    pub chunk_send_window: HashMap<Entity, VecDeque<Instant>>,
     pub next_player_id: u64,
     pub next_drop_id: u64,
     /// Connection entities waiting for their Auth message
@@ -71,6 +80,7 @@ impl ServerState {
             pending_stream_chunk_tasks: HashMap::new(),
             pending_stream_chunk_waiters: HashMap::new(),
             pending_chunk_sends: VecDeque::new(),
+            chunk_send_window: HashMap::new(),
             next_player_id: 1,
             next_drop_id: 1,
             pending_auth: HashMap::new(),

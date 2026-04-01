@@ -21,6 +21,7 @@ pub struct ServerWelcome {
     pub world_name: String,
     pub world_seed: i32,
     pub spawn_translation: [f32; 3],
+    pub block_palette: Vec<String>,
 }
 
 impl ServerWelcome {
@@ -31,6 +32,7 @@ impl ServerWelcome {
         world_name: impl Into<String>,
         world_seed: i32,
         spawn_translation: [f32; 3],
+        block_palette: Vec<String>,
     ) -> Self {
         Self {
             player_id,
@@ -39,6 +41,7 @@ impl ServerWelcome {
             world_name: world_name.into(),
             world_seed,
             spawn_translation,
+            block_palette,
         }
     }
 }

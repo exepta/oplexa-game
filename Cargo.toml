@@ -120,4 +120,4 @@ version = "0.5.0"
 
 [dependencies]
 api = { path = "api" }
-lightyear = { version = "0.26.4", features = ["udp", "netcode"] }
+lightyear = { version = "0.26.4", features = ["websocket", "netcode"] }

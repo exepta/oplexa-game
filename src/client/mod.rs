@@ -12,7 +12,7 @@ use crate::core::events::ui_events::{
     StopLanHostRequest,
 };
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
-use crate::core::states::states::{AppState, LoadingStates};
+use crate::core::states::states::{AppState, BeforeUiState, LoadingStates};
 use crate::core::world::block::{
     BlockRegistry, VOXEL_SIZE, build_block_cube_mesh, get_block_world,
 };
@@ -34,6 +34,7 @@ use api::core::network::{
         ServerDropPicked, ServerDropSpawn, ServerWelcome, UnorderedReliable, UnorderedUnreliable,
     },
 };
+use bevy::ecs::event::EntityTrigger;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
 use bevy::log::{BoxedLayer, Level, LogPlugin};
 use bevy::math::primitives::Capsule3d;
@@ -49,10 +50,10 @@ use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use chrono::Utc;
 use dotenvy::dotenv;
 use lightyear::prelude::client::{
-    ClientPlugins, Connect, Connected, Disconnect, Disconnected, NetcodeClient, NetcodeConfig,
+    ClientConfig, ClientPlugins, Connect, Connected, Disconnect, Disconnected, NetcodeClient,
+    NetcodeConfig, WebSocketClientIo, WebSocketScheme,
 };
-use bevy::ecs::event::EntityTrigger;
-use lightyear::prelude::{Authentication, LocalAddr, MessageReceiver, MessageSender, UdpIo};
+use lightyear::prelude::{Authentication, MessageReceiver, MessageSender, PeerAddr};
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs::{File, OpenOptions};
@@ -162,6 +163,76 @@ struct RemoteChunkStreamState {
     last_requested_radius: Option<i32>,
 }
 
+#[derive(Resource, Default)]
+struct BlockIdRemap {
+    server_to_local: Vec<u16>,
+    local_to_server: Vec<u16>,
+}
+
+impl BlockIdRemap {
+    fn reset(&mut self) {
+        self.server_to_local.clear();
+        self.local_to_server.clear();
+    }
+
+    fn configure_from_server_palette(&mut self, palette: &[String], registry: &BlockRegistry) {
+        self.server_to_local = vec![0; palette.len()];
+        self.local_to_server = vec![0; registry.defs.len()];
+        if !self.local_to_server.is_empty() {
+            self.local_to_server[0] = 0;
+        }
+
+        let mut unknown_names = 0usize;
+
+        for (server_id, block_name) in palette.iter().enumerate() {
+            if server_id > u16::MAX as usize {
+                break;
+            }
+
+            let server_id_u16 = server_id as u16;
+            let local_id = registry.id_opt(block_name).unwrap_or(0);
+            self.server_to_local[server_id] = local_id;
+
+            if let Some(slot) = self.local_to_server.get_mut(local_id as usize)
+                && (*slot == 0 || local_id == 0)
+            {
+                *slot = server_id_u16;
+            }
+
+            if local_id == 0 && !(server_id == 0 && block_name == "air") {
+                unknown_names += 1;
+            }
+        }
+
+        if unknown_names > 0 {
+            warn!(
+                "Server announced {} unknown block name(s); unknown IDs will map to air.",
+                unknown_names
+            );
+        }
+    }
+
+    fn to_local(&self, server_id: u16) -> u16 {
+        if self.server_to_local.is_empty() {
+            return server_id;
+        }
+        self.server_to_local
+            .get(server_id as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn to_server(&self, local_id: u16) -> u16 {
+        if self.local_to_server.is_empty() {
+            return local_id;
+        }
+        self.local_to_server
+            .get(local_id as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
 const MULTIPLAYER_DROP_ITEM_SIZE: f32 = 0.32;
 const MULTIPLAYER_DROP_PICKUP_RADIUS: f32 = 1.35;
 const MULTIPLAYER_DROP_ATTRACT_RADIUS: f32 = 3.5;
@@ -185,6 +256,19 @@ fn parse_session_url(url: &str) -> Option<SocketAddr> {
         .trim_start_matches("https://")
         .trim_start_matches("http://");
     stripped.parse().ok()
+}
+
+fn remap_server_block_id(
+    block_remap: &BlockIdRemap,
+    registry: &BlockRegistry,
+    server_id: u16,
+) -> u16 {
+    let local_id = block_remap.to_local(server_id);
+    if (local_id as usize) < registry.defs.len() {
+        local_id
+    } else {
+        0
+    }
 }
 
 #[derive(Resource)]
@@ -254,12 +338,14 @@ fn do_connect(
         }
     };
 
-    let local_bind: SocketAddr = "0.0.0.0:0".parse().unwrap();
     let entity = commands
         .spawn((
             netcode_client,
-            LocalAddr(local_bind),
-            UdpIo::default(),
+            PeerAddr(server_addr),
+            WebSocketClientIo::from_addr(
+                ClientConfig::builder().with_no_encryption(),
+                WebSocketScheme::Plain,
+            ),
         ))
         .id();
 
@@ -805,6 +891,7 @@ impl Plugin for MultiplayerClientPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MultiplayerDropIndex>()
             .init_resource::<RemoteChunkStreamState>()
+            .init_resource::<BlockIdRemap>()
             .add_systems(Startup, setup_remote_player_visuals)
             .add_observer(on_server_connected)
             .add_observer(on_server_disconnected)
@@ -866,7 +953,10 @@ fn on_server_connected(
 
     if let Ok(mut sender) = q_auth.get_mut(trigger.entity) {
         sender.send::<UnorderedReliable>(Auth::new(runtime.player_name.clone()));
-        info!("Connected to server, sent Auth as '{}'", runtime.player_name);
+        info!(
+            "Connected to server, sent Auth as '{}'",
+            runtime.player_name
+        );
     }
 }
 
@@ -874,10 +964,14 @@ fn on_server_connected(
 fn on_server_disconnected(
     trigger: On<Add, Disconnected>,
     q_disconnected: Query<&Disconnected>,
+    app_state: Res<State<AppState>>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
+    mut block_remap: ResMut<BlockIdRemap>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
     mut drops: ResMut<MultiplayerDropIndex>,
+    mut next_state: ResMut<NextState<AppState>>,
+    mut chunk_map: ResMut<ChunkMap>,
     mut commands: Commands,
 ) {
     if Some(trigger.entity) != runtime.connection_entity {
@@ -899,12 +993,24 @@ fn on_server_disconnected(
     runtime.remote_player_smoothing.clear();
     clear_multiplayer_drops(&mut commands, &mut drops);
     runtime.local_player_id = None;
+    block_remap.reset();
     chunk_stream.last_requested_center = None;
     chunk_stream.last_requested_radius = None;
 
+    // If we disconnect while the world is loading or in-game, reset to the menu.
+    // Without this, check_base_gen_world_ready would see uses_local_save_data()=true
+    // (session URL cleared below) and send the client to WaterGen/local generation,
+    // which crashes because no local world resources are set up.
+    match app_state.get() {
+        AppState::Loading(_) | AppState::InGame(_) | AppState::PostLoad => {
+            chunk_map.chunks.clear();
+            next_state.set(AppState::Screen(BeforeUiState::MultiPlayer));
+        }
+        _ => {}
+    }
+
     multiplayer_connection.clear_session();
-    multiplayer_connection.last_error =
-        Some("Disconnected from multiplayer server.".to_string());
+    multiplayer_connection.last_error = Some("Disconnected from multiplayer server.".to_string());
 
     commands.entity(trigger.entity).despawn();
     runtime.connection_entity = None;
@@ -956,7 +1062,14 @@ fn connect_to_server_requested(
     mut connect_requests: MessageReader<ConnectToServerRequest>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
-    q_active: Query<(), Or<(With<Connected>, With<lightyear::prelude::client::Connecting>)>>,
+    mut block_remap: ResMut<BlockIdRemap>,
+    q_active: Query<
+        (),
+        Or<(
+            With<Connected>,
+            With<lightyear::prelude::client::Connecting>,
+        )>,
+    >,
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut commands: Commands,
 ) {
@@ -986,6 +1099,7 @@ fn connect_to_server_requested(
         runtime.connection_entity = None;
     }
 
+    block_remap.reset();
     do_connect(&mut runtime, session_url.to_string(), &mut commands);
     runtime.auto_connect_lan = false;
     multiplayer_connection.connected = false;
@@ -1008,6 +1122,7 @@ fn disconnect_from_server_requested(
     mut disconnect_requests: MessageReader<DisconnectFromServerRequest>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut block_remap: ResMut<BlockIdRemap>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut commands: Commands,
 ) {
@@ -1016,6 +1131,7 @@ fn disconnect_from_server_requested(
     }
 
     do_disconnect(&mut runtime, &mut commands);
+    block_remap.reset();
     multiplayer_connection.clear_session();
     chunk_stream.last_requested_center = None;
     chunk_stream.last_requested_radius = None;
@@ -1023,7 +1139,13 @@ fn disconnect_from_server_requested(
 
 fn open_to_lan_requested(
     mut requests: MessageReader<OpenToLanRequest>,
-    q_active: Query<(), Or<(With<Connected>, With<lightyear::prelude::client::Connecting>)>>,
+    q_active: Query<
+        (),
+        Or<(
+            With<Connected>,
+            With<lightyear::prelude::client::Connecting>,
+        )>,
+    >,
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut local_host: NonSendMut<LocalLanHost>,
 ) {
@@ -1124,6 +1246,7 @@ fn receive_player_messages(
     mut commands: Commands,
     time: Res<Time>,
     visuals: Res<RemotePlayerVisuals>,
+    registry: Option<Res<BlockRegistry>>,
     mut region_cache: ResMut<RegionCache>,
     mut chunk_map: ResMut<ChunkMap>,
     mut fluids: ResMut<FluidMap>,
@@ -1131,6 +1254,7 @@ fn receive_player_messages(
     mut next_state: ResMut<NextState<AppState>>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut block_remap: ResMut<BlockIdRemap>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut q: Query<(
         &mut MessageReceiver<ServerWelcome>,
@@ -1156,6 +1280,13 @@ fn receive_player_messages(
         if let Some(existing) = runtime.remote_players.remove(&message.player_id) {
             safe_despawn_entity(&mut commands, existing);
         }
+
+        if let Some(registry) = registry.as_ref() {
+            block_remap.configure_from_server_palette(&message.block_palette, registry);
+        } else {
+            block_remap.reset();
+        }
+
         info!(
             "Server '{}' accepted player id {}",
             message.server_name, message.player_id
@@ -1240,6 +1371,7 @@ fn receive_player_messages(
 #[allow(clippy::too_many_arguments)]
 fn receive_world_messages(
     registry: Option<Res<BlockRegistry>>,
+    block_remap: Res<BlockIdRemap>,
     mut chunk_map: ResMut<ChunkMap>,
     mut fluids: ResMut<FluidMap>,
     mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
@@ -1254,13 +1386,12 @@ fn receive_world_messages(
         return;
     };
 
-    let Ok((mut recv_chunk, mut recv_block_break, mut recv_block_place)) = q.get_mut(entity)
-    else {
+    let Ok((mut recv_chunk, mut recv_block_break, mut recv_block_place)) = q.get_mut(entity) else {
         return;
     };
 
     for message in recv_chunk.receive() {
-        let Some(_registry) = registry.as_ref() else {
+        let Some(registry) = registry.as_ref() else {
             continue;
         };
 
@@ -1271,6 +1402,15 @@ fn receive_world_messages(
             continue;
         };
 
+        for block_id in &mut chunk.blocks {
+            *block_id = remap_server_block_id(&block_remap, registry, *block_id);
+        }
+
+        debug!(
+            "[MP] Received ServerChunkData for chunk {:?} (total: {})",
+            coord,
+            chunk_map.chunks.len() + 1
+        );
         chunk.mark_all_dirty();
         chunk_map.chunks.insert(coord, chunk);
 
@@ -1306,9 +1446,12 @@ fn receive_world_messages(
         if Some(message.player_id) == runtime.local_player_id {
             continue;
         }
+        let Some(registry) = registry.as_ref() else {
+            continue;
+        };
         apply_remote_block_place(
             message.location,
-            message.block_id,
+            remap_server_block_id(&block_remap, registry, message.block_id),
             &mut chunk_map,
             &mut fluids,
             &mut ev_dirty,
@@ -1322,6 +1465,7 @@ fn receive_drop_messages(
     mut commands: Commands,
     time: Res<Time>,
     registry: Option<Res<BlockRegistry>>,
+    block_remap: Res<BlockIdRemap>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut inventory: ResMut<PlayerInventory>,
     mut drops: ResMut<MultiplayerDropIndex>,
@@ -1341,6 +1485,7 @@ fn receive_drop_messages(
 
     for message in recv_spawn.receive() {
         if let Some(registry) = registry.as_ref() {
+            let local_block_id = remap_server_block_id(&block_remap, registry, message.block_id);
             spawn_multiplayer_drop(
                 &mut commands,
                 registry,
@@ -1348,7 +1493,7 @@ fn receive_drop_messages(
                 &mut drops,
                 message.drop_id,
                 message.location,
-                message.block_id,
+                local_block_id,
                 message.has_motion,
                 message.spawn_translation,
                 message.initial_velocity,
@@ -1363,7 +1508,12 @@ fn receive_drop_messages(
         }
 
         if Some(message.player_id) == runtime.local_player_id {
-            let _ = inventory.add_block(message.block_id, 1);
+            let local_block_id = if let Some(registry) = registry.as_ref() {
+                remap_server_block_id(&block_remap, registry, message.block_id)
+            } else {
+                message.block_id
+            };
+            let _ = inventory.add_block(local_block_id, 1);
         }
     }
 }
@@ -1413,6 +1563,11 @@ fn send_chunk_interest_updates(
     }
 
     if let Ok(mut sender) = q_sender.get_mut(entity) {
+        debug!(
+            "[MP] Sending ClientChunkInterest: center={:?}, radius={}",
+            [center.x, center.y],
+            radius
+        );
         sender.send::<OrderedReliable>(ClientChunkInterest::new([center.x, center.y], radius));
         chunk_stream.last_requested_center = Some(center);
         chunk_stream.last_requested_radius = Some(radius);
@@ -1458,21 +1613,16 @@ fn smooth_remote_players(
             )
         } else {
             let latest = smoothing.snapshots.back().copied().unwrap_or(front);
-            let extrapolated = if let Some(previous) = smoothing
-                .snapshots
-                .iter()
-                .rev()
-                .nth(1)
-                .copied()
-            {
-                let dt = (latest.at_secs - previous.at_secs).max(0.0001);
-                let velocity = (latest.translation - previous.translation) / dt;
-                let ahead =
-                    (render_at - latest.at_secs).clamp(0.0, REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS);
-                latest.translation + velocity * ahead
-            } else {
-                latest.translation
-            };
+            let extrapolated =
+                if let Some(previous) = smoothing.snapshots.iter().rev().nth(1).copied() {
+                    let dt = (latest.at_secs - previous.at_secs).max(0.0001);
+                    let velocity = (latest.translation - previous.translation) / dt;
+                    let ahead = (render_at - latest.at_secs)
+                        .clamp(0.0, REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS);
+                    latest.translation + velocity * ahead
+                } else {
+                    latest.translation
+                };
             (extrapolated, latest.yaw)
         };
 
@@ -1485,6 +1635,7 @@ fn smooth_remote_players(
 
 fn send_local_block_break_events(
     mut break_events: MessageReader<BlockBreakByPlayerEvent>,
+    block_remap: Res<BlockIdRemap>,
     runtime: Res<MultiplayerClientRuntime>,
     q_connected: Query<Has<Connected>>,
     mut q_sender: Query<&mut MessageSender<ClientBlockBreak>>,
@@ -1505,9 +1656,14 @@ fn send_local_block_break_events(
     };
 
     for event in break_events.read() {
+        let drop_block_id = if event.drops_item {
+            block_remap.to_server(event.block_id)
+        } else {
+            0
+        };
         sender.send::<OrderedReliable>(ClientBlockBreak::new(
             event.location.to_array(),
-            if event.drops_item { event.block_id } else { 0 },
+            drop_block_id,
             0,
         ));
     }
@@ -1515,6 +1671,7 @@ fn send_local_block_break_events(
 
 fn send_local_block_place_events(
     mut place_events: MessageReader<BlockPlaceByPlayerEvent>,
+    block_remap: Res<BlockIdRemap>,
     runtime: Res<MultiplayerClientRuntime>,
     q_connected: Query<Has<Connected>>,
     mut q_sender: Query<&mut MessageSender<ClientBlockPlace>>,
@@ -1537,13 +1694,14 @@ fn send_local_block_place_events(
     for event in place_events.read() {
         sender.send::<OrderedReliable>(ClientBlockPlace::new(
             event.location.to_array(),
-            event.block_id,
+            block_remap.to_server(event.block_id),
         ));
     }
 }
 
 fn send_local_item_drop_requests(
     mut drop_requests: MessageReader<DropItemRequest>,
+    block_remap: Res<BlockIdRemap>,
     runtime: Res<MultiplayerClientRuntime>,
     q_connected: Query<Has<Connected>>,
     mut q_sender: Query<&mut MessageSender<ClientDropItem>>,
@@ -1570,7 +1728,7 @@ fn send_local_item_drop_requests(
 
         sender.send::<OrderedReliable>(ClientDropItem::new(
             request.location,
-            request.block_id,
+            block_remap.to_server(request.block_id),
             request.amount,
             request.spawn_translation,
             request.initial_velocity,
@@ -1800,7 +1958,7 @@ fn send_client_keepalive(
     };
 
     let stamp_ms = (time.elapsed_secs_f64() * 1000.0) as u32;
-    sender.send::<UnorderedUnreliable>(ClientKeepAlive::new(stamp_ms));
+    sender.send::<UnorderedReliable>(ClientKeepAlive::new(stamp_ms));
 }
 
 fn apply_remote_block_break(
@@ -2019,15 +2177,15 @@ fn compute_multiplayer_drop_spin_speed(world_loc: IVec3, drop_id: u64) -> f32 {
 
 #[inline]
 fn angle_abs_diff(from: f32, to: f32) -> f32 {
-    let wrapped = (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
-        - std::f32::consts::PI;
+    let wrapped =
+        (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
     wrapped.abs()
 }
 
 #[inline]
 fn lerp_angle_radians(from: f32, to: f32, t: f32) -> f32 {
-    let wrapped = (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
-        - std::f32::consts::PI;
+    let wrapped =
+        (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
     from + wrapped * t.clamp(0.0, 1.0)
 }
 

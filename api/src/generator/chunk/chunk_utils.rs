@@ -363,6 +363,20 @@ pub fn area_ready(
     true
 }
 
+/// Lightweight check for multiplayer: only requires chunks to be present in the map.
+/// Meshing continues asynchronously in-game.
+pub fn area_chunks_in_map(center: IVec2, radius: i32, chunk_map: &ChunkMap) -> bool {
+    for dz in -radius..=radius {
+        for dx in -radius..=radius {
+            let c = IVec2::new(center.x + dx, center.y + dz);
+            if !chunk_map.chunks.contains_key(&c) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 pub fn despawn_mesh_set(
     keys: impl IntoIterator<Item = (IVec2, u8, BlockId)>,
     mesh_index: &mut ChunkMeshIndex,

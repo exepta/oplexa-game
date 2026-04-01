@@ -273,14 +273,20 @@ fn check_base_gen_world_ready(
         .map(|lc| lc.world_xz)
         .unwrap_or(IVec2::ZERO);
 
-    if area_ready(
-        center,
-        initial_radius,
-        &chunk_map,
-        &pending_gen,
-        &pending_mesh,
-        &backlog,
-    ) {
+    let ready = if multiplayer_connection.uses_local_save_data() {
+        area_ready(
+            center,
+            initial_radius,
+            &chunk_map,
+            &pending_gen,
+            &pending_mesh,
+            &backlog,
+        )
+    } else {
+        area_chunks_in_map(center, initial_radius, &chunk_map)
+    };
+
+    if ready {
         commands.remove_resource::<LoadCenter>();
         if multiplayer_connection.uses_local_save_data() {
             next.set(AppState::Loading(LoadingStates::WaterGen));

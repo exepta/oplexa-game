@@ -1,7 +1,7 @@
 use crate::{
+    LanDiscoveryResource,
     models::HostedPlayer,
     state::{ServerRuntimeConfig, ServerState},
-    LanDiscoveryResource,
 };
 use api::core::network::protocols::{
     Auth, OrderedReliable, PlayerJoined, PlayerLeft, PlayerSnapshot, ServerBlockBreak,
@@ -46,7 +46,10 @@ pub fn handle_client_connected(
     // Nothing extra to do here – Auth message arrives separately
 ) {
     if q_client.contains(trigger.entity) {
-        info!("Client {:?} fully connected, waiting for Auth", trigger.entity);
+        info!(
+            "Client {:?} fully connected, waiting for Auth",
+            trigger.entity
+        );
     }
 }
 
@@ -70,9 +73,8 @@ pub fn handle_client_disconnected(
     for waiters in state.pending_stream_chunk_waiters.values_mut() {
         waiters.remove(&entity);
     }
-    state
-        .pending_chunk_sends
-        .retain(|(e, _)| *e != entity);
+    state.pending_chunk_sends.retain(|(e, _)| *e != entity);
+    state.chunk_send_window.remove(&entity);
 }
 
 // ── Auth message handler ──────────────────────────────────────────────────────
@@ -86,7 +88,6 @@ pub fn handle_auth_messages(
     server: Single<&Server>,
     mut commands: Commands,
 ) {
-
     for (entity, mut receiver) in q.iter_mut() {
         for auth in receiver.receive() {
             let username = auth.username.trim().to_string();
@@ -120,6 +121,12 @@ pub fn handle_auth_messages(
             state.next_player_id = state.next_player_id.wrapping_add(1);
 
             // Send welcome
+            let block_palette = state
+                .block_registry
+                .defs
+                .iter()
+                .map(|def| def.name.clone())
+                .collect::<Vec<_>>();
             let welcome = ServerWelcome {
                 player_id: player.player_id,
                 server_name: config.server_name.clone(),
@@ -127,6 +134,7 @@ pub fn handle_auth_messages(
                 world_name: config.world_name.clone(),
                 world_seed: config.world_seed,
                 spawn_translation: config.spawn_translation,
+                block_palette,
             };
             let _ = multi_sender.send::<_, UnorderedReliable>(
                 &welcome,
@@ -261,4 +269,3 @@ fn entity_to_peer_id(entity: Entity, q_remote_id: &Query<&RemoteId>) -> PeerId {
         .map(|r| r.0)
         .unwrap_or(PeerId::Entity(entity.to_bits()))
 }
-

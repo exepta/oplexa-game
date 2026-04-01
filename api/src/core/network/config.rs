@@ -83,6 +83,18 @@ pub struct DedicatedServerSettings {
     pub max_players: usize,
     #[serde(default = "default_client_timeout")]
     pub client_timeout: u64,
+    #[serde(default = "default_chunk_stream_sends_per_tick_base")]
+    pub chunk_stream_sends_per_tick_base: usize,
+    #[serde(default = "default_chunk_stream_sends_per_tick_per_client")]
+    pub chunk_stream_sends_per_tick_per_client: usize,
+    #[serde(default = "default_chunk_stream_sends_per_tick_max")]
+    pub chunk_stream_sends_per_tick_max: usize,
+    #[serde(default = "default_chunk_stream_inflight_per_client")]
+    pub chunk_stream_inflight_per_client: usize,
+    #[serde(default = "default_chunk_flight_timeout_ms")]
+    pub chunk_flight_timeout_ms: u64,
+    #[serde(default = "default_max_stream_radius")]
+    pub max_stream_radius: i32,
 }
 
 impl Default for DedicatedServerSettings {
@@ -96,6 +108,13 @@ impl Default for DedicatedServerSettings {
             motd: "Welcome to Oplexa".to_string(),
             max_players: default_max_players(),
             client_timeout: default_client_timeout(),
+            chunk_stream_sends_per_tick_base: default_chunk_stream_sends_per_tick_base(),
+            chunk_stream_sends_per_tick_per_client: default_chunk_stream_sends_per_tick_per_client(
+            ),
+            chunk_stream_sends_per_tick_max: default_chunk_stream_sends_per_tick_max(),
+            chunk_stream_inflight_per_client: default_chunk_stream_inflight_per_client(),
+            chunk_flight_timeout_ms: default_chunk_flight_timeout_ms(),
+            max_stream_radius: default_max_stream_radius(),
         }
     }
 }
@@ -167,6 +186,30 @@ fn default_max_players() -> usize {
 
 fn default_client_timeout() -> u64 {
     60
+}
+
+fn default_chunk_stream_sends_per_tick_base() -> usize {
+    24
+}
+
+fn default_chunk_stream_sends_per_tick_per_client() -> usize {
+    6
+}
+
+fn default_chunk_stream_sends_per_tick_max() -> usize {
+    256
+}
+
+fn default_chunk_stream_inflight_per_client() -> usize {
+    24
+}
+
+fn default_chunk_flight_timeout_ms() -> u64 {
+    500
+}
+
+fn default_max_stream_radius() -> i32 {
+    12
 }
 
 fn resolve_local_ip() -> Option<IpAddr> {

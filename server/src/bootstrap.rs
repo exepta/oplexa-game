@@ -61,6 +61,13 @@ pub fn load_bootstrap() -> BootstrapResult {
             world_name: server_settings.world_name,
             world_seed,
             spawn_translation,
+            chunk_stream_sends_per_tick_base: server_settings.chunk_stream_sends_per_tick_base,
+            chunk_stream_sends_per_tick_per_client: server_settings
+                .chunk_stream_sends_per_tick_per_client,
+            chunk_stream_sends_per_tick_max: server_settings.chunk_stream_sends_per_tick_max,
+            chunk_stream_inflight_per_client: server_settings.chunk_stream_inflight_per_client,
+            chunk_flight_timeout_ms: server_settings.chunk_flight_timeout_ms,
+            max_stream_radius: server_settings.max_stream_radius,
         },
         world_root,
         bind_addr,
@@ -74,11 +81,20 @@ pub fn spawn_server(mut commands: Commands, config: Res<ServerBootstrapConfig>) 
             Name::new("NetworkServer"),
             NetcodeServer::new(NetcodeConfig::default()),
             LocalAddr(config.bind_addr),
-            ServerUdpIo::default(),
+            WebSocketServerIo {
+                config: ServerConfig::builder()
+                    .with_bind_address(config.bind_addr)
+                    .with_no_encryption(),
+            },
         ))
         .id();
 
-    commands.trigger_with(Start { entity: server_entity }, EntityTrigger);
+    commands.trigger_with(
+        Start {
+            entity: server_entity,
+        },
+        EntityTrigger,
+    );
     info!("Lightyear server started on {}", config.bind_addr);
 }
 

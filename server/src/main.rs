@@ -8,10 +8,10 @@ use crate::{
     bootstrap::{ServerBootstrapConfig, load_bootstrap, spawn_server},
     services::{
         flush_chunk_streaming, handle_auth_messages, handle_block_break_messages,
-        handle_block_place_messages, handle_chunk_interest_messages, handle_drop_item_messages,
-        handle_drop_pickup_messages, handle_keepalive_messages, handle_new_client,
-        handle_client_connected, handle_client_disconnected, handle_player_move_messages,
-        purge_stale_players, poll_lan_discovery,
+        handle_block_place_messages, handle_chunk_interest_messages, handle_client_connected,
+        handle_client_disconnected, handle_drop_item_messages, handle_drop_pickup_messages,
+        handle_keepalive_messages, handle_new_client, handle_player_move_messages,
+        poll_lan_discovery, purge_stale_players,
     },
     state::ServerState,
 };
@@ -25,15 +25,17 @@ use std::time::Duration;
 
 fn main() {
     SimpleLogger::new()
+        .with_level(log::LevelFilter::Info)
+        .with_module_level("tokio_tungstenite", log::LevelFilter::Warn)
+        .with_module_level("tungstenite", log::LevelFilter::Warn)
+        .with_module_level("lightyear", log::LevelFilter::Warn)
         .init()
         .expect("Logger initialization failed");
 
     let bootstrap = load_bootstrap();
 
     App::new()
-        .add_plugins(
-            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(5))),
-        )
+        .add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(5))))
         .add_plugins(LogPlugin::default())
         .add_plugins(ServerPlugins {
             tick_duration: Duration::from_millis(50),

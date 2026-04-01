@@ -425,7 +425,10 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<SysStats>()
             .insert_non_send_resource(ServerProbeRuntime::default())
             .add_plugins(ExtendedUiPlugin)
-            .add_systems(Startup, (configure_extended_ui, spawn_hardcoded_ui, prime_sys_stats))
+            .add_systems(
+                Startup,
+                (configure_extended_ui, spawn_hardcoded_ui, prime_sys_stats),
+            )
             .add_systems(
                 PreUpdate,
                 (
@@ -525,7 +528,10 @@ impl Plugin for HardcodedUiPlugin {
                 OnExit(AppState::InGame(InGameStates::Game)),
                 trigger_world_unload_ui,
             )
-            .add_systems(Update, tick_world_unload_ui.run_if(world_unload_ui_should_tick))
+            .add_systems(
+                Update,
+                tick_world_unload_ui.run_if(world_unload_ui_should_tick),
+            )
             .add_systems(
                 OnEnter(AppState::Loading(LoadingStates::BaseGen)),
                 reset_world_unload_ui,
@@ -616,11 +622,7 @@ fn bytes_to_mib(bytes: u64) -> f64 {
 
 #[inline]
 fn bool_label(value: bool) -> &'static str {
-    if value {
-        "ON"
-    } else {
-        "OFF"
-    }
+    if value { "ON" } else { "OFF" }
 }
 
 impl SavedServerEntry {

@@ -9,7 +9,7 @@ default-features = false
 features = ["multi_threaded", "bevy_log"]
 
 [dependencies]
-lightyear = { version = "0.26.4", features = ["udp", "netcode"] }
+lightyear = { version = "0.26.4", features = ["websocket", "netcode"] }
 futures-lite = "2.6.1"
 log = "0.4.28"
 api = { path = "../api" }

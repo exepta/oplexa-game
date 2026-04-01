@@ -1,18 +1,19 @@
-use crate::{models::HostedDrop, state::ServerState};
+use crate::{
+    models::HostedDrop,
+    state::{ServerRuntimeConfig, ServerState},
+};
 use api::core::network::protocols::{
     ClientBlockBreak, ClientBlockPlace, ClientChunkInterest, ClientDropItem, ClientDropPickup,
-    ClientKeepAlive, OrderedReliable, PlayerMove, PlayerSnapshot, ServerBlockBreak, ServerBlockPlace,
-    ServerChunkData, ServerDropPicked, ServerDropSpawn, UnorderedReliable, UnorderedUnreliable,
+    ClientKeepAlive, OrderedReliable, PlayerMove, PlayerSnapshot, ServerBlockBreak,
+    ServerBlockPlace, ServerChunkData, ServerDropPicked, ServerDropSpawn, UnorderedReliable,
+    UnorderedUnreliable,
 };
 use bevy::math::IVec2;
 use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::time::Instant;
-
-const MAX_STREAM_RADIUS: i32 = 12;
-const MAX_STREAM_SENDS_PER_TICK: usize = 24;
 
 pub fn handle_player_move_messages(
     mut q: Query<(Entity, &mut MessageReceiver<PlayerMove>), With<ClientOf>>,
@@ -59,13 +60,20 @@ pub fn handle_keepalive_messages(
 pub fn handle_chunk_interest_messages(
     mut q: Query<(Entity, &mut MessageReceiver<ClientChunkInterest>), With<ClientOf>>,
     mut state: ResMut<ServerState>,
+    config: Res<ServerRuntimeConfig>,
 ) {
     let mut pending: Vec<(Entity, IVec2)> = Vec::new();
 
     for (entity, mut receiver) in q.iter_mut() {
         for message in receiver.receive() {
             let center = IVec2::new(message.center[0], message.center[1]);
-            let radius = message.radius.clamp(1, MAX_STREAM_RADIUS);
+            let radius = message.radius.clamp(1, config.max_stream_radius.max(1));
+            log::debug!(
+                "[CHUNK] ClientChunkInterest from {:?}: center={:?}, radius={}",
+                entity,
+                [center.x, center.y],
+                radius
+            );
             let mut desired_chunks = HashSet::new();
             for dz in -radius..=radius {
                 for dx in -radius..=radius {
@@ -103,15 +111,41 @@ pub fn flush_chunk_streaming(
     q_clients: Query<Entity, With<ClientOf>>,
     q_remote_id: Query<&RemoteId>,
     mut state: ResMut<ServerState>,
+    config: Res<ServerRuntimeConfig>,
     mut multi_sender: ServerMultiMessageSender,
     server: Single<&Server>,
 ) {
     state.collect_ready_stream_chunks();
 
-    let connected: HashSet<Entity> = q_clients.iter().collect();
-    let mut sent = 0usize;
+    // Expire chunks that have been in-flight long enough to be considered delivered.
+    let now = std::time::Instant::now();
 
-    while sent < MAX_STREAM_SENDS_PER_TICK {
+    let connected: HashSet<Entity> = q_clients.iter().collect();
+    state
+        .chunk_send_window
+        .retain(|entity, _| connected.contains(entity));
+    for window in state.chunk_send_window.values_mut() {
+        window.retain(|t| {
+            now.duration_since(*t).as_millis() < config.chunk_flight_timeout_ms as u128
+        });
+    }
+
+    let connected_clients = connected.len();
+    let sends_per_tick = config
+        .chunk_stream_sends_per_tick_base
+        .saturating_add(
+            config
+                .chunk_stream_sends_per_tick_per_client
+                .saturating_mul(connected_clients),
+        )
+        .min(config.chunk_stream_sends_per_tick_max.max(1));
+
+    let mut sent = 0usize;
+    let mut scanned = 0usize;
+    let scan_cap = state.pending_chunk_sends.len();
+
+    while sent < sends_per_tick && scanned < scan_cap {
+        scanned += 1;
         let Some((entity, coord)) = state.pending_chunk_sends.pop_front() else {
             break;
         };
@@ -133,15 +167,32 @@ pub fn flush_chunk_streaming(
             continue;
         };
 
+        let window = state
+            .chunk_send_window
+            .entry(entity)
+            .or_insert_with(VecDeque::new);
+        if window.len() >= config.chunk_stream_inflight_per_client.max(1) {
+            state.pending_chunk_sends.push_back((entity, coord));
+            continue;
+        }
+
         let peer_id = q_remote_id
             .get(entity)
             .map(|r| r.0)
             .unwrap_or(PeerId::Entity(entity.to_bits()));
+        log::debug!(
+            "[CHUNK] Sending chunk {:?} to {:?} (window: {}/{})",
+            [coord.x, coord.y],
+            entity,
+            window.len(),
+            config.chunk_stream_inflight_per_client.max(1)
+        );
         let _ = multi_sender.send::<_, UnorderedReliable>(
             &ServerChunkData::new([coord.x, coord.y], encoded_chunk),
             *server,
             &NetworkTarget::Single(peer_id),
         );
+        window.push_back(now);
         sent += 1;
     }
 }
