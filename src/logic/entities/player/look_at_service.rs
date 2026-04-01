@@ -1,5 +1,6 @@
 use crate::core::entities::player::PlayerCamera;
 use crate::core::entities::player::block_selection::SelectionState;
+use crate::core::entities::player::{GameMode, GameModeState};
 use crate::core::states::states::{AppState, InGameStates};
 use crate::core::world::block::{BlockRegistry, SelectedBlock, VOXEL_SIZE, get_block_world};
 use crate::core::world::chunk::{ChunkMap, VoxelStage};
@@ -119,10 +120,16 @@ fn spawn_selection_outline(
 
 fn update_selection(
     mut sel: ResMut<SelectionState>,
+    game_mode: Res<GameModeState>,
     q_player_cam: Query<(&GlobalTransform, &Camera), With<PlayerCamera>>,
     q_fallback_cam: Query<(&GlobalTransform, &Camera), With<Camera3d>>,
     chunk_map: Res<ChunkMap>,
 ) {
+    if matches!(game_mode.0, GameMode::Spectator) {
+        sel.hit = None;
+        return;
+    }
+
     let cam = q_player_cam
         .iter()
         .next()
@@ -141,11 +148,17 @@ fn update_selection(
 
 fn sync_selection_outline(
     sel: Res<SelectionState>,
+    game_mode: Res<GameModeState>,
     mut q_outline: Query<(&mut Transform, &mut Visibility), With<SelectionOutlineRoot>>,
 ) {
     let Ok((mut tf, mut vis)) = q_outline.single_mut() else {
         return;
     };
+
+    if matches!(game_mode.0, GameMode::Spectator) {
+        *vis = Visibility::Hidden;
+        return;
+    }
 
     if let Some(hit) = sel.hit {
         let s = VOXEL_SIZE;
@@ -162,11 +175,15 @@ fn sync_selection_outline(
 
 fn pick_block_from_look(
     buttons: Res<ButtonInput<MouseButton>>,
+    game_mode: Res<GameModeState>,
     sel_state: Res<SelectionState>,
     chunk_map: Res<ChunkMap>,
     reg: Res<BlockRegistry>,
     mut selected: ResMut<SelectedBlock>,
 ) {
+    if matches!(game_mode.0, GameMode::Spectator) {
+        return;
+    }
     if !buttons.just_pressed(MouseButton::Middle) {
         return;
     }

@@ -98,7 +98,7 @@ fn handle_inventory_drag_and_drop(
         let Some(slot_index) = hovered_slot else {
             return;
         };
-        if slot_index >= PLAYER_INVENTORY_SLOTS || !matches!(game_mode.0, GameMode::Survival) {
+        if slot_index >= PLAYER_INVENTORY_SLOTS || matches!(game_mode.0, GameMode::Spectator) {
             return;
         }
         let slot = &mut inventory.slots[slot_index];
@@ -174,7 +174,7 @@ fn handle_inventory_drag_and_drop(
     }
 
     let dropped_slot = inventory.slots[source_index];
-    if dropped_slot.is_empty() || !matches!(game_mode.0, GameMode::Survival) {
+    if dropped_slot.is_empty() || matches!(game_mode.0, GameMode::Spectator) {
         return;
     }
     let Ok(player_tf) = player_q.single() else {

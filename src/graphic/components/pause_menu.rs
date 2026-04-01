@@ -17,6 +17,11 @@ fn toggle_pause_menu(
         return;
     }
 
+    // Do not open pause menu while another in-game UI (e.g. inventory) is open.
+    if toggle_requested && !pause_menu.open && ui_interaction.blocks_game_input() {
+        return;
+    }
+
     if close_requested {
         pause_menu.open = false;
     } else if toggle_requested {
