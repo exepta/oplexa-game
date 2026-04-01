@@ -8,6 +8,7 @@ pub struct BlockBreakByPlayerEvent {
     pub chunk_y: u16,
     pub chunk_z: u8,
     pub block_id: u16,
+    pub drop_item_id: u16,
     pub block_name: String,
     pub drops_item: bool,
 }

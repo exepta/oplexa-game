@@ -699,10 +699,23 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                             text: String::new(),
                             ..default()
                         },
+                        Visibility::Inherited,
                         CssID(format!("{HUD_SLOT_PREFIX}{idx}")),
                         UiButtonKind::InventorySlot,
                         UiButtonTone::Normal,
-                    ));
+                    ))
+                    .with_children(|slot| {
+                        slot.spawn((
+                            Paragraph {
+                                text: String::new(),
+                                ..default()
+                            },
+                            CssID(format!("{HUD_SLOT_BADGE_PREFIX}{idx}")),
+                            BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                            Visibility::Hidden,
+                            Pickable::IGNORE,
+                        ));
+                    });
                 }
             });
         })
@@ -829,10 +842,23 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                                 text: String::new(),
                                 ..default()
                             },
+                            Visibility::Inherited,
                             CssID(format!("{PLAYER_INVENTORY_FRAME_PREFIX}{idx}")),
                             UiButtonKind::InventorySlot,
                             UiButtonTone::Normal,
-                        ));
+                        ))
+                        .with_children(|slot| {
+                            slot.spawn((
+                                Paragraph {
+                                    text: String::new(),
+                                    ..default()
+                                },
+                                CssID(format!("{PLAYER_INVENTORY_BADGE_PREFIX}{idx}")),
+                                BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                Visibility::Hidden,
+                                Pickable::IGNORE,
+                            ));
+                        });
                     }
                 });
             });

@@ -11,11 +11,10 @@ use crate::core::events::ui_events::{
     ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest, OpenToLanRequest,
     StopLanHostRequest,
 };
+use crate::core::inventory::items::{ItemRegistry, build_world_item_drop_visual};
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
 use crate::core::states::states::{AppState, BeforeUiState, LoadingStates};
-use crate::core::world::block::{
-    BlockRegistry, VOXEL_SIZE, build_block_cube_mesh, get_block_world,
-};
+use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, get_block_world};
 use crate::core::world::chunk::{ChunkMap, LoadCenter, SEA_LEVEL};
 use crate::core::world::chunk_dimension::{
     CX, CY, CZ, SEC_COUNT, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local,
@@ -38,7 +37,7 @@ use bevy::ecs::event::EntityTrigger;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
 use bevy::log::{BoxedLayer, Level, LogPlugin};
 use bevy::math::primitives::Capsule3d;
-use bevy::mesh::{Mesh3d, VertexAttributeValues};
+use bevy::mesh::Mesh3d;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::*;
 use bevy::render::RenderPlugin;
@@ -142,7 +141,7 @@ struct RemotePlayerVisuals {
 #[derive(Component, Debug)]
 struct MultiplayerDroppedItem {
     drop_id: u64,
-    block_id: u16,
+    item_id: u16,
     pickup_ready_at: f32,
     next_pickup_request_at: f32,
     resting: bool,
@@ -249,9 +248,6 @@ const MULTIPLAYER_DROP_ATTRACT_MAX_SPEED: f32 = 12.0;
 const MULTIPLAYER_DROP_GRAVITY: f32 = 12.0;
 const MULTIPLAYER_DROP_POP_MIN_DIST: f32 = 0.1;
 const MULTIPLAYER_DROP_POP_MAX_DIST: f32 = 1.0;
-const MULTIPLAYER_DROP_VISUAL_SCALE_X: f32 = 0.85;
-const MULTIPLAYER_DROP_VISUAL_SCALE_Y: f32 = 0.72;
-const MULTIPLAYER_DROP_VISUAL_SCALE_Z: f32 = 1.14;
 const MULTIPLAYER_DROP_PICKUP_DELAY_SECS: f32 = 0.5;
 const REMOTE_PLAYER_INTERP_BACK_TIME_SECS: f32 = 0.10;
 const REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS: f32 = 0.08;
@@ -1508,6 +1504,7 @@ fn receive_drop_messages(
     mut commands: Commands,
     time: Res<Time>,
     registry: Option<Res<BlockRegistry>>,
+    item_registry: Option<Res<ItemRegistry>>,
     block_remap: Res<BlockIdRemap>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut inventory: ResMut<PlayerInventory>,
@@ -1530,16 +1527,18 @@ fn receive_drop_messages(
     };
 
     for message in recv_spawn.receive() {
-        if let Some(registry) = registry.as_ref() {
+        if let (Some(registry), Some(item_registry)) = (registry.as_ref(), item_registry.as_ref()) {
             let local_block_id = remap_server_block_id(&block_remap, registry, message.block_id);
+            let local_item_id = item_registry.item_for_block(local_block_id).unwrap_or(0);
             spawn_multiplayer_drop(
                 &mut commands,
                 registry,
+                item_registry,
                 &mut meshes,
                 &mut drops,
                 message.drop_id,
                 message.location,
-                local_block_id,
+                local_item_id,
                 message.has_motion,
                 message.spawn_translation,
                 message.initial_velocity,
@@ -1554,12 +1553,21 @@ fn receive_drop_messages(
         }
 
         if Some(message.player_id) == runtime.local_player_id {
-            let local_block_id = if let Some(registry) = registry.as_ref() {
-                remap_server_block_id(&block_remap, registry, message.block_id)
+            let local_item_id = if let (Some(registry), Some(item_registry)) =
+                (registry.as_ref(), item_registry.as_ref())
+            {
+                let local_block_id =
+                    remap_server_block_id(&block_remap, registry, message.block_id);
+                item_registry.item_for_block(local_block_id).unwrap_or(0)
             } else {
-                message.block_id
+                0
             };
-            let _ = inventory.add_block(local_block_id, 1);
+
+            if local_item_id != 0
+                && let Some(item_registry) = item_registry.as_ref()
+            {
+                let _ = inventory.add_item(local_item_id, 1, item_registry);
+            }
         }
     }
 }
@@ -1681,6 +1689,7 @@ fn smooth_remote_players(
 
 fn send_local_block_break_events(
     mut break_events: MessageReader<BlockBreakByPlayerEvent>,
+    item_registry: Option<Res<ItemRegistry>>,
     block_remap: Res<BlockIdRemap>,
     runtime: Res<MultiplayerClientRuntime>,
     q_connected: Query<Has<Connected>>,
@@ -1703,7 +1712,11 @@ fn send_local_block_break_events(
 
     for event in break_events.read() {
         let drop_block_id = if event.drops_item {
-            block_remap.to_server(event.block_id)
+            item_registry
+                .as_ref()
+                .and_then(|items| items.block_for_item(event.drop_item_id))
+                .map(|local_block_id| block_remap.to_server(local_block_id))
+                .unwrap_or(0)
         } else {
             0
         };
@@ -1747,6 +1760,7 @@ fn send_local_block_place_events(
 
 fn send_local_item_drop_requests(
     mut drop_requests: MessageReader<DropItemRequest>,
+    item_registry: Option<Res<ItemRegistry>>,
     block_remap: Res<BlockIdRemap>,
     runtime: Res<MultiplayerClientRuntime>,
     q_connected: Query<Has<Connected>>,
@@ -1768,13 +1782,19 @@ fn send_local_item_drop_requests(
     };
 
     for request in drop_requests.read() {
-        if request.block_id == 0 || request.amount == 0 {
+        if request.item_id == 0 || request.amount == 0 {
             continue;
         }
+        let Some(local_block_id) = item_registry
+            .as_ref()
+            .and_then(|items| items.block_for_item(request.item_id))
+        else {
+            continue;
+        };
 
         sender.send::<OrderedReliable>(ClientDropItem::new(
             request.location,
-            block_remap.to_server(request.block_id),
+            block_remap.to_server(local_block_id),
             request.amount,
             request.spawn_translation,
             request.initial_velocity,
@@ -1893,6 +1913,7 @@ fn send_local_drop_pickup_requests(
     time: Res<Time>,
     multiplayer_connection: Res<MultiplayerConnectionState>,
     inventory: Res<PlayerInventory>,
+    item_registry: Option<Res<ItemRegistry>>,
     player: Query<&Transform, With<Player>>,
     mut drops: Query<(&Transform, &mut MultiplayerDroppedItem), With<MultiplayerDroppedItem>>,
     runtime: Res<MultiplayerClientRuntime>,
@@ -1922,6 +1943,9 @@ fn send_local_drop_pickup_requests(
     let radius_sq = MULTIPLAYER_DROP_PICKUP_RADIUS * MULTIPLAYER_DROP_PICKUP_RADIUS;
     let player_pos = player_transform.translation;
     let now = time.elapsed_secs();
+    let Some(item_registry) = item_registry.as_ref() else {
+        return;
+    };
 
     for (transform, mut drop) in &mut drops {
         if now < drop.pickup_ready_at {
@@ -1932,7 +1956,7 @@ fn send_local_drop_pickup_requests(
             continue;
         }
 
-        if !inventory_can_add_block(&inventory, drop.block_id) {
+        if !inventory_can_add_item(&inventory, drop.item_id, item_registry) {
             continue;
         }
 
@@ -2085,17 +2109,18 @@ fn apply_remote_block_place(
 fn spawn_multiplayer_drop(
     commands: &mut Commands,
     registry: &BlockRegistry,
+    item_registry: &ItemRegistry,
     meshes: &mut Assets<Mesh>,
     drops: &mut MultiplayerDropIndex,
     drop_id: u64,
     location: [i32; 3],
-    block_id: u16,
+    item_id: u16,
     has_motion: bool,
     spawn_translation: [f32; 3],
     initial_velocity: [f32; 3],
     spawn_now: f32,
 ) {
-    if block_id == 0 {
+    if item_id == 0 {
         return;
     }
 
@@ -2103,8 +2128,11 @@ fn spawn_multiplayer_drop(
         return;
     }
 
-    let mut mesh = build_block_cube_mesh(registry, block_id, MULTIPLAYER_DROP_ITEM_SIZE);
-    center_mesh_vertices(&mut mesh, MULTIPLAYER_DROP_ITEM_SIZE * 0.5);
+    let Some((mesh, material, visual_scale)) =
+        build_world_item_drop_visual(registry, item_registry, item_id, MULTIPLAYER_DROP_ITEM_SIZE)
+    else {
+        return;
+    };
 
     let world_loc = IVec3::from_array(location);
     let pop_velocity = if has_motion {
@@ -2135,7 +2163,7 @@ fn spawn_multiplayer_drop(
         .spawn((
             MultiplayerDroppedItem {
                 drop_id,
-                block_id,
+                item_id,
                 pickup_ready_at: spawn_now + MULTIPLAYER_DROP_PICKUP_DELAY_SECS,
                 next_pickup_request_at: 0.0,
                 resting: false,
@@ -2145,15 +2173,11 @@ fn spawn_multiplayer_drop(
                 spin_speed,
             },
             Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(registry.material(block_id)),
+            MeshMaterial3d(material),
             Transform {
                 translation: center,
                 rotation: initial_rotation,
-                scale: Vec3::new(
-                    MULTIPLAYER_DROP_VISUAL_SCALE_X,
-                    MULTIPLAYER_DROP_VISUAL_SCALE_Y,
-                    MULTIPLAYER_DROP_VISUAL_SCALE_Z,
-                ),
+                scale: visual_scale,
             },
             Visibility::default(),
             Name::new(format!("MultiplayerDrop#{drop_id}")),
@@ -2169,31 +2193,20 @@ fn clear_multiplayer_drops(commands: &mut Commands, drops: &mut MultiplayerDropI
     }
 }
 
-fn inventory_can_add_block(inventory: &PlayerInventory, block_id: u16) -> bool {
-    if block_id == 0 {
+fn inventory_can_add_item(
+    inventory: &PlayerInventory,
+    item_id: u16,
+    item_registry: &ItemRegistry,
+) -> bool {
+    if item_id == 0 {
         return false;
     }
 
-    inventory.slots.iter().any(|slot| {
-        slot.is_empty()
-            || (slot.block_id == block_id
-                && slot.count
-                    < crate::core::entities::player::inventory::PLAYER_INVENTORY_STACK_MAX)
-    })
-}
-
-fn center_mesh_vertices(mesh: &mut Mesh, half_extent: f32) {
-    let Some(VertexAttributeValues::Float32x3(positions)) =
-        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
-    else {
-        return;
-    };
-
-    for position in positions.iter_mut() {
-        position[0] -= half_extent;
-        position[1] -= half_extent;
-        position[2] -= half_extent;
-    }
+    let stack_limit = item_registry.stack_limit(item_id);
+    inventory
+        .slots
+        .iter()
+        .any(|slot| slot.is_empty() || (slot.item_id == item_id && slot.count < stack_limit))
 }
 
 fn compute_multiplayer_drop_pop_velocity(world_loc: IVec3, drop_id: u64) -> Vec3 {

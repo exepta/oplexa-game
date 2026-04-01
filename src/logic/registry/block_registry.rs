@@ -1,3 +1,4 @@
+use crate::core::inventory::items::ItemRegistry;
 use crate::core::states::states::{AppState, BeforeUiState};
 use crate::core::world::block::BlockRegistry;
 use bevy::prelude::*;
@@ -16,7 +17,14 @@ fn start_block_registry(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut next: ResMut<NextState<AppState>>,
 ) {
-    let registry = BlockRegistry::load_all(&asset_server, &mut materials, "assets/blocks");
-    commands.insert_resource(registry);
+    let block_registry = BlockRegistry::load_all(&asset_server, &mut materials, "assets/blocks");
+    let item_registry = ItemRegistry::load_all(
+        &asset_server,
+        &mut materials,
+        "assets/items",
+        &block_registry,
+    );
+    commands.insert_resource(block_registry);
+    commands.insert_resource(item_registry);
     next.set(AppState::Screen(BeforeUiState::Menu));
 }

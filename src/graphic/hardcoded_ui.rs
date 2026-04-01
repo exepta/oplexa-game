@@ -10,6 +10,10 @@ use crate::core::events::ui_events::{
     ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest, OpenToLanRequest,
     StopLanHostRequest,
 };
+use crate::core::inventory::items::{
+    ItemRegistry, build_block_item_icon_image, parse_block_icon_cache_key,
+    player_drop_spawn_motion, player_drop_world_location, spawn_player_dropped_item_stack,
+};
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
 use crate::core::states::states::{
     AppState, BeforeUiState, InGameStates, LoadingStates, is_state_in_game,
@@ -23,9 +27,6 @@ use crate::core::world::chunk::ChunkMap;
 use crate::core::world::chunk_dimension::{CX, CZ};
 use crate::core::world::fluid::{FluidMap, WaterMeshIndex};
 use crate::core::world::save::{RegionCache, WorldSave, default_saves_root};
-use crate::logic::events::block_event_handler::{
-    player_drop_spawn_motion, player_drop_world_location, spawn_player_dropped_block_stack,
-};
 use crate::utils::key_utils::convert;
 use api::core::network::config::NetworkSettings;
 use api::core::network::discovery::{LanDiscoveryClient, LanServerInfo};
@@ -39,7 +40,7 @@ use bevy_extended_ui::widgets::{
     BindToID, Button, Div, Img, InputField, InputType, InputValue, Paragraph, ProgressBar,
     Scrollbar, UIGenID, UIWidgetState,
 };
-use bevy_extended_ui::{ExtendedUiConfiguration, ExtendedUiPlugin};
+use bevy_extended_ui::{ExtendedUiConfiguration, ExtendedUiPlugin, ImageCache};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -98,9 +99,11 @@ const PAUSE_SETTINGS_ID: &str = "pause-menu-settings";
 const PAUSE_CLOSE_ID: &str = "pause-menu-close";
 
 const HUD_SLOT_PREFIX: &str = "hud-hotbar-slot-";
+const HUD_SLOT_BADGE_PREFIX: &str = "hud-hotbar-slot-badge-";
 
 const PLAYER_INVENTORY_TOTAL_ID: &str = "player-inventory-total";
 const PLAYER_INVENTORY_FRAME_PREFIX: &str = "player-inventory-frame-";
+const PLAYER_INVENTORY_BADGE_PREFIX: &str = "player-inventory-badge-";
 
 const WORLD_GEN_PROGRESS_ID: &str = "world-gen-progress";
 
@@ -451,6 +454,7 @@ impl Plugin for HardcodedUiPlugin {
                     style_scroll_div_lists,
                     style_div_scrollbars,
                     style_progress_bars,
+                    style_slot_count_badges,
                 ),
             )
             .add_systems(PostUpdate, style_button_icons)
@@ -595,6 +599,13 @@ impl Plugin for HardcodedUiPlugin {
                     .run_if(in_state(AppState::InGame(InGameStates::Game))),
             )
             .add_systems(
+                Update,
+                sync_ingame_ui_interaction_state
+                    .after(sync_pause_time)
+                    .after(sync_player_inventory_ui)
+                    .run_if(is_state_in_game),
+            )
+            .add_systems(
                 OnExit(AppState::InGame(InGameStates::Game)),
                 close_player_inventory_ui,
             )
@@ -623,6 +634,7 @@ include!("components/world_flow.rs");
 include!("components/hud.rs");
 include!("components/pause_menu.rs");
 include!("components/inventory.rs");
+include!("components/ui_interaction_sync.rs");
 include!("components/debug_overlay.rs");
 
 #[inline]

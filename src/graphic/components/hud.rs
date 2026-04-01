@@ -61,7 +61,8 @@ fn drop_selected_hotbar_item(
     mut drop_requests: MessageWriter<DropItemRequest>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    registry: Res<BlockRegistry>,
+    block_registry: Res<BlockRegistry>,
+    item_registry: Res<ItemRegistry>,
 ) {
     if ui_interaction.menu_open || ui_interaction.inventory_open {
         return;
@@ -90,7 +91,7 @@ fn drop_selected_hotbar_item(
         return;
     };
 
-    let dropped_block_id = slot.block_id;
+    let dropped_item_id = slot.item_id;
     if slot.count <= 1 {
         *slot = Default::default();
     } else {
@@ -106,18 +107,19 @@ fn drop_selected_hotbar_item(
         let world_loc =
             player_drop_world_location(player_tf.translation, player_tf.forward().as_vec3());
         drop_requests.write(DropItemRequest::new(
-            dropped_block_id,
+            dropped_item_id,
             1,
             world_loc.to_array(),
             spawn_center.to_array(),
             initial_velocity.to_array(),
         ));
     } else {
-        spawn_player_dropped_block_stack(
+        spawn_player_dropped_item_stack(
             &mut commands,
             &mut meshes,
-            &registry,
-            dropped_block_id,
+            &block_registry,
+            &item_registry,
+            dropped_item_id,
             1,
             player_tf.translation,
             player_tf.forward().as_vec3(),
@@ -129,6 +131,7 @@ fn drop_selected_hotbar_item(
 fn sync_hotbar_selected_block(
     hotbar_state: Res<HotbarSelectionState>,
     inventory: Res<PlayerInventory>,
+    item_registry: Res<ItemRegistry>,
     registry: Res<BlockRegistry>,
     mut selected: ResMut<SelectedBlock>,
 ) {
@@ -144,19 +147,26 @@ fn sync_hotbar_selected_block(
         return;
     }
 
-    selected.id = slot.block_id;
-    selected.name = registry
-        .name_opt(slot.block_id)
-        .unwrap_or("air")
-        .to_string();
+    let Some(block_id) = item_registry.block_for_item(slot.item_id) else {
+        selected.id = 0;
+        selected.name = "air".to_string();
+        return;
+    };
+
+    selected.id = block_id;
+    selected.name = registry.name_opt(block_id).unwrap_or("air").to_string();
 }
 
 fn sync_hud_hotbar_ui(
     hotbar_state: Res<HotbarSelectionState>,
     inventory: Res<PlayerInventory>,
-    registry: Res<BlockRegistry>,
+    item_registry: Res<ItemRegistry>,
+    block_registry: Res<BlockRegistry>,
     asset_server: Res<AssetServer>,
+    mut image_cache: ResMut<ImageCache>,
+    mut images: ResMut<Assets<Image>>,
     mut buttons: Query<(&CssID, &mut Button, &mut BorderColor, &mut BackgroundColor)>,
+    mut badges: Query<(&CssID, &mut Paragraph, &mut Visibility)>,
 ) {
     for (css_id, mut button, mut border, mut background) in &mut buttons {
         if let Some(slot_number) = css_id.0.strip_prefix(HUD_SLOT_PREFIX) {
@@ -167,18 +177,20 @@ fn sync_hud_hotbar_ui(
                 continue;
             };
 
-            let next_text = if slot.is_empty() {
-                String::new()
-            } else {
-                slot.count.to_string()
-            };
-            if button.text != next_text {
-                button.text = next_text;
+            if !button.text.is_empty() {
+                button.text.clear();
             }
             let next_icon = if slot.is_empty() {
                 None
             } else {
-                resolve_block_icon_path(&registry, &asset_server, slot.block_id)
+                resolve_item_icon_path(
+                    &item_registry,
+                    &block_registry,
+                    &asset_server,
+                    &mut image_cache,
+                    &mut images,
+                    slot.item_id,
+                )
             };
             if button.icon_path != next_icon {
                 button.icon_path = next_icon;
@@ -201,14 +213,70 @@ fn sync_hud_hotbar_ui(
             };
         }
     }
+
+    for (css_id, mut paragraph, mut visibility) in &mut badges {
+        let Some(slot_number) = css_id.0.strip_prefix(HUD_SLOT_BADGE_PREFIX) else {
+            continue;
+        };
+        let Ok(slot_index) = slot_number.parse::<usize>() else {
+            continue;
+        };
+        let Some(slot) = inventory.slots.get(slot_index.saturating_sub(1)) else {
+            continue;
+        };
+
+        if slot.is_empty() {
+            if !paragraph.text.is_empty() {
+                paragraph.text.clear();
+            }
+            *visibility = Visibility::Hidden;
+            continue;
+        }
+
+        let count_text = slot.count.to_string();
+        if paragraph.text != count_text {
+            paragraph.text = count_text;
+        }
+        *visibility = Visibility::Inherited;
+    }
 }
 
-fn resolve_block_icon_path(
-    registry: &BlockRegistry,
+fn resolve_item_icon_path(
+    registry: &ItemRegistry,
+    block_registry: &BlockRegistry,
     asset_server: &AssetServer,
-    block_id: u16,
+    image_cache: &mut ImageCache,
+    images: &mut Assets<Image>,
+    item_id: u16,
 ) -> Option<String> {
-    let block = registry.defs.get(block_id as usize)?;
-    let path = asset_server.get_path(block.image.id())?;
-    Some(path.path().to_string_lossy().to_string())
+    let path = registry.icon_path(asset_server, item_id)?;
+    ensure_block_icon_cached(
+        block_registry,
+        asset_server,
+        image_cache,
+        images,
+        path.as_str(),
+    );
+    Some(path)
+}
+
+/// Ensures a virtual block-icon path has a populated in-memory image cache entry.
+fn ensure_block_icon_cached(
+    block_registry: &BlockRegistry,
+    asset_server: &AssetServer,
+    image_cache: &mut ImageCache,
+    images: &mut Assets<Image>,
+    path: &str,
+) {
+    let Some(block_id) = parse_block_icon_cache_key(path) else {
+        return;
+    };
+    if image_cache.map.contains_key(path) {
+        return;
+    }
+    let Some(image) = build_block_item_icon_image(block_registry, asset_server, block_id) else {
+        return;
+    };
+    let handle = images.add(image);
+    image_cache.map.insert(path.to_string(), handle);
 }

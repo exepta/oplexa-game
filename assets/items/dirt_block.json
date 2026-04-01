@@ -1,0 +1,19 @@
+{
+  "id": "dirt_block",
+  "name": "Dirt Block",
+  "max_stack_size": -1,
+  "category": "block",
+  "block_item": true,
+  "placeable": true,
+  "block": "dirt_block",
+  "tags": ["block"],
+  "rarity": "common",
+  "render": {
+    "type": "block",
+    "block": "dirt_block",
+    "projection": "isometric"
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

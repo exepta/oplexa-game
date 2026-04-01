@@ -1,0 +1,19 @@
+{
+  "id": "glass_block",
+  "name": "Glass Block",
+  "max_stack_size": -1,
+  "category": "block",
+  "block_item": true,
+  "placeable": true,
+  "block": "glass_block",
+  "tags": ["block"],
+  "rarity": "common",
+  "render": {
+    "type": "block",
+    "block": "glass_block",
+    "projection": "isometric"
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "water_block",
+  "name": "Water Block",
+  "max_stack_size": -1,
+  "category": "block",
+  "block_item": true,
+  "placeable": true,
+  "block": "water_block",
+  "tags": ["block", "fluid"],
+  "rarity": "common",
+  "render": {
+    "type": "block",
+    "block": "water_block",
+    "projection": "isometric"
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

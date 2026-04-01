@@ -1,0 +1,19 @@
+{
+  "id": "snow_block",
+  "name": "Snow Block",
+  "max_stack_size": -1,
+  "category": "block",
+  "block_item": true,
+  "placeable": true,
+  "block": "snow_block",
+  "tags": ["block"],
+  "rarity": "common",
+  "render": {
+    "type": "block",
+    "block": "snow_block",
+    "projection": "isometric"
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}
