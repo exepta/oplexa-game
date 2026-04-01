@@ -1,0 +1,21 @@
+{
+  "id": "wood_shovel",
+  "name": "Wood Shovel",
+  "max_stack_size": 1,
+  "category": "tool",
+  "block_item": false,
+  "placeable": false,
+  "tags": ["tool", "shovel", "wood"],
+  "rarity": "common",
+  "render": {
+    "type": "flat",
+    "texture": "textures/items/wood_shovel.png"
+  },
+  "tool": {
+    "type": "shovel",
+    "level": 1
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

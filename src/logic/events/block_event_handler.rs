@@ -5,7 +5,10 @@ use crate::core::events::block::block_player_events::{
     BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
-use crate::core::inventory::items::{ItemRegistry, spawn_world_item_for_block_break};
+use crate::core::inventory::items::{
+    ItemRegistry, block_requirement_for_id, can_drop_from_block, mining_speed_multiplier,
+    spawn_world_item_for_block_break,
+};
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
 use crate::core::ui::{HotbarSelectionState, UiInteractionState};
@@ -57,6 +60,8 @@ fn block_break_handler(
     registry: Res<BlockRegistry>,
     item_registry: Res<ItemRegistry>,
     game_mode: Res<GameModeState>,
+    inventory: Res<PlayerInventory>,
+    hotbar_selection: Option<Res<HotbarSelectionState>>,
 
     mut state: ResMut<MiningState>,
     mut chunk_map: ResMut<ChunkMap>,
@@ -150,11 +155,18 @@ fn block_break_handler(
     };
 
     if restart {
+        let held_tool =
+            selected_hotbar_tool(&inventory, hotbar_selection.as_deref(), &item_registry);
+        let requirement = block_requirement_for_id(id_now, &registry);
+        let speed_multiplier = mining_speed_multiplier(requirement, held_tool);
+        let duration = (break_time_for(id_now, &registry) / speed_multiplier)
+            .clamp(MIN_BREAK_TIME, MAX_BREAK_TIME);
+
         state.target = Some(MiningTarget {
             loc: hit.block_pos,
             id: id_now,
             started_at: now,
-            duration: break_time_for(id_now, &registry),
+            duration,
         });
     }
 
@@ -175,7 +187,14 @@ fn block_break_handler(
     let lx = l.x as u8;
     let lz = l.y as u8;
     let ly = (world_loc.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
-    let drop_item_id = item_registry.item_for_block(target.id).unwrap_or(0);
+    let held_tool = selected_hotbar_tool(&inventory, hotbar_selection.as_deref(), &item_registry);
+    let requirement = block_requirement_for_id(target.id, &registry);
+    let can_drop = can_drop_from_block(requirement, held_tool);
+    let drop_item_id = if can_drop {
+        item_registry.item_for_block(target.id).unwrap_or(0)
+    } else {
+        0
+    };
     let drops_item = !registry.is_fluid(target.id) && drop_item_id != 0;
 
     break_ev.write(BlockBreakByPlayerEvent {
@@ -356,6 +375,23 @@ fn consume_from_selected_slot(
     }
 
     false
+}
+
+fn selected_hotbar_tool(
+    inventory: &PlayerInventory,
+    hotbar_selection: Option<&HotbarSelectionState>,
+    item_registry: &ItemRegistry,
+) -> Option<crate::core::inventory::items::ToolDef> {
+    let index = hotbar_selection
+        .map(|selection| selection.selected_index)
+        .unwrap_or(0);
+
+    let slot = inventory.slots.get(index)?;
+    if slot.is_empty() {
+        return None;
+    }
+
+    item_registry.tool_for_item(slot.item_id)
 }
 
 fn sync_mining_overlay(

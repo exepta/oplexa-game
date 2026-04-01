@@ -5,6 +5,7 @@ use crate::core::world::world_access_mut;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use serde::Deserialize;
+use serde::de::{self, Deserializer};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -62,6 +63,8 @@ pub struct BlockStats {
     pub hardness: f32,
     #[serde(default)]
     pub blast_resistance: f32,
+    #[serde(default, deserialize_with = "deserialize_block_level")]
+    pub level: u8,
     #[serde(default = "d_true")]
     pub opaque: bool,
     #[serde(default)]
@@ -151,6 +154,11 @@ impl BlockRegistry {
     #[inline]
     pub fn hardness(&self, id: BlockId) -> f32 {
         self.stats(id).hardness.max(0.0)
+    }
+
+    #[inline]
+    pub fn level(&self, id: BlockId) -> u8 {
+        self.stats(id).level.min(6)
     }
 
     #[inline]
@@ -720,6 +728,34 @@ struct ResolvedFaces<'a> {
 
 fn d_true() -> bool {
     true
+}
+
+fn deserialize_block_level<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum LevelRepr {
+        Num(u8),
+        Str(String),
+    }
+
+    let value = LevelRepr::deserialize(deserializer)?;
+    let parsed = match value {
+        LevelRepr::Num(num) => num,
+        LevelRepr::Str(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Ok(0);
+            }
+            let base = trimmed.split('-').next().map(str::trim).unwrap_or(trimmed);
+            base.parse::<u8>()
+                .map_err(|_| de::Error::custom("invalid block level"))?
+        }
+    };
+
+    Ok(parsed.min(6))
 }
 
 #[inline]

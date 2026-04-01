@@ -1,3 +1,6 @@
+use crate::core::inventory::items::tools::{
+    ToolDef, ToolLevel, ToolType, infer_tool_from_item_key,
+};
 use crate::core::inventory::items::types::{
     DEFAULT_ITEM_STACK_SIZE, EMPTY_ITEM_ID, ItemDef, ItemId, ItemWorldDropConfig,
 };
@@ -87,6 +90,12 @@ impl ItemRegistry {
             .unwrap_or(false)
     }
 
+    /// Returns tool metadata for an item id, if this item is a tool.
+    #[inline]
+    pub fn tool_for_item(&self, item_id: ItemId) -> Option<ToolDef> {
+        self.def_opt(item_id).and_then(|item| item.tool)
+    }
+
     /// Resolves the item id that should drop for a given block id.
     #[inline]
     pub fn item_for_block(&self, block_id: BlockId) -> Option<ItemId> {
@@ -169,6 +178,7 @@ impl ItemRegistry {
             placeable: false,
             tags: Vec::new(),
             rarity: "common".to_string(),
+            tool: None,
             world_drop: ItemWorldDropConfig::default(),
         });
         key_to_id.insert("empty".to_string(), EMPTY_ITEM_ID);
@@ -199,6 +209,7 @@ impl ItemRegistry {
         };
         let render_kind = resolve_item_render_kind(&item_json);
         let texture_path = resolve_item_texture_path(&item_json, mapped_block, block_registry);
+        let tool = resolve_item_tool_def(&item_json);
         let (image, material) = match render_kind {
             ItemRenderKind::Flat => {
                 let image: Handle<Image> = asset_server.load(texture_path.clone());
@@ -234,6 +245,7 @@ impl ItemRegistry {
             placeable: item_json.placeable,
             tags: item_json.tags,
             rarity: item_json.rarity,
+            tool,
             world_drop: ItemWorldDropConfig {
                 pickupable: item_json.world_drop.pickupable,
             },
@@ -254,6 +266,7 @@ impl ItemRegistry {
             None
         };
         let texture_path = resolve_item_texture_path_headless(&item_json, mapped_block);
+        let tool = resolve_item_tool_def(&item_json);
 
         let item_id = self.push_item(ItemDef {
             key: item_json.id.clone(),
@@ -271,6 +284,7 @@ impl ItemRegistry {
             placeable: item_json.placeable,
             tags: item_json.tags,
             rarity: item_json.rarity,
+            tool,
             world_drop: ItemWorldDropConfig {
                 pickupable: item_json.world_drop.pickupable,
             },
@@ -306,6 +320,7 @@ impl ItemRegistry {
                 placeable: true,
                 tags: vec!["block".to_string()],
                 rarity: "common".to_string(),
+                tool: None,
                 world_drop: ItemWorldDropConfig { pickupable: true },
             });
             self.bind_block_item(block_id, item_id);
@@ -333,6 +348,7 @@ impl ItemRegistry {
                 placeable: true,
                 tags: vec!["block".to_string()],
                 rarity: "common".to_string(),
+                tool: None,
                 world_drop: ItemWorldDropConfig { pickupable: true },
             });
             self.bind_block_item(block_id, item_id);
@@ -385,6 +401,8 @@ struct ItemJson {
     #[serde(default = "default_rarity")]
     rarity: String,
     #[serde(default)]
+    tool: ItemToolJson,
+    #[serde(default)]
     world_drop: ItemWorldDropJson,
 }
 
@@ -404,6 +422,14 @@ struct ItemRenderJson {
     block: Option<String>,
     #[serde(default)]
     projection: String,
+}
+
+#[derive(Deserialize, Default)]
+struct ItemToolJson {
+    #[serde(default, rename = "type")]
+    kind: String,
+    #[serde(default = "default_json_tool_level")]
+    level: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -457,6 +483,20 @@ fn resolve_mapped_block_id(
 
     guess_block_name_from_item_key(&item_json.id)
         .and_then(|name| block_registry.id_opt(name.as_str()))
+}
+
+fn resolve_item_tool_def(item_json: &ItemJson) -> Option<ToolDef> {
+    let kind = item_json.tool.kind.trim();
+    if !kind.is_empty() {
+        if let Ok(tool_type) = kind.parse::<ToolType>() {
+            return Some(ToolDef::new(
+                tool_type,
+                ToolLevel::from_u8_clamped(item_json.tool.level),
+            ));
+        }
+    }
+
+    infer_tool_from_item_key(item_json.id.as_str())
 }
 
 /// Resolves the UI texture path for one item definition in graphics mode.
@@ -645,6 +685,10 @@ fn default_rarity() -> String {
 
 fn default_json_stack_size() -> i32 {
     DEFAULT_ITEM_STACK_SIZE as i32
+}
+
+fn default_json_tool_level() -> u8 {
+    1
 }
 
 /// Builds an in-memory icon image for one block item using block atlas UV faces.
