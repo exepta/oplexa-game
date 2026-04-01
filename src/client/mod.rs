@@ -7,16 +7,34 @@ use crate::core::events::block::block_player_events::{
     BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
-use crate::core::events::ui_events::{ConnectToServerRequest, DropItemRequest};
-use crate::core::multiplayer::MultiplayerConnectionState;
-use crate::core::states::states::AppState;
+use crate::core::events::ui_events::{
+    ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest, OpenToLanRequest,
+    StopLanHostRequest,
+};
+use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
+use crate::core::states::states::{AppState, BeforeUiState, LoadingStates};
 use crate::core::world::block::{
     BlockRegistry, VOXEL_SIZE, build_block_cube_mesh, get_block_world,
 };
-use crate::core::world::chunk::ChunkMap;
-use crate::core::world::chunk_dimension::{Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local};
-use crate::core::world::fluid::FluidMap;
+use crate::core::world::chunk::{ChunkMap, LoadCenter};
+use crate::core::world::chunk_dimension::{
+    SEC_COUNT, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local,
+};
+use crate::core::world::fluid::{FluidMap, WaterMeshIndex};
+use crate::core::world::save::RegionCache;
 use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
+use crate::generator::chunk::chunk_utils::safe_despawn_entity;
+use api::core::network::{
+    config::{DedicatedServerSettings, NetworkSettings},
+    discovery::{LanDiscoveryClient, LanServerInfo},
+    protocols::{
+        Auth, ClientBlockBreak, ClientBlockPlace, ClientChunkInterest, ClientDropItem,
+        ClientDropPickup, ClientKeepAlive, OrderedReliable, PlayerJoined, PlayerLeft, PlayerMove,
+        PlayerSnapshot, ProtocolPlugin, ServerBlockBreak, ServerBlockPlace, ServerChunkData,
+        ServerDropPicked, ServerDropSpawn, ServerWelcome, UnorderedReliable, UnorderedUnreliable,
+    },
+};
+use bevy::ecs::event::EntityTrigger;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
 use bevy::log::{BoxedLayer, Level, LogPlugin};
 use bevy::math::primitives::Capsule3d;
@@ -31,40 +49,88 @@ use bevy_inspector_egui::bevy_egui::EguiPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use chrono::Utc;
 use dotenvy::dotenv;
-use multiplayer::{
-    config::NetworkSettings,
-    discovery::{LanDiscoveryClient, LanServerInfo},
-    protocols::{
-        Auth, ClientBlockBreak, ClientBlockPlace, ClientDropItem, ClientDropPickup, PlayerJoined,
-        PlayerLeft, PlayerMove, PlayerSnapshot, ServerBlockBreak, ServerBlockPlace,
-        ServerDropPicked, ServerDropSpawn, ServerWelcome, protocol,
-    },
-    world::{NetworkEntity, NetworkWorld},
+use lightyear::prelude::client::{
+    ClientConfig, ClientPlugins, Connect, Connected, Disconnect, Disconnected, NetcodeClient,
+    NetcodeConfig, WebSocketClientIo, WebSocketScheme,
 };
-use naia_client::{
-    Client as NaiaClient, ClientConfig, ConnectEvent, DisconnectEvent, ErrorEvent, MessageEvent,
-    RejectEvent,
-    shared::default_channels::{
-        OrderedReliableChannel, UnorderedReliableChannel, UnorderedUnreliableChannel,
-    },
-    transport::udp,
-};
-use std::collections::HashMap;
+use lightyear::prelude::{Authentication, MessageReceiver, MessageSender, PeerAddr};
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tracing_subscriber::Layer;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
-
-type NetworkClient = NaiaClient<NetworkEntity>;
 
 #[derive(Component)]
 struct RemotePlayerAvatar {
     #[allow(dead_code)]
     player_id: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RemotePlayerSnapshotPoint {
+    at_secs: f32,
+    translation: Vec3,
+    yaw: f32,
+}
+
+#[derive(Debug, Default)]
+struct RemotePlayerSmoothing {
+    snapshots: VecDeque<RemotePlayerSnapshotPoint>,
+}
+
+impl RemotePlayerSmoothing {
+    fn with_initial_snapshot(at_secs: f32, translation: Vec3, yaw: f32) -> Self {
+        let mut snapshots = VecDeque::with_capacity(REMOTE_PLAYER_MAX_SNAPSHOT_POINTS);
+        snapshots.push_back(RemotePlayerSnapshotPoint {
+            at_secs,
+            translation,
+            yaw,
+        });
+        Self { snapshots }
+    }
+
+    fn reset_snapshot(&mut self, at_secs: f32, translation: Vec3, yaw: f32) {
+        self.snapshots.clear();
+        self.snapshots.push_back(RemotePlayerSnapshotPoint {
+            at_secs,
+            translation,
+            yaw,
+        });
+    }
+
+    fn push_snapshot(&mut self, at_secs: f32, translation: Vec3, yaw: f32) {
+        let next = RemotePlayerSnapshotPoint {
+            at_secs,
+            translation,
+            yaw,
+        };
+
+        if let Some(last) = self.snapshots.back_mut() {
+            if at_secs <= last.at_secs {
+                if (last.at_secs - at_secs).abs() <= 0.0001 {
+                    *last = next;
+                }
+                return;
+            }
+
+            if last.translation.distance_squared(translation) <= 0.000001
+                && angle_abs_diff(last.yaw, yaw) <= 0.0001
+            {
+                last.at_secs = at_secs;
+                return;
+            }
+        }
+
+        self.snapshots.push_back(next);
+        while self.snapshots.len() > REMOTE_PLAYER_MAX_SNAPSHOT_POINTS {
+            self.snapshots.pop_front();
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -91,6 +157,82 @@ struct MultiplayerDropIndex {
     entities: HashMap<u64, Entity>,
 }
 
+#[derive(Resource, Default)]
+struct RemoteChunkStreamState {
+    last_requested_center: Option<IVec2>,
+    last_requested_radius: Option<i32>,
+}
+
+#[derive(Resource, Default)]
+struct BlockIdRemap {
+    server_to_local: Vec<u16>,
+    local_to_server: Vec<u16>,
+}
+
+impl BlockIdRemap {
+    fn reset(&mut self) {
+        self.server_to_local.clear();
+        self.local_to_server.clear();
+    }
+
+    fn configure_from_server_palette(&mut self, palette: &[String], registry: &BlockRegistry) {
+        self.server_to_local = vec![0; palette.len()];
+        self.local_to_server = vec![0; registry.defs.len()];
+        if !self.local_to_server.is_empty() {
+            self.local_to_server[0] = 0;
+        }
+
+        let mut unknown_names = 0usize;
+
+        for (server_id, block_name) in palette.iter().enumerate() {
+            if server_id > u16::MAX as usize {
+                break;
+            }
+
+            let server_id_u16 = server_id as u16;
+            let local_id = registry.id_opt(block_name).unwrap_or(0);
+            self.server_to_local[server_id] = local_id;
+
+            if let Some(slot) = self.local_to_server.get_mut(local_id as usize)
+                && (*slot == 0 || local_id == 0)
+            {
+                *slot = server_id_u16;
+            }
+
+            if local_id == 0 && !(server_id == 0 && block_name == "air") {
+                unknown_names += 1;
+            }
+        }
+
+        if unknown_names > 0 {
+            warn!(
+                "Server announced {} unknown block name(s); unknown IDs will map to air.",
+                unknown_names
+            );
+        }
+    }
+
+    fn to_local(&self, server_id: u16) -> u16 {
+        if self.server_to_local.is_empty() {
+            return server_id;
+        }
+        self.server_to_local
+            .get(server_id as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn to_server(&self, local_id: u16) -> u16 {
+        if self.local_to_server.is_empty() {
+            return local_id;
+        }
+        self.local_to_server
+            .get(local_id as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
 const MULTIPLAYER_DROP_ITEM_SIZE: f32 = 0.32;
 const MULTIPLAYER_DROP_PICKUP_RADIUS: f32 = 1.35;
 const MULTIPLAYER_DROP_ATTRACT_RADIUS: f32 = 3.5;
@@ -103,74 +245,127 @@ const MULTIPLAYER_DROP_VISUAL_SCALE_X: f32 = 0.85;
 const MULTIPLAYER_DROP_VISUAL_SCALE_Y: f32 = 0.72;
 const MULTIPLAYER_DROP_VISUAL_SCALE_Z: f32 = 1.14;
 const MULTIPLAYER_DROP_PICKUP_DELAY_SECS: f32 = 0.5;
+const REMOTE_PLAYER_INTERP_BACK_TIME_SECS: f32 = 0.10;
+const REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS: f32 = 0.08;
+const REMOTE_PLAYER_MAX_SNAPSHOT_POINTS: usize = 24;
+const REMOTE_PLAYER_SMOOTHING_HZ: f32 = 18.0;
 
+/// Parses a session URL like "http://127.0.0.1:14191" into a SocketAddr.
+fn parse_session_url(url: &str) -> Option<SocketAddr> {
+    let stripped = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    stripped.parse().ok()
+}
+
+fn remap_server_block_id(
+    block_remap: &BlockIdRemap,
+    registry: &BlockRegistry,
+    server_id: u16,
+) -> u16 {
+    let local_id = block_remap.to_local(server_id);
+    if (local_id as usize) < registry.defs.len() {
+        local_id
+    } else {
+        0
+    }
+}
+
+#[derive(Resource)]
 struct MultiplayerClientRuntime {
     enabled: bool,
     player_name: String,
     session_url: String,
     auto_connect_lan: bool,
-    client: Option<NetworkClient>,
-    world: NetworkWorld,
+    connection_entity: Option<Entity>,
     local_player_id: Option<u64>,
     remote_players: HashMap<u64, Entity>,
+    remote_player_smoothing: HashMap<u64, RemotePlayerSmoothing>,
     next_local_drop_seq: u32,
+    keepalive_timer: Timer,
     send_timer: Timer,
 }
 
 impl MultiplayerClientRuntime {
     fn new(settings: &NetworkSettings) -> Self {
         let auto_connect_lan = settings.client.session_url.eq_ignore_ascii_case("lan:auto");
-        let runtime = Self {
+        Self {
             enabled: settings.client.enabled,
             player_name: settings.client.player_name.clone(),
             session_url: settings.client.session_url.clone(),
             auto_connect_lan,
-            client: None,
-            world: NetworkWorld::default(),
+            connection_entity: None,
             local_player_id: None,
             remote_players: HashMap::new(),
+            remote_player_smoothing: HashMap::new(),
             next_local_drop_seq: 1,
+            keepalive_timer: Timer::from_seconds(2.0, TimerMode::Repeating),
             send_timer: Timer::from_seconds(
                 Duration::from_millis(settings.client.transform_send_interval_ms).as_secs_f32(),
                 TimerMode::Repeating,
             ),
-        };
+        }
+    }
+}
 
-        runtime
+fn do_connect(
+    runtime: &mut MultiplayerClientRuntime,
+    session_url: String,
+    commands: &mut Commands,
+) {
+    if !runtime.enabled {
+        return;
     }
 
-    fn connect(&mut self, session_url: String) {
-        if !self.enabled {
+    let Some(server_addr) = parse_session_url(&session_url) else {
+        warn!("Cannot parse session URL: {}", session_url);
+        return;
+    };
+
+    let client_id = rand::random::<u64>();
+    let auth = Authentication::Manual {
+        server_addr,
+        client_id,
+        private_key: [0u8; 32],
+        protocol_id: 0,
+    };
+
+    let netcode_client = match NetcodeClient::new(auth, NetcodeConfig::default()) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to create netcode client: {:?}", e);
             return;
         }
+    };
 
-        if self
-            .client
-            .as_ref()
-            .is_some_and(|client| !client.connection_status().is_disconnected())
-        {
-            return;
-        }
+    let entity = commands
+        .spawn((
+            netcode_client,
+            PeerAddr(server_addr),
+            WebSocketClientIo::from_addr(
+                ClientConfig::builder().with_no_encryption(),
+                WebSocketScheme::Plain,
+            ),
+        ))
+        .id();
 
-        let protocol = protocol();
-        let socket = udp::Socket::new(&session_url, protocol.socket.link_condition.clone());
-        let mut client = NetworkClient::new(ClientConfig::default(), protocol);
-        client.auth(Auth::new(self.player_name.clone()));
-        client.connect(socket);
+    commands.trigger_with(Connect { entity }, EntityTrigger);
 
-        info!("Connecting to multiplayer server at {}", session_url);
-        self.client = Some(client);
-        self.session_url = session_url;
-        self.local_player_id = None;
-        self.remote_players.clear();
-        self.next_local_drop_seq = 1;
-    }
+    info!("Connecting to multiplayer server at {}", session_url);
 
-    fn allocate_local_drop_id(&mut self) -> Option<u64> {
-        let player_id = self.local_player_id?;
-        let drop_id = (player_id << 32) | (self.next_local_drop_seq as u64);
-        self.next_local_drop_seq = self.next_local_drop_seq.wrapping_add(1).max(1);
-        Some(drop_id)
+    runtime.connection_entity = Some(entity);
+    runtime.session_url = session_url;
+    runtime.local_player_id = None;
+    runtime.remote_players.clear();
+    runtime.remote_player_smoothing.clear();
+    runtime.next_local_drop_seq = 1;
+    runtime.keepalive_timer.reset();
+}
+
+fn do_disconnect(runtime: &mut MultiplayerClientRuntime, commands: &mut Commands) {
+    if let Some(entity) = runtime.connection_entity.take() {
+        commands.trigger_with(Disconnect { entity }, EntityTrigger);
+        commands.entity(entity).despawn();
     }
 }
 
@@ -194,6 +389,124 @@ impl LanDiscoveryRuntime {
             refresh_timer: Timer::from_seconds(3.0, TimerMode::Repeating),
         }
     }
+}
+
+struct LocalLanHost {
+    child: Option<Child>,
+    session_url: Option<String>,
+    connect_timer: Option<Timer>,
+}
+
+impl Default for LocalLanHost {
+    fn default() -> Self {
+        Self {
+            child: None,
+            session_url: None,
+            connect_timer: None,
+        }
+    }
+}
+
+impl LocalLanHost {
+    fn refresh(&mut self) {
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                self.child = None;
+                self.session_url = None;
+                self.connect_timer = None;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                warn!("Failed to poll LAN host process: {}", error);
+                self.child = None;
+                self.session_url = None;
+                self.connect_timer = None;
+            }
+        }
+    }
+
+    fn stop(&mut self) {
+        self.refresh();
+        let Some(mut child) = self.child.take() else {
+            self.session_url = None;
+            self.connect_timer = None;
+            return;
+        };
+
+        if let Err(error) = child.kill() {
+            warn!("Failed to stop LAN host process: {}", error);
+        }
+        let _ = child.wait();
+        self.session_url = None;
+        self.connect_timer = None;
+    }
+}
+
+fn lan_server_binary_path() -> Option<PathBuf> {
+    let current = env::current_exe().ok()?;
+    let exe_name = format!("oplexa-game-server{}", env::consts::EXE_SUFFIX);
+    let direct = current.with_file_name(&exe_name);
+    if direct.exists() {
+        return Some(direct);
+    }
+
+    let parent = current.parent()?;
+    let sibling = parent.join(&exe_name);
+    if sibling.exists() {
+        return Some(sibling);
+    }
+
+    let workspace_debug = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("debug")
+        .join(&exe_name);
+    if workspace_debug.exists() {
+        return Some(workspace_debug);
+    }
+
+    None
+}
+
+fn spawn_lan_host_process() -> std::io::Result<Child> {
+    let Some(binary) = lan_server_binary_path() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "oplexa-game-server binary not found",
+        ));
+    };
+
+    Command::new(binary)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+}
+
+fn start_streamed_multiplayer_world_load(
+    spawn_translation: [f32; 3],
+    region_cache: &mut RegionCache,
+    chunk_map: &mut ChunkMap,
+    fluid_map: &mut FluidMap,
+    water_mesh_index: &mut WaterMeshIndex,
+    commands: &mut Commands,
+    next_state: &mut NextState<AppState>,
+) {
+    let (spawn_chunk, _) = world_to_chunk_xz(
+        spawn_translation[0].floor() as i32,
+        spawn_translation[2].floor() as i32,
+    );
+    region_cache.0.clear();
+    chunk_map.chunks.clear();
+    fluid_map.0.clear();
+    water_mesh_index.0.clear();
+    commands.insert_resource(LoadCenter {
+        world_xz: spawn_chunk,
+    });
+    next_state.set(AppState::Loading(LoadingStates::BaseGen));
 }
 
 pub fn run() {
@@ -263,8 +576,15 @@ fn init_bevy_app(app: &mut App, config: &GlobalConfig, multiplayer_settings: Net
 
     register_world_inspector_types(app);
 
-    app.insert_non_send_resource(MultiplayerClientRuntime::new(&multiplayer_settings))
+    app.add_plugins(ClientPlugins {
+        tick_duration: Duration::from_millis(50),
+    })
+    .add_plugins(ProtocolPlugin);
+
+    app.insert_resource(MultiplayerClientRuntime::new(&multiplayer_settings))
         .insert_non_send_resource(LanDiscoveryRuntime::new(&multiplayer_settings))
+        .insert_non_send_resource(LocalLanHost::default())
+        .init_resource::<RemoteChunkStreamState>()
         .init_state::<AppState>()
         .add_plugins(EguiPlugin::default())
         .add_plugins(WorldInspectorPlugin::default().run_if(check_world_inspector_state))
@@ -334,10 +654,10 @@ fn log_file_appender(_app: &mut App) -> Option<BoxedLayer> {
         .append(true)
         .open(log_path)
         .ok()?;
-    let file_arc = Arc::new(Mutex::new(file));
+    let file_arc = std::sync::Arc::new(std::sync::Mutex::new(file));
 
     let _shutdown_logger = StartLogText {
-        file: Arc::clone(&file_arc),
+        file: std::sync::Arc::clone(&file_arc),
     };
 
     let writer = BoxMakeWriter::new(move || {
@@ -363,7 +683,7 @@ fn load_log_env_filter() -> String {
 }
 
 struct StartLogText {
-    file: Arc<Mutex<File>>,
+    file: std::sync::Arc<std::sync::Mutex<File>>,
 }
 
 impl Drop for StartLogText {
@@ -570,21 +890,35 @@ struct MultiplayerClientPlugin;
 impl Plugin for MultiplayerClientPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MultiplayerDropIndex>()
+            .init_resource::<RemoteChunkStreamState>()
+            .init_resource::<BlockIdRemap>()
             .add_systems(Startup, setup_remote_player_visuals)
+            .add_observer(on_server_connected)
+            .add_observer(on_server_disconnected)
             .add_systems(
                 Update,
                 (
                     poll_lan_servers,
                     connect_to_server_requested,
+                    disconnect_from_server_requested,
+                    open_to_lan_requested,
+                    finish_open_to_lan_connect,
+                    stop_lan_host_requested,
                     send_local_block_break_events,
                     send_local_block_place_events,
                     send_local_item_drop_requests,
-                    receive_multiplayer_messages,
+                    send_client_keepalive,
+                    receive_player_messages,
+                    receive_world_messages,
+                    receive_drop_messages,
+                    update_connection_state,
                     simulate_multiplayer_drop_items,
                     send_local_drop_pickup_requests,
+                    send_chunk_interest_updates,
                     send_local_player_pose,
                 ),
-            );
+            )
+            .add_systems(Update, smooth_remote_players);
     }
 }
 
@@ -601,6 +935,85 @@ fn setup_remote_player_visuals(
             ..default()
         }),
     });
+}
+
+/// Observer: fires when the netcode handshake completes and `Connected` is added to our entity.
+fn on_server_connected(
+    trigger: On<Add, Connected>,
+    runtime: Res<MultiplayerClientRuntime>,
+    mut q_auth: Query<&mut MessageSender<Auth>>,
+    mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
+) {
+    if Some(trigger.entity) != runtime.connection_entity {
+        return;
+    }
+
+    multiplayer_connection.phase = MultiplayerConnectionPhase::Connecting;
+    multiplayer_connection.last_error = None;
+
+    if let Ok(mut sender) = q_auth.get_mut(trigger.entity) {
+        sender.send::<UnorderedReliable>(Auth::new(runtime.player_name.clone()));
+        info!(
+            "Connected to server, sent Auth as '{}'",
+            runtime.player_name
+        );
+    }
+}
+
+/// Observer: fires when the connection drops and `Disconnected` is added to our entity.
+fn on_server_disconnected(
+    trigger: On<Add, Disconnected>,
+    q_disconnected: Query<&Disconnected>,
+    app_state: Res<State<AppState>>,
+    mut runtime: ResMut<MultiplayerClientRuntime>,
+    mut block_remap: ResMut<BlockIdRemap>,
+    mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
+    mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut drops: ResMut<MultiplayerDropIndex>,
+    mut next_state: ResMut<NextState<AppState>>,
+    mut chunk_map: ResMut<ChunkMap>,
+    mut commands: Commands,
+) {
+    if Some(trigger.entity) != runtime.connection_entity {
+        return;
+    }
+
+    // NetcodeClient has #[require(Disconnected)], so Disconnected is added on spawn
+    // with reason: None. Real disconnects always have reason: Some(...). Skip the
+    // initial spawn-time Disconnected so we don't immediately despawn the entity.
+    if let Ok(disconnected) = q_disconnected.get(trigger.entity) {
+        if disconnected.reason.is_none() {
+            return;
+        }
+    }
+
+    for entity in runtime.remote_players.drain().map(|(_, e)| e) {
+        safe_despawn_entity(&mut commands, entity);
+    }
+    runtime.remote_player_smoothing.clear();
+    clear_multiplayer_drops(&mut commands, &mut drops);
+    runtime.local_player_id = None;
+    block_remap.reset();
+    chunk_stream.last_requested_center = None;
+    chunk_stream.last_requested_radius = None;
+
+    // If we disconnect while the world is loading or in-game, reset to the menu.
+    // Without this, check_base_gen_world_ready would see uses_local_save_data()=true
+    // (session URL cleared below) and send the client to WaterGen/local generation,
+    // which crashes because no local world resources are set up.
+    match app_state.get() {
+        AppState::Loading(_) | AppState::InGame(_) | AppState::PostLoad => {
+            chunk_map.chunks.clear();
+            next_state.set(AppState::Screen(BeforeUiState::MultiPlayer));
+        }
+        _ => {}
+    }
+
+    multiplayer_connection.clear_session();
+    multiplayer_connection.last_error = Some("Disconnected from multiplayer server.".to_string());
+
+    commands.entity(trigger.entity).despawn();
+    runtime.connection_entity = None;
 }
 
 fn poll_lan_servers(time: Res<Time>, mut discovery: NonSendMut<LanDiscoveryRuntime>) {
@@ -647,82 +1060,289 @@ fn poll_lan_servers(time: Res<Time>, mut discovery: NonSendMut<LanDiscoveryRunti
 
 fn connect_to_server_requested(
     mut connect_requests: MessageReader<ConnectToServerRequest>,
-    discovery: NonSend<LanDiscoveryRuntime>,
-    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+    mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
+    mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut block_remap: ResMut<BlockIdRemap>,
+    q_active: Query<
+        (),
+        Or<(
+            With<Connected>,
+            With<lightyear::prelude::client::Connecting>,
+        )>,
+    >,
+    mut runtime: ResMut<MultiplayerClientRuntime>,
+    mut commands: Commands,
 ) {
-    if connect_requests.read().next().is_none() {
+    // Drain all pending requests and use only the last one. Processing multiple
+    // requests per frame would spawn an entity, immediately despawn it (because
+    // the deferred spawn hasn't been applied yet and the q_active check fails),
+    // then spawn another — leaving dangling deferred hook commands that target
+    // the already-despawned entity, which causes a panic.
+    let request = match connect_requests.read().last() {
+        Some(r) => r.clone(),
+        None => return,
+    };
+
+    let session_url = request.session_url.trim();
+    if session_url.is_empty() {
+        warn!("Connect request ignored because no session URL was provided.");
         return;
     }
 
-    if runtime.session_url.eq_ignore_ascii_case("lan:auto") {
-        if let Some(server) = discovery.known_servers.first() {
-            runtime.connect(server.session_url.clone());
-            runtime.auto_connect_lan = false;
-        } else {
-            warn!("No LAN server discovered yet. Connect request ignored.");
+    // Don't reconnect if already connected or connecting
+    if let Some(entity) = runtime.connection_entity {
+        if q_active.get(entity).is_ok() {
+            return;
         }
+        // Existing disconnected entity – clean it up first
+        commands.entity(entity).despawn();
+        runtime.connection_entity = None;
+    }
+
+    block_remap.reset();
+    do_connect(&mut runtime, session_url.to_string(), &mut commands);
+    runtime.auto_connect_lan = false;
+    multiplayer_connection.connected = false;
+    multiplayer_connection.phase = MultiplayerConnectionPhase::Connecting;
+    multiplayer_connection.active_session_url = Some(session_url.to_string());
+    multiplayer_connection.server_name = if request.server_name.trim().is_empty() {
+        None
+    } else {
+        Some(request.server_name.trim().to_string())
+    };
+    multiplayer_connection.world_name = None;
+    multiplayer_connection.world_seed = None;
+    multiplayer_connection.spawn_translation = None;
+    multiplayer_connection.last_error = None;
+    chunk_stream.last_requested_center = None;
+    chunk_stream.last_requested_radius = None;
+}
+
+fn disconnect_from_server_requested(
+    mut disconnect_requests: MessageReader<DisconnectFromServerRequest>,
+    mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
+    mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut block_remap: ResMut<BlockIdRemap>,
+    mut runtime: ResMut<MultiplayerClientRuntime>,
+    mut commands: Commands,
+) {
+    if disconnect_requests.read().next().is_none() {
         return;
     }
 
-    let session_url = runtime.session_url.clone();
-    runtime.connect(session_url);
+    do_disconnect(&mut runtime, &mut commands);
+    block_remap.reset();
+    multiplayer_connection.clear_session();
+    chunk_stream.last_requested_center = None;
+    chunk_stream.last_requested_radius = None;
+}
+
+fn open_to_lan_requested(
+    mut requests: MessageReader<OpenToLanRequest>,
+    q_active: Query<
+        (),
+        Or<(
+            With<Connected>,
+            With<lightyear::prelude::client::Connecting>,
+        )>,
+    >,
+    mut runtime: ResMut<MultiplayerClientRuntime>,
+    mut local_host: NonSendMut<LocalLanHost>,
+) {
+    if requests.read().next().is_none() {
+        return;
+    }
+
+    local_host.refresh();
+
+    if let Some(entity) = runtime.connection_entity {
+        if q_active.get(entity).is_ok() {
+            warn!("Open to LAN ignored because the client is already connected.");
+            return;
+        }
+    }
+
+    let settings = DedicatedServerSettings::load_or_create("server.settings.toml");
+    let session_url = settings.session_url();
+
+    if local_host.child.is_none() {
+        match spawn_lan_host_process() {
+            Ok(child) => {
+                info!("Started LAN host at {}", session_url);
+                local_host.child = Some(child);
+            }
+            Err(error) => {
+                warn!("Failed to start LAN host: {}", error);
+                return;
+            }
+        }
+    }
+
+    local_host.session_url = Some(session_url.clone());
+    local_host.connect_timer = Some(Timer::from_seconds(0.75, TimerMode::Once));
     runtime.auto_connect_lan = false;
 }
 
-fn receive_multiplayer_messages(
+fn finish_open_to_lan_connect(
+    time: Res<Time>,
+    mut runtime: ResMut<MultiplayerClientRuntime>,
+    mut local_host: NonSendMut<LocalLanHost>,
+    mut commands: Commands,
+) {
+    local_host.refresh();
+
+    let Some(timer) = local_host.connect_timer.as_mut() else {
+        return;
+    };
+    timer.tick(time.delta());
+    if !timer.is_finished() {
+        return;
+    }
+
+    let Some(session_url) = local_host.session_url.clone() else {
+        local_host.connect_timer = None;
+        return;
+    };
+
+    do_connect(&mut runtime, session_url, &mut commands);
+    local_host.connect_timer = None;
+}
+
+fn stop_lan_host_requested(
+    mut requests: MessageReader<StopLanHostRequest>,
+    mut local_host: NonSendMut<LocalLanHost>,
+) {
+    if requests.read().next().is_none() {
+        return;
+    }
+
+    local_host.stop();
+}
+
+/// Polls connection state and updates `MultiplayerConnectionState`.
+fn update_connection_state(
+    runtime: Res<MultiplayerClientRuntime>,
+    q_connected: Query<Has<Connected>>,
+    mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
+) {
+    let Some(entity) = runtime.connection_entity else {
+        return;
+    };
+
+    let is_connected = q_connected.get(entity).unwrap_or(false);
+    multiplayer_connection.connected = is_connected && runtime.local_player_id.is_some();
+    multiplayer_connection.phase = if multiplayer_connection.connected {
+        MultiplayerConnectionPhase::Idle
+    } else if is_connected {
+        MultiplayerConnectionPhase::Connecting
+    } else {
+        MultiplayerConnectionPhase::Idle
+    };
+}
+
+/// Handles ServerWelcome, PlayerJoined, PlayerLeft, PlayerSnapshot messages.
+#[allow(clippy::too_many_arguments)]
+fn receive_player_messages(
     mut commands: Commands,
     time: Res<Time>,
     visuals: Res<RemotePlayerVisuals>,
     registry: Option<Res<BlockRegistry>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut inventory: ResMut<PlayerInventory>,
+    mut region_cache: ResMut<RegionCache>,
     mut chunk_map: ResMut<ChunkMap>,
     mut fluids: ResMut<FluidMap>,
-    mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
-    mut drops: ResMut<MultiplayerDropIndex>,
+    mut water_mesh_index: ResMut<WaterMeshIndex>,
+    mut next_state: ResMut<NextState<AppState>>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
-    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+    mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut block_remap: ResMut<BlockIdRemap>,
+    mut runtime: ResMut<MultiplayerClientRuntime>,
+    mut q: Query<(
+        &mut MessageReceiver<ServerWelcome>,
+        &mut MessageReceiver<PlayerJoined>,
+        &mut MessageReceiver<PlayerLeft>,
+        &mut MessageReceiver<PlayerSnapshot>,
+    )>,
 ) {
-    let Some(mut client) = runtime.client.take() else {
-        multiplayer_connection.connected = false;
+    let Some(entity) = runtime.connection_entity else {
         return;
     };
 
-    if client.connection_status().is_disconnected() {
-        multiplayer_connection.connected = false;
-        clear_multiplayer_drops(&mut commands, &mut drops);
-        runtime.client = Some(client);
+    let Ok((mut recv_welcome, mut recv_joined, mut recv_left, mut recv_snapshot)) =
+        q.get_mut(entity)
+    else {
         return;
-    }
+    };
 
-    let mut events = client.receive(runtime.world.proxy_mut());
+    let now = time.elapsed_secs();
 
-    for server_addr in events.read::<ConnectEvent>() {
-        info!("Connected to multiplayer server at {}", server_addr);
-    }
-
-    for server_addr in events.read::<RejectEvent>() {
-        warn!("Connection rejected by server {}", server_addr);
-    }
-
-    let mut disconnect_received = false;
-    for server_addr in events.read::<DisconnectEvent>() {
-        disconnect_received = true;
-        warn!("Disconnected from multiplayer server {}", server_addr);
-    }
-
-    for message in events.read::<MessageEvent<UnorderedReliableChannel, ServerWelcome>>() {
+    for message in recv_welcome.receive() {
         runtime.local_player_id = Some(message.player_id);
-        if let Some(entity) = runtime.remote_players.remove(&message.player_id) {
-            commands.entity(entity).despawn();
+        if let Some(existing) = runtime.remote_players.remove(&message.player_id) {
+            safe_despawn_entity(&mut commands, existing);
         }
+
+        if let Some(registry) = registry.as_ref() {
+            block_remap.configure_from_server_palette(&message.block_palette, registry);
+        } else {
+            block_remap.reset();
+        }
+
         info!(
             "Server '{}' accepted player id {}",
             message.server_name, message.player_id
         );
+        multiplayer_connection.server_name = Some(message.server_name.clone());
+        multiplayer_connection.world_name = Some(message.world_name.clone());
+        multiplayer_connection.world_seed = Some(message.world_seed);
+        multiplayer_connection.last_error = None;
+        let spawn_translation = message.spawn_translation;
+        start_streamed_multiplayer_world_load(
+            spawn_translation,
+            &mut region_cache,
+            &mut chunk_map,
+            &mut fluids,
+            &mut water_mesh_index,
+            &mut commands,
+            &mut next_state,
+        );
+        multiplayer_connection.spawn_translation = Some(spawn_translation);
+        chunk_stream.last_requested_center = None;
+        chunk_stream.last_requested_radius = None;
     }
 
-    for message in events.read::<MessageEvent<UnorderedReliableChannel, PlayerJoined>>() {
+    for message in recv_joined.receive() {
+        if Some(message.player_id) == runtime.local_player_id {
+            continue;
+        }
+
+        let translation = multiplayer_connection
+            .spawn_translation
+            .map(Vec3::from_array)
+            .unwrap_or(Vec3::new(0.0, 180.0, 0.0));
+        ensure_remote_player(
+            &mut commands,
+            &visuals,
+            &mut runtime.remote_players,
+            message.player_id,
+            translation,
+            0.0,
+        );
+
+        runtime
+            .remote_player_smoothing
+            .entry(message.player_id)
+            .or_default()
+            .reset_snapshot(now, translation, 0.0);
+    }
+
+    for message in recv_left.receive() {
+        runtime.remote_player_smoothing.remove(&message.player_id);
+        if let Some(ent) = runtime.remote_players.remove(&message.player_id) {
+            safe_despawn_entity(&mut commands, ent);
+        }
+    }
+
+    for message in recv_snapshot.receive() {
         if Some(message.player_id) == runtime.local_player_id {
             continue;
         }
@@ -732,62 +1352,140 @@ fn receive_multiplayer_messages(
             &visuals,
             &mut runtime.remote_players,
             message.player_id,
-            Vec3::new(0.0, 180.0, 0.0),
-            0.0,
-        );
-    }
-
-    for message in events.read::<MessageEvent<UnorderedReliableChannel, PlayerLeft>>() {
-        if let Some(entity) = runtime.remote_players.remove(&message.player_id) {
-            commands.entity(entity).despawn();
-        }
-    }
-
-    for message in events.read::<MessageEvent<UnorderedUnreliableChannel, PlayerSnapshot>>() {
-        if Some(message.player_id) == runtime.local_player_id {
-            continue;
-        }
-
-        let entity = ensure_remote_player(
-            &mut commands,
-            &visuals,
-            &mut runtime.remote_players,
-            message.player_id,
             Vec3::from_array(message.translation),
             message.yaw,
         );
 
-        commands.entity(entity).insert(Transform {
-            translation: Vec3::from_array(message.translation),
-            rotation: Quat::from_rotation_y(message.yaw),
-            scale: Vec3::ONE,
-        });
+        let translation = Vec3::from_array(message.translation);
+        let smoothing = runtime
+            .remote_player_smoothing
+            .entry(message.player_id)
+            .or_insert_with(|| {
+                RemotePlayerSmoothing::with_initial_snapshot(now, translation, message.yaw)
+            });
+        smoothing.push_snapshot(now, translation, message.yaw);
+    }
+}
+
+/// Handles ServerChunkData, ServerBlockBreak, ServerBlockPlace messages.
+#[allow(clippy::too_many_arguments)]
+fn receive_world_messages(
+    registry: Option<Res<BlockRegistry>>,
+    block_remap: Res<BlockIdRemap>,
+    mut chunk_map: ResMut<ChunkMap>,
+    mut fluids: ResMut<FluidMap>,
+    mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
+    runtime: Res<MultiplayerClientRuntime>,
+    mut q: Query<(
+        &mut MessageReceiver<ServerChunkData>,
+        &mut MessageReceiver<ServerBlockBreak>,
+        &mut MessageReceiver<ServerBlockPlace>,
+    )>,
+) {
+    let Some(entity) = runtime.connection_entity else {
+        return;
+    };
+
+    let Ok((mut recv_chunk, mut recv_block_break, mut recv_block_place)) = q.get_mut(entity) else {
+        return;
+    };
+
+    for message in recv_chunk.receive() {
+        let Some(registry) = registry.as_ref() else {
+            continue;
+        };
+
+        let coord = IVec2::new(message.coord[0], message.coord[1]);
+        let Ok(mut chunk) = crate::generator::chunk::chunk_utils::decode_chunk(&message.blocks)
+        else {
+            warn!("Failed to decode streamed chunk {},{}", coord.x, coord.y);
+            continue;
+        };
+
+        for block_id in &mut chunk.blocks {
+            *block_id = remap_server_block_id(&block_remap, registry, *block_id);
+        }
+
+        debug!(
+            "[MP] Received ServerChunkData for chunk {:?} (total: {})",
+            coord,
+            chunk_map.chunks.len() + 1
+        );
+        chunk.mark_all_dirty();
+        chunk_map.chunks.insert(coord, chunk);
+
+        for sub in 0..SEC_COUNT {
+            ev_dirty.write(SubChunkNeedRemeshEvent { coord, sub });
+        }
+
+        for neighbor in [
+            IVec2::new(coord.x + 1, coord.y),
+            IVec2::new(coord.x - 1, coord.y),
+            IVec2::new(coord.x, coord.y + 1),
+            IVec2::new(coord.x, coord.y - 1),
+        ] {
+            if chunk_map.chunks.contains_key(&neighbor) {
+                for sub in 0..SEC_COUNT {
+                    ev_dirty.write(SubChunkNeedRemeshEvent {
+                        coord: neighbor,
+                        sub,
+                    });
+                }
+            }
+        }
     }
 
-    for message in events.read::<MessageEvent<OrderedReliableChannel, ServerBlockBreak>>() {
+    for message in recv_block_break.receive() {
         if Some(message.player_id) == runtime.local_player_id {
             continue;
         }
-
         apply_remote_block_break(message.location, &mut chunk_map, &mut ev_dirty);
     }
 
-    for message in events.read::<MessageEvent<OrderedReliableChannel, ServerBlockPlace>>() {
+    for message in recv_block_place.receive() {
         if Some(message.player_id) == runtime.local_player_id {
             continue;
         }
-
+        let Some(registry) = registry.as_ref() else {
+            continue;
+        };
         apply_remote_block_place(
             message.location,
-            message.block_id,
+            remap_server_block_id(&block_remap, registry, message.block_id),
             &mut chunk_map,
             &mut fluids,
             &mut ev_dirty,
         );
     }
+}
 
-    for message in events.read::<MessageEvent<OrderedReliableChannel, ServerDropSpawn>>() {
+/// Handles ServerDropSpawn and ServerDropPicked messages.
+#[allow(clippy::too_many_arguments)]
+fn receive_drop_messages(
+    mut commands: Commands,
+    time: Res<Time>,
+    registry: Option<Res<BlockRegistry>>,
+    block_remap: Res<BlockIdRemap>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut inventory: ResMut<PlayerInventory>,
+    mut drops: ResMut<MultiplayerDropIndex>,
+    runtime: Res<MultiplayerClientRuntime>,
+    mut q: Query<(
+        &mut MessageReceiver<ServerDropSpawn>,
+        &mut MessageReceiver<ServerDropPicked>,
+    )>,
+) {
+    let Some(entity) = runtime.connection_entity else {
+        return;
+    };
+
+    let Ok((mut recv_spawn, mut recv_picked)) = q.get_mut(entity) else {
+        return;
+    };
+
+    for message in recv_spawn.receive() {
         if let Some(registry) = registry.as_ref() {
+            let local_block_id = remap_server_block_id(&block_remap, registry, message.block_id);
             spawn_multiplayer_drop(
                 &mut commands,
                 registry,
@@ -795,7 +1493,7 @@ fn receive_multiplayer_messages(
                 &mut drops,
                 message.drop_id,
                 message.location,
-                message.block_id,
+                local_block_id,
                 message.has_motion,
                 message.spawn_translation,
                 message.initial_velocity,
@@ -804,130 +1502,233 @@ fn receive_multiplayer_messages(
         }
     }
 
-    for message in events.read::<MessageEvent<OrderedReliableChannel, ServerDropPicked>>() {
-        if let Some(entity) = drops.entities.remove(&message.drop_id) {
-            commands.entity(entity).despawn();
+    for message in recv_picked.receive() {
+        if let Some(ent) = drops.entities.remove(&message.drop_id) {
+            safe_despawn_entity(&mut commands, ent);
         }
 
         if Some(message.player_id) == runtime.local_player_id {
-            let _ = inventory.add_block(message.block_id, 1);
+            let local_block_id = if let Some(registry) = registry.as_ref() {
+                remap_server_block_id(&block_remap, registry, message.block_id)
+            } else {
+                message.block_id
+            };
+            let _ = inventory.add_block(local_block_id, 1);
         }
     }
+}
 
-    for error in events.read::<ErrorEvent>() {
-        error!("Multiplayer client error: {}", error);
+fn send_chunk_interest_updates(
+    game_config: Res<GlobalConfig>,
+    q_player: Query<&Transform, With<Player>>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
+    q_connected: Query<Has<Connected>>,
+    mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    runtime: Res<MultiplayerClientRuntime>,
+    mut q_sender: Query<&mut MessageSender<ClientChunkInterest>>,
+) {
+    let Some(entity) = runtime.connection_entity else {
+        chunk_stream.last_requested_center = None;
+        chunk_stream.last_requested_radius = None;
+        return;
+    };
+
+    if !q_connected.get(entity).unwrap_or(false)
+        || multiplayer_connection.active_session_url.is_none()
+    {
+        return;
     }
 
-    if disconnect_received {
-        for entity in runtime.remote_players.drain().map(|(_, entity)| entity) {
-            commands.entity(entity).despawn();
-        }
-        clear_multiplayer_drops(&mut commands, &mut drops);
-        runtime.local_player_id = None;
-        multiplayer_connection.connected = false;
+    let radius = game_config.graphics.chunk_range.max(1);
+    let center = if let Ok(transform) = q_player.single() {
+        world_to_chunk_xz(
+            (transform.translation.x / VOXEL_SIZE).floor() as i32,
+            (transform.translation.z / VOXEL_SIZE).floor() as i32,
+        )
+        .0
+    } else if let Some(spawn_translation) = multiplayer_connection.spawn_translation {
+        world_to_chunk_xz(
+            spawn_translation[0].floor() as i32,
+            spawn_translation[2].floor() as i32,
+        )
+        .0
     } else {
-        multiplayer_connection.connected =
-            client.connection_status().is_connected() && runtime.local_player_id.is_some();
+        return;
+    };
+
+    if chunk_stream.last_requested_center == Some(center)
+        && chunk_stream.last_requested_radius == Some(radius)
+    {
+        return;
     }
 
-    runtime.client = Some(client);
+    if let Ok(mut sender) = q_sender.get_mut(entity) {
+        debug!(
+            "[MP] Sending ClientChunkInterest: center={:?}, radius={}",
+            [center.x, center.y],
+            radius
+        );
+        sender.send::<OrderedReliable>(ClientChunkInterest::new([center.x, center.y], radius));
+        chunk_stream.last_requested_center = Some(center);
+        chunk_stream.last_requested_radius = Some(radius);
+    }
+}
+
+fn smooth_remote_players(
+    time: Res<Time>,
+    mut remote_players: Query<(&RemotePlayerAvatar, &mut Transform)>,
+    mut runtime: ResMut<MultiplayerClientRuntime>,
+) {
+    let now = time.elapsed_secs();
+    let render_at = (now - REMOTE_PLAYER_INTERP_BACK_TIME_SECS).max(0.0);
+    let alpha = (1.0 - (-REMOTE_PLAYER_SMOOTHING_HZ * time.delta_secs()).exp()).clamp(0.0, 1.0);
+
+    for (avatar, mut transform) in &mut remote_players {
+        let Some(smoothing) = runtime.remote_player_smoothing.get_mut(&avatar.player_id) else {
+            continue;
+        };
+        let Some(front) = smoothing.snapshots.front().copied() else {
+            continue;
+        };
+
+        while smoothing.snapshots.len() >= 2 {
+            let next = smoothing.snapshots.get(1).copied();
+            if match next {
+                Some(snapshot) => snapshot.at_secs > render_at,
+                None => true,
+            } {
+                break;
+            }
+            smoothing.snapshots.pop_front();
+        }
+
+        let (target_translation, target_yaw) = if let Some(next) = smoothing.snapshots.get(1) {
+            let from = smoothing.snapshots[0];
+            let to = *next;
+            let span = (to.at_secs - from.at_secs).max(0.0001);
+            let t = ((render_at - from.at_secs) / span).clamp(0.0, 1.0);
+            (
+                from.translation.lerp(to.translation, t),
+                lerp_angle_radians(from.yaw, to.yaw, t),
+            )
+        } else {
+            let latest = smoothing.snapshots.back().copied().unwrap_or(front);
+            let extrapolated =
+                if let Some(previous) = smoothing.snapshots.iter().rev().nth(1).copied() {
+                    let dt = (latest.at_secs - previous.at_secs).max(0.0001);
+                    let velocity = (latest.translation - previous.translation) / dt;
+                    let ahead = (render_at - latest.at_secs)
+                        .clamp(0.0, REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS);
+                    latest.translation + velocity * ahead
+                } else {
+                    latest.translation
+                };
+            (extrapolated, latest.yaw)
+        };
+
+        transform.translation = transform.translation.lerp(target_translation, alpha);
+        let current_yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
+        let smoothed_yaw = lerp_angle_radians(current_yaw, target_yaw, alpha);
+        transform.rotation = Quat::from_rotation_y(smoothed_yaw);
+    }
 }
 
 fn send_local_block_break_events(
-    mut commands: Commands,
-    time: Res<Time>,
-    registry: Option<Res<BlockRegistry>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut drops: ResMut<MultiplayerDropIndex>,
     mut break_events: MessageReader<BlockBreakByPlayerEvent>,
-    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+    block_remap: Res<BlockIdRemap>,
+    runtime: Res<MultiplayerClientRuntime>,
+    q_connected: Query<Has<Connected>>,
+    mut q_sender: Query<&mut MessageSender<ClientBlockBreak>>,
 ) {
-    let is_connected = runtime
-        .client
-        .as_ref()
-        .is_some_and(|client| client.connection_status().is_connected());
-    if !is_connected {
+    let Some(entity) = runtime.connection_entity else {
+        for _ in break_events.read() {}
+        return;
+    };
+
+    if !q_connected.get(entity).unwrap_or(false) {
         for _ in break_events.read() {}
         return;
     }
 
-    for event in break_events.read() {
-        let mut drop_id = 0;
-        if event.drops_item {
-            if let Some(local_drop_id) = runtime.allocate_local_drop_id() {
-                drop_id = local_drop_id;
-                if let Some(registry) = registry.as_ref() {
-                    spawn_multiplayer_drop(
-                        &mut commands,
-                        registry,
-                        &mut meshes,
-                        &mut drops,
-                        local_drop_id,
-                        event.location.to_array(),
-                        event.block_id,
-                        false,
-                        [0.0, 0.0, 0.0],
-                        [0.0, 0.0, 0.0],
-                        time.elapsed_secs(),
-                    );
-                }
-            }
-        }
+    let Ok(mut sender) = q_sender.get_mut(entity) else {
+        for _ in break_events.read() {}
+        return;
+    };
 
-        if let Some(client) = runtime.client.as_mut() {
-            client.send_message::<OrderedReliableChannel, _>(&ClientBlockBreak::new(
-                event.location.to_array(),
-                if event.drops_item { event.block_id } else { 0 },
-                drop_id,
-            ));
-        }
+    for event in break_events.read() {
+        let drop_block_id = if event.drops_item {
+            block_remap.to_server(event.block_id)
+        } else {
+            0
+        };
+        sender.send::<OrderedReliable>(ClientBlockBreak::new(
+            event.location.to_array(),
+            drop_block_id,
+            0,
+        ));
     }
 }
 
 fn send_local_block_place_events(
     mut place_events: MessageReader<BlockPlaceByPlayerEvent>,
-    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+    block_remap: Res<BlockIdRemap>,
+    runtime: Res<MultiplayerClientRuntime>,
+    q_connected: Query<Has<Connected>>,
+    mut q_sender: Query<&mut MessageSender<ClientBlockPlace>>,
 ) {
-    let Some(client) = runtime.client.as_mut() else {
+    let Some(entity) = runtime.connection_entity else {
         for _ in place_events.read() {}
         return;
     };
 
-    if !client.connection_status().is_connected() {
+    if !q_connected.get(entity).unwrap_or(false) {
         for _ in place_events.read() {}
         return;
     }
 
+    let Ok(mut sender) = q_sender.get_mut(entity) else {
+        for _ in place_events.read() {}
+        return;
+    };
+
     for event in place_events.read() {
-        client.send_message::<OrderedReliableChannel, _>(&ClientBlockPlace::new(
+        sender.send::<OrderedReliable>(ClientBlockPlace::new(
             event.location.to_array(),
-            event.block_id,
+            block_remap.to_server(event.block_id),
         ));
     }
 }
 
 fn send_local_item_drop_requests(
     mut drop_requests: MessageReader<DropItemRequest>,
-    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+    block_remap: Res<BlockIdRemap>,
+    runtime: Res<MultiplayerClientRuntime>,
+    q_connected: Query<Has<Connected>>,
+    mut q_sender: Query<&mut MessageSender<ClientDropItem>>,
 ) {
-    let Some(client) = runtime.client.as_mut() else {
+    let Some(entity) = runtime.connection_entity else {
         for _ in drop_requests.read() {}
         return;
     };
 
-    if !client.connection_status().is_connected() {
+    if !q_connected.get(entity).unwrap_or(false) {
         for _ in drop_requests.read() {}
         return;
     }
+
+    let Ok(mut sender) = q_sender.get_mut(entity) else {
+        for _ in drop_requests.read() {}
+        return;
+    };
 
     for request in drop_requests.read() {
         if request.block_id == 0 || request.amount == 0 {
             continue;
         }
 
-        client.send_message::<OrderedReliableChannel, _>(&ClientDropItem::new(
+        sender.send::<OrderedReliable>(ClientDropItem::new(
             request.location,
-            request.block_id,
+            block_remap.to_server(request.block_id),
             request.amount,
             request.spawn_translation,
             request.initial_velocity,
@@ -1048,19 +1849,25 @@ fn send_local_drop_pickup_requests(
     inventory: Res<PlayerInventory>,
     player: Query<&Transform, With<Player>>,
     mut drops: Query<(&Transform, &mut MultiplayerDroppedItem), With<MultiplayerDroppedItem>>,
-    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+    runtime: Res<MultiplayerClientRuntime>,
+    q_connected: Query<Has<Connected>>,
+    mut q_sender: Query<&mut MessageSender<ClientDropPickup>>,
 ) {
     if !multiplayer_connection.connected {
         return;
     }
 
-    let Some(client) = runtime.client.as_mut() else {
+    let Some(entity) = runtime.connection_entity else {
         return;
     };
 
-    if !client.connection_status().is_connected() {
+    if !q_connected.get(entity).unwrap_or(false) {
         return;
     }
+
+    let Ok(mut sender) = q_sender.get_mut(entity) else {
+        return;
+    };
 
     let Ok(player_transform) = player.single() else {
         return;
@@ -1087,7 +1894,7 @@ fn send_local_drop_pickup_requests(
             continue;
         }
 
-        client.send_message::<OrderedReliableChannel, _>(&ClientDropPickup::new(drop.drop_id));
+        sender.send::<OrderedReliable>(ClientDropPickup::new(drop.drop_id));
         drop.next_pickup_request_at = now + 0.25;
     }
 }
@@ -1095,30 +1902,63 @@ fn send_local_drop_pickup_requests(
 fn send_local_player_pose(
     time: Res<Time>,
     q_player: Query<(&Transform, &FpsController), With<Player>>,
-    mut runtime: NonSendMut<MultiplayerClientRuntime>,
+    mut runtime: ResMut<MultiplayerClientRuntime>,
+    q_connected: Query<Has<Connected>>,
+    mut q_sender: Query<&mut MessageSender<PlayerMove>>,
 ) {
     runtime.send_timer.tick(time.delta());
     if !runtime.send_timer.just_finished() {
         return;
     }
 
-    let Some(client) = runtime.client.as_mut() else {
+    let Some(entity) = runtime.connection_entity else {
         return;
     };
 
-    if !client.connection_status().is_connected() {
+    if !q_connected.get(entity).unwrap_or(false) {
         return;
     }
+
+    let Ok(mut sender) = q_sender.get_mut(entity) else {
+        return;
+    };
 
     let Ok((transform, controller)) = q_player.single() else {
         return;
     };
 
-    client.send_message::<UnorderedUnreliableChannel, _>(&PlayerMove::new(
+    sender.send::<UnorderedUnreliable>(PlayerMove::new(
         transform.translation.to_array(),
         controller.yaw,
         controller.pitch,
     ));
+}
+
+fn send_client_keepalive(
+    time: Res<Time>,
+    mut runtime: ResMut<MultiplayerClientRuntime>,
+    q_connected: Query<Has<Connected>>,
+    mut q_sender: Query<&mut MessageSender<ClientKeepAlive>>,
+) {
+    runtime.keepalive_timer.tick(time.delta());
+    if !runtime.keepalive_timer.just_finished() {
+        return;
+    }
+
+    let Some(entity) = runtime.connection_entity else {
+        return;
+    };
+
+    if !q_connected.get(entity).unwrap_or(false) {
+        return;
+    }
+
+    let Ok(mut sender) = q_sender.get_mut(entity) else {
+        return;
+    };
+
+    let stamp_ms = (time.elapsed_secs_f64() * 1000.0) as u32;
+    sender.send::<UnorderedReliable>(ClientKeepAlive::new(stamp_ms));
 }
 
 fn apply_remote_block_break(
@@ -1168,6 +2008,7 @@ fn apply_remote_block_place(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_multiplayer_drop(
     commands: &mut Commands,
     registry: &BlockRegistry,
@@ -1251,7 +2092,7 @@ fn spawn_multiplayer_drop(
 
 fn clear_multiplayer_drops(commands: &mut Commands, drops: &mut MultiplayerDropIndex) {
     for entity in drops.entities.drain().map(|(_, entity)| entity) {
-        commands.entity(entity).despawn();
+        safe_despawn_entity(commands, entity);
     }
 }
 
@@ -1332,6 +2173,20 @@ fn compute_multiplayer_drop_spin_speed(world_loc: IVec3, drop_id: u64) -> f32 {
         1.0
     };
     sign * magnitude
+}
+
+#[inline]
+fn angle_abs_diff(from: f32, to: f32) -> f32 {
+    let wrapped =
+        (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    wrapped.abs()
+}
+
+#[inline]
+fn lerp_angle_radians(from: f32, to: f32, t: f32) -> f32 {
+    let wrapped =
+        (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    from + wrapped * t.clamp(0.0, 1.0)
 }
 
 fn seed_from_world_loc(world_loc: IVec3) -> u64 {

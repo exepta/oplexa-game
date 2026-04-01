@@ -1,0 +1,9 @@
+[[servers]]
+server_name = "Ionos"
+host = "85.215.116.15"
+port = 14191
+
+[[servers]]
+server_name = "Local"
+host = "127.0.0.1"
+port = 14191

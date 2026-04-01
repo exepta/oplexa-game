@@ -13,6 +13,7 @@ use crate::core::world::chunk::*;
 use crate::core::world::chunk_dimension::*;
 use crate::core::world::fluid::FluidMap;
 use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
+use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -493,7 +494,7 @@ fn pick_up_dropped_block_items(
         }
 
         if inventory.add_block(item.block_id, 1) == 0 {
-            commands.entity(entity).despawn();
+            safe_despawn_entity(&mut commands, entity);
         }
     }
 }
@@ -522,31 +523,6 @@ fn spawn_dropped_block_item(
         world_loc,
         now,
     );
-}
-
-pub(crate) fn spawn_dropped_block_stack(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    registry: &BlockRegistry,
-    block_id: BlockId,
-    amount: u16,
-    world_loc: IVec3,
-    now: f32,
-) {
-    if block_id == 0 || amount == 0 {
-        return;
-    }
-
-    for i in 0..amount {
-        spawn_dropped_block_item(
-            commands,
-            meshes,
-            registry,
-            block_id,
-            world_loc,
-            now + i as f32 * 0.013,
-        );
-    }
 }
 
 pub(crate) fn spawn_player_dropped_block_stack(
@@ -730,7 +706,7 @@ fn sync_mining_overlay(
 ) {
     let Some(target) = state.target else {
         if let Some(e) = root.0.take() {
-            commands.entity(e).despawn();
+            safe_despawn_entity(&mut commands, e);
         }
         return;
     };
@@ -774,7 +750,7 @@ fn sync_mining_overlay(
 
     if progress >= 1.0 {
         if let Some(e) = root.0.take() {
-            commands.entity(e).despawn();
+            safe_despawn_entity(&mut commands, e);
         }
     }
 }

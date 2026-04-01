@@ -1,8 +1,9 @@
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
+use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
 use crate::core::world::chunk::ChunkMap;
 use crate::core::world::save::*;
-use crate::generator::chunk::chunk_utils::encode_chunk;
+use crate::generator::chunk::chunk_utils::save_chunk_sync;
 use bevy::prelude::*;
 use std::collections::{HashMap, VecDeque};
 
@@ -26,25 +27,29 @@ impl Plugin for WorldSaveService {
             Update,
             (enqueue_save_on_dirty, tick_save_debounce, drain_save_queue)
                 .run_if(in_state(AppState::InGame(InGameStates::Game))),
+        )
+        .add_systems(
+            OnExit(AppState::InGame(InGameStates::Game)),
+            cleanup_world_save_runtime,
         );
     }
 }
 
 fn setup_world_save(mut commands: Commands) {
-    let world_root = std::env::current_dir()
-        .unwrap_or_default()
-        .join("saves")
-        .join(&"world");
-
-    std::fs::create_dir_all(world_root.join("region")).ok();
-
+    let world_root = default_saves_root().join("world");
     commands.insert_resource(WorldSave { root: world_root });
 }
 
 fn enqueue_save_on_dirty(
     mut ev_dirty: MessageReader<SubChunkNeedRemeshEvent>,
     mut deb: ResMut<SaveDebounce>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
 ) {
+    if !multiplayer_connection.uses_local_save_data() {
+        for _ in ev_dirty.read() {}
+        return;
+    }
+
     for e in ev_dirty.read().copied() {
         deb.0
             .entry(e.coord)
@@ -85,14 +90,26 @@ fn drain_save_queue(
     mut cache: ResMut<RegionCache>,
     chunk_map: Res<ChunkMap>,
     mut queue: ResMut<SaveQueue>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
 ) {
+    if !multiplayer_connection.uses_local_save_data() {
+        queue.0.clear();
+        return;
+    }
+
     while let Some(coord) = queue.0.pop_front() {
         if let Some(chunk) = chunk_map.chunks.get(&coord) {
-            let rc = chunk_to_region(coord);
-            if let Ok(rf) = cache.get_or_open(&ws, rc) {
-                let buf = encode_chunk(chunk);
-                let _ = rf.write_chunk(coord, &buf);
-            }
+            let _ = save_chunk_sync(&ws, &mut cache, coord, chunk);
         }
     }
+}
+
+fn cleanup_world_save_runtime(
+    mut cache: ResMut<RegionCache>,
+    mut debounce: ResMut<SaveDebounce>,
+    mut queue: ResMut<SaveQueue>,
+) {
+    cache.0.clear();
+    debounce.0.clear();
+    queue.0.clear();
 }

@@ -2,9 +2,11 @@ use crate::core::config::GlobalConfig;
 use crate::core::entities::player::{
     FlightState, FpsController, GameMode, GameModeState, Player, PlayerCamera,
 };
+use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
 use crate::core::ui::UiInteractionState;
 use crate::core::world::block::BlockRegistry;
+use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use crate::utils::key_utils::convert;
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::prepass::DepthPrepass;
@@ -42,7 +44,11 @@ impl Plugin for PlayerInitialize {
         })
         .add_systems(
             OnEnter(AppState::InGame(InGameStates::Game)),
-            (spawn_scene, spawn_player),
+            (enable_physics_pipeline, spawn_scene, spawn_player),
+        )
+        .add_systems(
+            OnExit(AppState::InGame(InGameStates::Game)),
+            (disable_physics_pipeline, despawn_player_entities),
         )
         .add_systems(
             Update,
@@ -55,6 +61,31 @@ impl Plugin for PlayerInitialize {
             )
                 .run_if(resource_exists::<BlockRegistry>),
         );
+    }
+}
+
+fn enable_physics_pipeline(mut configs: Query<&mut RapierConfiguration>) {
+    for mut config in &mut configs {
+        config.physics_pipeline_active = true;
+    }
+}
+
+fn disable_physics_pipeline(mut configs: Query<&mut RapierConfiguration>) {
+    for mut config in &mut configs {
+        config.physics_pipeline_active = false;
+    }
+}
+
+fn despawn_player_entities(
+    mut commands: Commands,
+    existing_players: Query<Entity, With<Player>>,
+    existing_player_cams: Query<Entity, With<PlayerCamera>>,
+) {
+    for entity in &existing_players {
+        safe_despawn_entity(&mut commands, entity);
+    }
+    for entity in &existing_player_cams {
+        safe_despawn_entity(&mut commands, entity);
     }
 }
 
@@ -83,15 +114,21 @@ fn spawn_scene(mut commands: Commands, existing_sun: Query<Entity, With<MainSun>
 fn spawn_player(
     mut commands: Commands,
     game_config: Res<GlobalConfig>,
+    multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
     existing_players: Query<Entity, With<Player>>,
     existing_player_cams: Query<Entity, With<PlayerCamera>>,
 ) {
     for entity in &existing_players {
-        commands.entity(entity).despawn();
+        safe_despawn_entity(&mut commands, entity);
     }
     for entity in &existing_player_cams {
-        commands.entity(entity).despawn();
+        safe_despawn_entity(&mut commands, entity);
     }
+
+    let spawn_translation = multiplayer_connection
+        .as_ref()
+        .and_then(|connection| connection.spawn_translation)
+        .unwrap_or([0.0, 180.0, 0.0]);
 
     let fov_deg: f32 = 80.0;
     let half_h = (EYE_HEIGHT + HEADROOM - RADIUS).max(0.60);
@@ -104,7 +141,11 @@ fn spawn_player(
         .spawn((
             Player,
             Name::new("Player"),
-            Transform::from_xyz(0.0, 180.0, 0.0),
+            Transform::from_xyz(
+                spawn_translation[0],
+                spawn_translation[1],
+                spawn_translation[2],
+            ),
             Visibility::default(),
             InheritedVisibility::default(),
             ViewVisibility::default(),

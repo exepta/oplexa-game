@@ -4,10 +4,13 @@ Cargo.lock
 
 # IDE
 /.idea/
+/.claude/
 
 # Runtime generated
 /logs/
 /saves/
+/worlds/
+server.settings.toml
 
 # OS
 .DS_Store
