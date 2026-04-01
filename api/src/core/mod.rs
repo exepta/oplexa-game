@@ -2,6 +2,7 @@ pub mod config;
 pub mod debug;
 pub mod entities;
 pub mod events;
+pub mod inventory;
 pub mod multiplayer;
 pub mod network;
 pub mod shader;

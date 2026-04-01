@@ -1,19 +1,19 @@
-use crate::core::world::block::BlockId;
+use crate::core::inventory::items::{DEFAULT_ITEM_STACK_SIZE, ItemId, ItemRegistry};
 use bevy::prelude::*;
 
 pub const PLAYER_INVENTORY_SLOTS: usize = 12;
-pub const PLAYER_INVENTORY_STACK_MAX: u16 = 128;
+pub const PLAYER_INVENTORY_STACK_MAX: u16 = DEFAULT_ITEM_STACK_SIZE;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InventorySlot {
-    pub block_id: BlockId,
+    pub item_id: ItemId,
     pub count: u16,
 }
 
 impl InventorySlot {
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.block_id == 0 || self.count == 0
+        self.item_id == 0 || self.count == 0
     }
 }
 
@@ -31,17 +31,22 @@ impl Default for PlayerInventory {
 }
 
 impl PlayerInventory {
-    pub fn add_block(&mut self, block_id: BlockId, mut amount: u16) -> u16 {
-        if block_id == 0 || amount == 0 {
+    pub fn add_item(&mut self, item_id: ItemId, mut amount: u16, items: &ItemRegistry) -> u16 {
+        if item_id == 0 || amount == 0 {
             return amount;
         }
 
+        let stack_max = items
+            .stack_limit(item_id)
+            .min(PLAYER_INVENTORY_STACK_MAX)
+            .max(1);
+
         for slot in &mut self.slots {
-            if slot.block_id != block_id || slot.count >= PLAYER_INVENTORY_STACK_MAX {
+            if slot.item_id != item_id || slot.count >= stack_max {
                 continue;
             }
 
-            let free = PLAYER_INVENTORY_STACK_MAX - slot.count;
+            let free = stack_max - slot.count;
             let take = free.min(amount);
             slot.count += take;
             amount -= take;
@@ -56,8 +61,8 @@ impl PlayerInventory {
                 continue;
             }
 
-            let take = PLAYER_INVENTORY_STACK_MAX.min(amount);
-            slot.block_id = block_id;
+            let take = stack_max.min(amount);
+            slot.item_id = item_id;
             slot.count = take;
             amount -= take;
 

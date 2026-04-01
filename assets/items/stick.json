@@ -1,0 +1,15 @@
+{
+  "id": "stick",
+  "name": "Stick",
+  "max_stack_size": -1,
+  "category": "material",
+  "texture": "assets/textures/items/stick.png",
+  "block_item": false,
+  "placeable": false,
+  "tool": null,
+  "tags": ["wood", "crafting_material"],
+  "rarity": "common",
+  "world_drop": {
+    "pickupable": true
+  }
+}

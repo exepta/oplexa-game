@@ -61,7 +61,8 @@ fn drop_selected_hotbar_item(
     mut drop_requests: MessageWriter<DropItemRequest>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    registry: Res<BlockRegistry>,
+    block_registry: Res<BlockRegistry>,
+    item_registry: Res<ItemRegistry>,
 ) {
     if ui_interaction.menu_open || ui_interaction.inventory_open {
         return;
@@ -90,7 +91,7 @@ fn drop_selected_hotbar_item(
         return;
     };
 
-    let dropped_block_id = slot.block_id;
+    let dropped_item_id = slot.item_id;
     if slot.count <= 1 {
         *slot = Default::default();
     } else {
@@ -106,18 +107,19 @@ fn drop_selected_hotbar_item(
         let world_loc =
             player_drop_world_location(player_tf.translation, player_tf.forward().as_vec3());
         drop_requests.write(DropItemRequest::new(
-            dropped_block_id,
+            dropped_item_id,
             1,
             world_loc.to_array(),
             spawn_center.to_array(),
             initial_velocity.to_array(),
         ));
     } else {
-        spawn_player_dropped_block_stack(
+        spawn_player_dropped_item_stack(
             &mut commands,
             &mut meshes,
-            &registry,
-            dropped_block_id,
+            &block_registry,
+            &item_registry,
+            dropped_item_id,
             1,
             player_tf.translation,
             player_tf.forward().as_vec3(),
@@ -129,6 +131,7 @@ fn drop_selected_hotbar_item(
 fn sync_hotbar_selected_block(
     hotbar_state: Res<HotbarSelectionState>,
     inventory: Res<PlayerInventory>,
+    item_registry: Res<ItemRegistry>,
     registry: Res<BlockRegistry>,
     mut selected: ResMut<SelectedBlock>,
 ) {
@@ -144,17 +147,20 @@ fn sync_hotbar_selected_block(
         return;
     }
 
-    selected.id = slot.block_id;
-    selected.name = registry
-        .name_opt(slot.block_id)
-        .unwrap_or("air")
-        .to_string();
+    let Some(block_id) = item_registry.block_for_item(slot.item_id) else {
+        selected.id = 0;
+        selected.name = "air".to_string();
+        return;
+    };
+
+    selected.id = block_id;
+    selected.name = registry.name_opt(block_id).unwrap_or("air").to_string();
 }
 
 fn sync_hud_hotbar_ui(
     hotbar_state: Res<HotbarSelectionState>,
     inventory: Res<PlayerInventory>,
-    registry: Res<BlockRegistry>,
+    item_registry: Res<ItemRegistry>,
     asset_server: Res<AssetServer>,
     mut buttons: Query<(&CssID, &mut Button, &mut BorderColor, &mut BackgroundColor)>,
 ) {
@@ -178,7 +184,7 @@ fn sync_hud_hotbar_ui(
             let next_icon = if slot.is_empty() {
                 None
             } else {
-                resolve_block_icon_path(&registry, &asset_server, slot.block_id)
+                resolve_item_icon_path(&item_registry, &asset_server, slot.item_id)
             };
             if button.icon_path != next_icon {
                 button.icon_path = next_icon;
@@ -203,12 +209,10 @@ fn sync_hud_hotbar_ui(
     }
 }
 
-fn resolve_block_icon_path(
-    registry: &BlockRegistry,
+fn resolve_item_icon_path(
+    registry: &ItemRegistry,
     asset_server: &AssetServer,
-    block_id: u16,
+    item_id: u16,
 ) -> Option<String> {
-    let block = registry.defs.get(block_id as usize)?;
-    let path = asset_server.get_path(block.image.id())?;
-    Some(path.path().to_string_lossy().to_string())
+    registry.icon_path(asset_server, item_id)
 }

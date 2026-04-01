@@ -10,6 +10,10 @@ use crate::core::events::ui_events::{
     ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest, OpenToLanRequest,
     StopLanHostRequest,
 };
+use crate::core::inventory::items::{
+    ItemRegistry, player_drop_spawn_motion, player_drop_world_location,
+    spawn_player_dropped_item_stack,
+};
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
 use crate::core::states::states::{
     AppState, BeforeUiState, InGameStates, LoadingStates, is_state_in_game,
@@ -23,9 +27,6 @@ use crate::core::world::chunk::ChunkMap;
 use crate::core::world::chunk_dimension::{CX, CZ};
 use crate::core::world::fluid::{FluidMap, WaterMeshIndex};
 use crate::core::world::save::{RegionCache, WorldSave, default_saves_root};
-use crate::logic::events::block_event_handler::{
-    player_drop_spawn_motion, player_drop_world_location, spawn_player_dropped_block_stack,
-};
 use crate::utils::key_utils::convert;
 use api::core::network::config::NetworkSettings;
 use api::core::network::discovery::{LanDiscoveryClient, LanServerInfo};
