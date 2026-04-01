@@ -1,0 +1,19 @@
+{
+  "id": "stone_block",
+  "name": "Stone Block",
+  "max_stack_size": -1,
+  "category": "block",
+  "block_item": true,
+  "placeable": true,
+  "block": "stone_block",
+  "tags": ["block"],
+  "rarity": "common",
+  "render": {
+    "type": "block",
+    "block": "stone_block",
+    "projection": "isometric"
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

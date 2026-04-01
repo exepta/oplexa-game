@@ -33,7 +33,7 @@ pub struct ItemDef {
     pub max_stack_size: u16,
     /// Free-form category label from JSON.
     pub category: String,
-    /// Original texture path as declared in JSON (or inferred for block-items).
+    /// Resolved item icon texture path (JSON texture or generated block preview).
     pub texture_path: String,
     /// Loaded icon texture handle.
     pub image: Handle<Image>,

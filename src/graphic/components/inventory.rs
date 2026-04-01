@@ -213,14 +213,45 @@ fn handle_inventory_drag_and_drop(
 fn sync_player_inventory_ui(
     inventory: Res<PlayerInventory>,
     item_registry: Res<ItemRegistry>,
+    block_registry: Res<BlockRegistry>,
     asset_server: Res<AssetServer>,
-    mut paragraphs: Query<(&CssID, &mut Paragraph)>,
+    mut image_cache: ResMut<ImageCache>,
+    mut images: ResMut<Assets<Image>>,
+    mut paragraphs: Query<(&CssID, &mut Paragraph, Option<&mut Visibility>)>,
     mut slot_buttons: Query<(&CssID, &mut Button)>,
 ) {
-    for (css_id, mut paragraph) in &mut paragraphs {
+    for (css_id, mut paragraph, mut maybe_visibility) in &mut paragraphs {
         if css_id.0 == PLAYER_INVENTORY_TOTAL_ID {
             paragraph.text = format!("Items: {}", inventory.total_items());
+            continue;
         }
+
+        let Some(slot_number) = css_id.0.strip_prefix(PLAYER_INVENTORY_BADGE_PREFIX) else {
+            continue;
+        };
+        let Ok(slot_index) = slot_number.parse::<usize>() else {
+            continue;
+        };
+        let Some(slot) = inventory.slots.get(slot_index.saturating_sub(1)) else {
+            continue;
+        };
+        let Some(visibility) = maybe_visibility.as_mut() else {
+            continue;
+        };
+
+        if slot.is_empty() {
+            if !paragraph.text.is_empty() {
+                paragraph.text.clear();
+            }
+            **visibility = Visibility::Hidden;
+            continue;
+        }
+
+        let count_text = slot.count.to_string();
+        if paragraph.text != count_text {
+            paragraph.text = count_text;
+        }
+        **visibility = Visibility::Inherited;
     }
 
     for (css_id, mut button) in &mut slot_buttons {
@@ -233,23 +264,26 @@ fn sync_player_inventory_ui(
         let Some(slot) = inventory.slots.get(slot_index.saturating_sub(1)) else {
             continue;
         };
-        let next_text = if slot.is_empty() {
-            String::new()
-        } else {
-            slot.count.to_string()
-        };
-        if button.text != next_text {
-            button.text = next_text;
+        if !button.text.is_empty() {
+            button.text.clear();
         }
         let next_icon = if slot.is_empty() {
             None
         } else {
-            resolve_item_icon_path(&item_registry, &asset_server, slot.item_id)
+            resolve_item_icon_path(
+                &item_registry,
+                &block_registry,
+                &asset_server,
+                &mut image_cache,
+                &mut images,
+                slot.item_id,
+            )
         };
         if button.icon_path != next_icon {
             button.icon_path = next_icon;
         }
     }
+
 }
 
 fn set_inventory_cursor(

@@ -161,8 +161,12 @@ fn sync_hud_hotbar_ui(
     hotbar_state: Res<HotbarSelectionState>,
     inventory: Res<PlayerInventory>,
     item_registry: Res<ItemRegistry>,
+    block_registry: Res<BlockRegistry>,
     asset_server: Res<AssetServer>,
+    mut image_cache: ResMut<ImageCache>,
+    mut images: ResMut<Assets<Image>>,
     mut buttons: Query<(&CssID, &mut Button, &mut BorderColor, &mut BackgroundColor)>,
+    mut badges: Query<(&CssID, &mut Paragraph, &mut Visibility)>,
 ) {
     for (css_id, mut button, mut border, mut background) in &mut buttons {
         if let Some(slot_number) = css_id.0.strip_prefix(HUD_SLOT_PREFIX) {
@@ -173,18 +177,20 @@ fn sync_hud_hotbar_ui(
                 continue;
             };
 
-            let next_text = if slot.is_empty() {
-                String::new()
-            } else {
-                slot.count.to_string()
-            };
-            if button.text != next_text {
-                button.text = next_text;
+            if !button.text.is_empty() {
+                button.text.clear();
             }
             let next_icon = if slot.is_empty() {
                 None
             } else {
-                resolve_item_icon_path(&item_registry, &asset_server, slot.item_id)
+                resolve_item_icon_path(
+                    &item_registry,
+                    &block_registry,
+                    &asset_server,
+                    &mut image_cache,
+                    &mut images,
+                    slot.item_id,
+                )
             };
             if button.icon_path != next_icon {
                 button.icon_path = next_icon;
@@ -207,12 +213,70 @@ fn sync_hud_hotbar_ui(
             };
         }
     }
+
+    for (css_id, mut paragraph, mut visibility) in &mut badges {
+        let Some(slot_number) = css_id.0.strip_prefix(HUD_SLOT_BADGE_PREFIX) else {
+            continue;
+        };
+        let Ok(slot_index) = slot_number.parse::<usize>() else {
+            continue;
+        };
+        let Some(slot) = inventory.slots.get(slot_index.saturating_sub(1)) else {
+            continue;
+        };
+
+        if slot.is_empty() {
+            if !paragraph.text.is_empty() {
+                paragraph.text.clear();
+            }
+            *visibility = Visibility::Hidden;
+            continue;
+        }
+
+        let count_text = slot.count.to_string();
+        if paragraph.text != count_text {
+            paragraph.text = count_text;
+        }
+        *visibility = Visibility::Inherited;
+    }
 }
 
 fn resolve_item_icon_path(
     registry: &ItemRegistry,
+    block_registry: &BlockRegistry,
     asset_server: &AssetServer,
+    image_cache: &mut ImageCache,
+    images: &mut Assets<Image>,
     item_id: u16,
 ) -> Option<String> {
-    registry.icon_path(asset_server, item_id)
+    let path = registry.icon_path(asset_server, item_id)?;
+    ensure_block_icon_cached(
+        block_registry,
+        asset_server,
+        image_cache,
+        images,
+        path.as_str(),
+    );
+    Some(path)
+}
+
+/// Ensures a virtual block-icon path has a populated in-memory image cache entry.
+fn ensure_block_icon_cached(
+    block_registry: &BlockRegistry,
+    asset_server: &AssetServer,
+    image_cache: &mut ImageCache,
+    images: &mut Assets<Image>,
+    path: &str,
+) {
+    let Some(block_id) = parse_block_icon_cache_key(path) else {
+        return;
+    };
+    if image_cache.map.contains_key(path) {
+        return;
+    }
+    let Some(image) = build_block_item_icon_image(block_registry, asset_server, block_id) else {
+        return;
+    };
+    let handle = images.add(image);
+    image_cache.map.insert(path.to_string(), handle);
 }

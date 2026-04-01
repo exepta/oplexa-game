@@ -2,7 +2,9 @@ mod registry;
 mod types;
 mod world_item;
 
-pub use registry::ItemRegistry;
+pub use registry::{
+    BLOCK_ICON_CACHE_PREFIX, ItemRegistry, build_block_item_icon_image, parse_block_icon_cache_key,
+};
 pub use types::{DEFAULT_ITEM_STACK_SIZE, EMPTY_ITEM_ID, ItemDef, ItemId, ItemWorldDropConfig};
 pub use world_item::{
     WORLD_ITEM_ATTRACT_ACCEL, WORLD_ITEM_ATTRACT_MAX_SPEED, WORLD_ITEM_ATTRACT_RADIUS,

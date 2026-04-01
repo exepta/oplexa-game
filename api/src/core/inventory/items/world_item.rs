@@ -1,5 +1,5 @@
 use crate::core::inventory::items::{ItemId, ItemRegistry};
-use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, build_block_cube_mesh};
+use crate::core::world::block::{BlockId, BlockRegistry, VOXEL_SIZE, build_block_cube_mesh};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::math::primitives::Rectangle;
 use bevy::mesh::VertexAttributeValues;
@@ -150,19 +150,39 @@ pub fn build_world_item_drop_visual(
         return None;
     }
 
-    if let Some(block_id) = item_registry.block_for_item(item_id) {
+    if let Some(block_id) = resolve_drop_block_id(block_registry, item_registry, item_id) {
         let mut mesh = build_block_cube_mesh(block_registry, block_id, size);
         center_mesh_vertices(&mut mesh, size * 0.5);
-        return Some((
-            mesh,
-            block_registry.material(block_id),
-            Vec3::new(0.85, 0.72, 1.14),
-        ));
+        return Some((mesh, block_registry.material(block_id), Vec3::ONE));
     }
 
     let mesh = Mesh::from(Rectangle::new(size * 0.95, size * 0.95));
     let material = item_registry.def_opt(item_id)?.material.clone();
     Some((mesh, material, Vec3::ONE))
+}
+
+/// Resolves the block id that should be used for a dropped-item block mesh.
+///
+/// The direct item→block mapping is preferred. A fallback is applied for
+/// block-items that were not explicitly bound, to avoid flat rectangle drops.
+fn resolve_drop_block_id(
+    block_registry: &BlockRegistry,
+    item_registry: &ItemRegistry,
+    item_id: ItemId,
+) -> Option<BlockId> {
+    if let Some(block_id) = item_registry.block_for_item(item_id) {
+        return Some(block_id);
+    }
+
+    let item = item_registry.def_opt(item_id)?;
+    if !item.block_item {
+        return None;
+    }
+
+    block_registry.id_opt(item.key.as_str()).or_else(|| {
+        guess_block_name_from_item_key(item.key.as_str())
+            .and_then(|name| block_registry.id_opt(name.as_str()))
+    })
 }
 
 /// Spawns one dropped world item with custom initial motion.
@@ -282,4 +302,19 @@ fn center_mesh_vertices(mesh: &mut Mesh, half_extent: f32) {
         position[1] -= half_extent;
         position[2] -= half_extent;
     }
+}
+
+/// Guesses a block registry key from an item key using common naming patterns.
+fn guess_block_name_from_item_key(item_key: &str) -> Option<String> {
+    let key = item_key.trim();
+    if key.is_empty() {
+        return None;
+    }
+    if key.ends_with("_block") {
+        return Some(key.to_string());
+    }
+    if let Some(base) = key.strip_suffix("_item") {
+        return Some(format!("{base}_block"));
+    }
+    Some(format!("{key}_block"))
 }

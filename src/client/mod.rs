@@ -248,9 +248,6 @@ const MULTIPLAYER_DROP_ATTRACT_MAX_SPEED: f32 = 12.0;
 const MULTIPLAYER_DROP_GRAVITY: f32 = 12.0;
 const MULTIPLAYER_DROP_POP_MIN_DIST: f32 = 0.1;
 const MULTIPLAYER_DROP_POP_MAX_DIST: f32 = 1.0;
-const MULTIPLAYER_DROP_VISUAL_SCALE_X: f32 = 0.85;
-const MULTIPLAYER_DROP_VISUAL_SCALE_Y: f32 = 0.72;
-const MULTIPLAYER_DROP_VISUAL_SCALE_Z: f32 = 1.14;
 const MULTIPLAYER_DROP_PICKUP_DELAY_SECS: f32 = 0.5;
 const REMOTE_PLAYER_INTERP_BACK_TIME_SECS: f32 = 0.10;
 const REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS: f32 = 0.08;
@@ -2180,12 +2177,7 @@ fn spawn_multiplayer_drop(
             Transform {
                 translation: center,
                 rotation: initial_rotation,
-                scale: visual_scale
-                    * Vec3::new(
-                        MULTIPLAYER_DROP_VISUAL_SCALE_X,
-                        MULTIPLAYER_DROP_VISUAL_SCALE_Y,
-                        MULTIPLAYER_DROP_VISUAL_SCALE_Z,
-                    ),
+                scale: visual_scale,
             },
             Visibility::default(),
             Name::new(format!("MultiplayerDrop#{drop_id}")),

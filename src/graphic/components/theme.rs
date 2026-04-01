@@ -278,14 +278,41 @@ fn style_images(mut images: Query<(&CssID, &mut Node), With<Img>>) {
 }
 
 fn style_button_icons(mut images: Query<(&Name, &mut Node), With<ImageNode>>) {
+    /// Inventory and hotbar item icon edge length in pixels.
+    const ITEM_ICON_SIZE_PX: f32 = 36.8;
+
     for (name, mut node) in &mut images {
         if !name.as_str().starts_with("Button-Icon-") {
             continue;
         }
-        node.width = Val::Px(32.0);
-        node.height = Val::Px(32.0);
+        node.width = Val::Px(ITEM_ICON_SIZE_PX);
+        node.height = Val::Px(ITEM_ICON_SIZE_PX);
         node.justify_self = JustifySelf::Center;
         node.align_self = AlignSelf::Center;
+    }
+}
+
+fn style_slot_count_badges(
+    mut badges: Query<(&CssID, &mut Node, &mut TextFont, &mut TextColor), With<Paragraph>>,
+) {
+    for (css_id, mut node, mut font, mut text_color) in &mut badges {
+        if !css_id.0.starts_with(HUD_SLOT_BADGE_PREFIX)
+            && !css_id.0.starts_with(PLAYER_INVENTORY_BADGE_PREFIX)
+        {
+            continue;
+        }
+
+        node.position_type = PositionType::Absolute;
+        node.right = Val::Px(2.0);
+        node.top = Val::Px(2.0);
+        node.min_width = Val::Px(14.0);
+        node.height = Val::Px(14.0);
+        node.padding = UiRect::axes(Val::Px(3.0), Val::Px(1.0));
+        node.justify_content = JustifyContent::Center;
+        node.align_items = AlignItems::Center;
+
+        font.font_size = 9.0;
+        text_color.0 = Color::WHITE;
     }
 }
 
