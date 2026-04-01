@@ -4,12 +4,15 @@ use api::{
         config::WorldGenConfig,
         world::{
             biome::registry::BiomeRegistry,
-            block::BlockRegistry,
-            chunk::ChunkData,
-            chunk_dimension::{Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local},
+            block::{BlockId, BlockRegistry},
+            chunk::{ChunkData, SEA_LEVEL},
+            chunk_dimension::{CX, CY, CZ, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local},
         },
     },
-    generator::chunk::chunk_utils::{encode_chunk, load_or_gen_chunk_async},
+    generator::chunk::{
+        cave_utils::{CaveParams, worm_edits_for_chunk},
+        chunk_utils::{encode_chunk, load_or_gen_chunk_async},
+    },
 };
 use bevy::ecs::entity::Entity;
 use bevy::math::IVec2;
@@ -146,9 +149,16 @@ impl ServerState {
     pub fn collect_ready_stream_chunks(&mut self) {
         let mut finished = Vec::new();
         let mut ready_chunks = Vec::new();
+        let border_id = self.block_registry.id_opt("border_block").unwrap_or(0);
+        let water_id = self.block_registry.id_opt("water_block").unwrap_or(0);
+        let cave_seed = self.world_gen_config.seed;
 
         for (coord, task) in &mut self.pending_stream_chunk_tasks {
             if let Some((ready_coord, mut chunk)) = future::block_on(future::poll_once(task)) {
+                apply_server_caves(&mut chunk, ready_coord, cave_seed, border_id, water_id);
+                if water_id != 0 {
+                    flood_ocean_connected_water(&mut chunk, SEA_LEVEL, water_id);
+                }
                 apply_block_overrides(&self.block_overrides, ready_coord, &mut chunk);
                 chunk.mark_all_dirty();
                 ready_chunks.push((ready_coord, encode_chunk(&chunk)));
@@ -190,6 +200,159 @@ impl ServerState {
 
             self.streamed_chunk_cache.remove(&oldest);
         }
+    }
+}
+
+fn apply_server_caves(
+    chunk: &mut ChunkData,
+    coord: IVec2,
+    seed: i32,
+    border_id: BlockId,
+    water_id: BlockId,
+) {
+    let params = server_cave_params(seed);
+    let edits = worm_edits_for_chunk(
+        &params,
+        coord,
+        IVec2::new(CX as i32, CZ as i32),
+        Y_MIN,
+        Y_MAX,
+    );
+
+    for (lx, ly, lz) in edits {
+        let lx = lx as usize;
+        let ly = ly as usize;
+        let lz = lz as usize;
+        let current = chunk.get(lx, ly, lz);
+
+        if current != 0 && current != border_id && current != water_id {
+            chunk.set(lx, ly, lz, 0);
+        }
+    }
+}
+
+fn flood_ocean_connected_water(chunk: &mut ChunkData, sea_level: i32, water_id: BlockId) {
+    if water_id == 0 {
+        return;
+    }
+
+    let sea_level = sea_level.clamp(Y_MIN, Y_MAX);
+    let sea_ly = world_y_to_local(sea_level);
+    let mut queue: VecDeque<(usize, usize, usize)> = VecDeque::new();
+    let mut seen = vec![false; CX * CY * CZ];
+
+    for z in 0..CZ {
+        for x in 0..CX {
+            // Topmost non-water solid in this column.
+            let mut top_world = Y_MIN - 1;
+            for ly in (0..CY).rev() {
+                let id = chunk.get(x, ly, z);
+                if id != 0 && id != water_id {
+                    top_world = Y_MIN + ly as i32;
+                    break;
+                }
+            }
+
+            // Only ocean-open columns can seed flood water.
+            if top_world >= sea_level {
+                continue;
+            }
+
+            let start_world = (top_world + 1).max(Y_MIN);
+            let start_ly = world_y_to_local(start_world);
+            for ly in start_ly..=sea_ly {
+                try_push_ocean_seed(chunk, &mut seen, water_id, x, ly, z, &mut queue);
+            }
+        }
+    }
+
+    while let Some((x, y, z)) = queue.pop_front() {
+        if y + 1 <= sea_ly {
+            try_push_ocean_seed(chunk, &mut seen, water_id, x, y + 1, z, &mut queue);
+        }
+        if y > 0 {
+            try_push_ocean_seed(chunk, &mut seen, water_id, x, y - 1, z, &mut queue);
+        }
+        if x + 1 < CX {
+            try_push_ocean_seed(chunk, &mut seen, water_id, x + 1, y, z, &mut queue);
+        }
+        if x > 0 {
+            try_push_ocean_seed(chunk, &mut seen, water_id, x - 1, y, z, &mut queue);
+        }
+        if z + 1 < CZ {
+            try_push_ocean_seed(chunk, &mut seen, water_id, x, y, z + 1, &mut queue);
+        }
+        if z > 0 {
+            try_push_ocean_seed(chunk, &mut seen, water_id, x, y, z - 1, &mut queue);
+        }
+    }
+}
+
+fn try_push_ocean_seed(
+    chunk: &mut ChunkData,
+    seen: &mut [bool],
+    water_id: BlockId,
+    x: usize,
+    y: usize,
+    z: usize,
+    queue: &mut VecDeque<(usize, usize, usize)>,
+) {
+    let i = (y * CZ + z) * CX + x;
+    if seen[i] {
+        return;
+    }
+
+    let current = chunk.get(x, y, z);
+    if current != 0 && current != water_id {
+        return;
+    }
+
+    seen[i] = true;
+    if current == 0 {
+        chunk.set(x, y, z, water_id);
+    }
+    queue.push_back((x, y, z));
+}
+
+fn server_cave_params(seed: i32) -> CaveParams {
+    CaveParams {
+        seed,
+        y_top: 52,
+        y_bottom: -110,
+        worms_per_region: 1.35,
+        region_chunks: 3,
+        base_radius: 4.2,
+        radius_var: 3.0,
+        step_len: 1.5,
+        worm_len_steps: 360,
+        room_event_chance: 0.1,
+        room_radius_min: 6.0,
+        room_radius_max: 10.5,
+        caverns_per_region: 0.5,
+        cavern_room_count_min: 6,
+        cavern_room_count_max: 11,
+        cavern_room_radius_xz_min: 16.0,
+        cavern_room_radius_xz_max: 34.0,
+        cavern_room_radius_y_min: 9.0,
+        cavern_room_radius_y_max: 21.0,
+        cavern_connector_radius: 12.5,
+        cavern_y_top: -10,
+        cavern_y_bottom: -100,
+        mega_caverns_per_region: 0.075,
+        mega_room_count_min: 1,
+        mega_room_count_max: 3,
+        mega_room_radius_xz_min: 45.0,
+        mega_room_radius_xz_max: 144.0,
+        mega_room_radius_y_min: 20.0,
+        mega_room_radius_y_max: 46.0,
+        mega_connector_radius: 8.0,
+        mega_y_top: -30,
+        mega_y_bottom: -105,
+        entrance_chance: 0.55,
+        entrance_len_steps: 40,
+        entrance_radius_scale: 0.55,
+        entrance_min_radius: 2.8,
+        entrance_trigger_band: 12.0,
     }
 }
 

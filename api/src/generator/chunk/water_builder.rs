@@ -129,18 +129,46 @@ impl Plugin for WaterBuilder {
                         in_state(AppState::Loading(LoadingStates::WaterGen))
                             .or(in_state(AppState::InGame(InGameStates::Game))),
                     ),
+            )
+            .add_systems(
+                Update,
+                (
+                    water_mark_from_dirty,
+                    water_backlog_from_todo,
+                    water_drain_mesh_backlog,
+                    water_collect_meshed_subchunks,
+                    water_unload_on_event,
+                    enqueue_flow_on_block_removed,
+                    schedule_flow_jobs,
+                    collect_flow_jobs,
+                )
+                    .chain()
+                    .run_if(uses_remote_world_data)
+                    .run_if(
+                        in_state(AppState::Loading(LoadingStates::BaseGen))
+                            .or(in_state(AppState::InGame(InGameStates::Game))),
+                    ),
             );
 
         app.add_systems(
             OnExit(AppState::InGame(InGameStates::Game)),
             cleanup_water_runtime_on_exit,
         )
-        .add_systems(Last, save_all_water_on_exit.run_if(on_message::<AppExit>));
+        .add_systems(
+            Last,
+            save_all_water_on_exit
+                .run_if(on_message::<AppExit>)
+                .run_if(uses_local_world_data),
+        );
     }
 }
 
 fn uses_local_world_data(multiplayer_connection: Res<MultiplayerConnectionState>) -> bool {
     multiplayer_connection.uses_local_save_data()
+}
+
+fn uses_remote_world_data(multiplayer_connection: Res<MultiplayerConnectionState>) -> bool {
+    !multiplayer_connection.uses_local_save_data()
 }
 
 async fn flow_task_run(
@@ -621,7 +649,7 @@ fn water_finish_check(
 
     if boot.started && world_ok && gen_done && coverage_ok && mesh_done {
         debug!("Water gen complete");
-        next.set(AppState::Loading(LoadingStates::CaveGen)); // Next step caves
+        next.set(AppState::InGame(InGameStates::Game));
     }
 }
 
@@ -751,7 +779,12 @@ fn save_all_water_on_exit(
     mut cache: ResMut<RegionCache>,
     chunks: Res<ChunkMap>,
     water: Res<FluidMap>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
 ) {
+    if !multiplayer_connection.uses_local_save_data() {
+        return;
+    }
+
     debug!("Exit: Saving all water");
     for (&coord, fc) in water.0.iter() {
         let mut w = fc.clone();

@@ -252,8 +252,15 @@ pub fn purge_stale_players(
 
 // ── LAN discovery poll ────────────────────────────────────────────────────────
 
-pub fn poll_lan_discovery(mut discovery: ResMut<LanDiscoveryResource>) {
+pub fn poll_lan_discovery(
+    mut discovery: ResMut<LanDiscoveryResource>,
+    state: Res<ServerState>,
+    config: Res<ServerRuntimeConfig>,
+) {
     if let Some(d) = discovery.0.as_mut() {
+        if let Err(e) = d.update_player_counts(state.players.len(), config.max_players) {
+            warn!("LAN discovery payload update failed: {}", e);
+        }
         if let Err(e) = d.poll() {
             warn!("LAN discovery error: {}", e);
         }

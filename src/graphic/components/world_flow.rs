@@ -19,8 +19,8 @@ fn sync_world_gen_progress(
 ) {
     let (phase, target_pct) = match app_state.get() {
         AppState::Loading(LoadingStates::BaseGen) => (LoadingPhase::BaseGen, 34.0),
-        AppState::Loading(LoadingStates::WaterGen) => (LoadingPhase::WaterGen, 72.0),
-        AppState::Loading(LoadingStates::CaveGen) => (LoadingPhase::CaveGen, 97.0),
+        AppState::Loading(LoadingStates::CaveGen) => (LoadingPhase::CaveGen, 72.0),
+        AppState::Loading(LoadingStates::WaterGen) => (LoadingPhase::WaterGen, 97.0),
         _ => (LoadingPhase::Done, 100.0),
     };
 

@@ -58,20 +58,26 @@ fn sync_pause_menu_labels(
 ) {
     for (css_id, mut button) in &mut buttons {
         if css_id.0 == PAUSE_CONNECT_ID {
-            button.text = if multiplayer_connection.connected {
-                "Disconnect".to_string()
+            let target = if multiplayer_connection.connected {
+                "Disconnect"
             } else {
-                "Open to LAN".to_string()
+                "Open to LAN"
             };
+            if button.text != target {
+                button.text = target.to_string();
+            }
             continue;
         }
 
         if css_id.0 == PAUSE_CLOSE_ID {
-            button.text = if multiplayer_connection.connected {
-                "Disconnect".to_string()
+            let target = if multiplayer_connection.connected {
+                "Disconnect"
             } else {
-                "Main Menu".to_string()
+                "Main Menu"
             };
+            if button.text != target {
+                button.text = target.to_string();
+            }
         }
     }
 }
