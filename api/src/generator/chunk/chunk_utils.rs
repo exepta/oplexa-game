@@ -69,6 +69,23 @@ pub async fn mesh_subchunk_async(
             [[u0, v1], [u1, v1], [u1, v0], [u0, v0]]
         }
     };
+    let face_visible = |self_id: BlockId, neigh_id: BlockId| -> bool {
+        if self_id == 0 {
+            return false;
+        }
+        if neigh_id == 0 {
+            return true;
+        }
+
+        let self_fluid = reg.fluid(self_id);
+        let neigh_fluid = reg.fluid(neigh_id);
+
+        if self_fluid && neigh_fluid {
+            return false;
+        }
+
+        !reg.opaque(neigh_id)
+    };
 
     for y in y0..y1 {
         for z in 0..CZ {
@@ -84,9 +101,8 @@ pub async fn mesh_subchunk_async(
                 let b = by_block.entry(id).or_insert_with(MeshBuild::new);
 
                 // +Y (Top)
-                if !(get(x as isize, y as isize + 1, z as isize) != 0
-                    && reg.opaque(get(x as isize, y as isize + 1, z as isize)))
-                {
+                let n_up = get(x as isize, y as isize + 1, z as isize);
+                if face_visible(id, n_up) {
                     let u = reg.uv(id, Face::Top);
                     b.quad(
                         [
@@ -100,9 +116,8 @@ pub async fn mesh_subchunk_async(
                     );
                 }
                 // -Y (Bottom)
-                if !(get(x as isize, y as isize - 1, z as isize) != 0
-                    && reg.opaque(get(x as isize, y as isize - 1, z as isize)))
-                {
+                let n_down = get(x as isize, y as isize - 1, z as isize);
+                if face_visible(id, n_down) {
                     let u = reg.uv(id, Face::Bottom);
                     b.quad(
                         [
@@ -122,7 +137,7 @@ pub async fn mesh_subchunk_async(
                     east_at_opt(y, z)
                 };
                 if let Some(nei) = n_east {
-                    if !(nei != 0 && reg.opaque(nei)) {
+                    if face_visible(id, nei) {
                         let u = reg.uv(id, Face::East);
                         b.quad(
                             [
@@ -144,7 +159,7 @@ pub async fn mesh_subchunk_async(
                     west_at_opt(y, z)
                 };
                 if let Some(nei) = n_west {
-                    if !(nei != 0 && reg.opaque(nei)) {
+                    if face_visible(id, nei) {
                         let u = reg.uv(id, Face::West);
                         b.quad(
                             [
@@ -166,7 +181,7 @@ pub async fn mesh_subchunk_async(
                     south_at_opt(y, x)
                 };
                 if let Some(nei) = n_south {
-                    if !(nei != 0 && reg.opaque(nei)) {
+                    if face_visible(id, nei) {
                         let u = reg.uv(id, Face::South);
                         b.quad(
                             [
@@ -188,7 +203,7 @@ pub async fn mesh_subchunk_async(
                     north_at_opt(y, x)
                 };
                 if let Some(nei) = n_north {
-                    if !(nei != 0 && reg.opaque(nei)) {
+                    if face_visible(id, nei) {
                         let u = reg.uv(id, Face::North);
                         b.quad(
                             [

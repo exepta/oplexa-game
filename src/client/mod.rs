@@ -16,11 +16,11 @@ use crate::core::states::states::{AppState, BeforeUiState, LoadingStates};
 use crate::core::world::block::{
     BlockRegistry, VOXEL_SIZE, build_block_cube_mesh, get_block_world,
 };
-use crate::core::world::chunk::{ChunkMap, LoadCenter};
+use crate::core::world::chunk::{ChunkMap, LoadCenter, SEA_LEVEL};
 use crate::core::world::chunk_dimension::{
-    SEC_COUNT, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local,
+    CX, CY, CZ, SEC_COUNT, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local,
 };
-use crate::core::world::fluid::{FluidMap, WaterMeshIndex};
+use crate::core::world::fluid::{FluidChunk, FluidMap, WaterMeshIndex};
 use crate::core::world::save::RegionCache;
 use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
 use crate::generator::chunk::chunk_utils::safe_despawn_entity;
@@ -167,12 +167,14 @@ struct RemoteChunkStreamState {
 struct BlockIdRemap {
     server_to_local: Vec<u16>,
     local_to_server: Vec<u16>,
+    ready: bool,
 }
 
 impl BlockIdRemap {
     fn reset(&mut self) {
         self.server_to_local.clear();
         self.local_to_server.clear();
+        self.ready = false;
     }
 
     fn configure_from_server_palette(&mut self, palette: &[String], registry: &BlockRegistry) {
@@ -210,6 +212,8 @@ impl BlockIdRemap {
                 unknown_names
             );
         }
+
+        self.ready = true;
     }
 
     fn to_local(&self, server_id: u16) -> u16 {
@@ -230,6 +234,10 @@ impl BlockIdRemap {
             .get(local_id as usize)
             .copied()
             .unwrap_or(0)
+    }
+
+    fn is_ready(&self) -> bool {
+        self.ready
     }
 }
 
@@ -1187,6 +1195,9 @@ fn finish_open_to_lan_connect(
     time: Res<Time>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut local_host: NonSendMut<LocalLanHost>,
+    mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
+    mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut block_remap: ResMut<BlockIdRemap>,
     mut commands: Commands,
 ) {
     local_host.refresh();
@@ -1204,7 +1215,18 @@ fn finish_open_to_lan_connect(
         return;
     };
 
-    do_connect(&mut runtime, session_url, &mut commands);
+    block_remap.reset();
+    do_connect(&mut runtime, session_url.clone(), &mut commands);
+    multiplayer_connection.connected = false;
+    multiplayer_connection.phase = MultiplayerConnectionPhase::Connecting;
+    multiplayer_connection.active_session_url = Some(session_url);
+    multiplayer_connection.server_name = None;
+    multiplayer_connection.world_name = None;
+    multiplayer_connection.world_seed = None;
+    multiplayer_connection.spawn_translation = None;
+    multiplayer_connection.last_error = None;
+    chunk_stream.last_requested_center = None;
+    chunk_stream.last_requested_radius = None;
     local_host.connect_timer = None;
 }
 
@@ -1385,6 +1407,9 @@ fn receive_world_messages(
     let Some(entity) = runtime.connection_entity else {
         return;
     };
+    if !block_remap.is_ready() {
+        return;
+    }
 
     let Ok((mut recv_chunk, mut recv_block_break, mut recv_block_place)) = q.get_mut(entity) else {
         return;
@@ -1395,6 +1420,10 @@ fn receive_world_messages(
             continue;
         };
 
+        let water_local_id = registry
+            .id_opt("water_block")
+            .or_else(|| registry.id_opt("water"))
+            .unwrap_or(0);
         let coord = IVec2::new(message.coord[0], message.coord[1]);
         let Ok(mut chunk) = crate::generator::chunk::chunk_utils::decode_chunk(&message.blocks)
         else {
@@ -1402,8 +1431,20 @@ fn receive_world_messages(
             continue;
         };
 
-        for block_id in &mut chunk.blocks {
-            *block_id = remap_server_block_id(&block_remap, registry, *block_id);
+        let mut fluid_chunk = FluidChunk::new(SEA_LEVEL);
+        for y in 0..CY {
+            for z in 0..CZ {
+                for x in 0..CX {
+                    let id = chunk.get(x, y, z);
+                    let local_id = remap_server_block_id(&block_remap, registry, id);
+                    if water_local_id != 0 && local_id == water_local_id {
+                        chunk.set(x, y, z, 0);
+                        fluid_chunk.set(x, y, z, true);
+                    } else {
+                        chunk.set(x, y, z, local_id);
+                    }
+                }
+            }
         }
 
         debug!(
@@ -1413,6 +1454,7 @@ fn receive_world_messages(
         );
         chunk.mark_all_dirty();
         chunk_map.chunks.insert(coord, chunk);
+        fluids.0.insert(coord, fluid_chunk);
 
         for sub in 0..SEC_COUNT {
             ev_dirty.write(SubChunkNeedRemeshEvent { coord, sub });
@@ -1439,7 +1481,7 @@ fn receive_world_messages(
         if Some(message.player_id) == runtime.local_player_id {
             continue;
         }
-        apply_remote_block_break(message.location, &mut chunk_map, &mut ev_dirty);
+        apply_remote_block_break(message.location, &mut chunk_map, &mut fluids, &mut ev_dirty);
     }
 
     for message in recv_block_place.receive() {
@@ -1452,6 +1494,7 @@ fn receive_world_messages(
         apply_remote_block_place(
             message.location,
             remap_server_block_id(&block_remap, registry, message.block_id),
+            registry,
             &mut chunk_map,
             &mut fluids,
             &mut ev_dirty,
@@ -1478,6 +1521,9 @@ fn receive_drop_messages(
     let Some(entity) = runtime.connection_entity else {
         return;
     };
+    if !block_remap.is_ready() {
+        return;
+    }
 
     let Ok((mut recv_spawn, mut recv_picked)) = q.get_mut(entity) else {
         return;
@@ -1964,15 +2010,34 @@ fn send_client_keepalive(
 fn apply_remote_block_break(
     location: [i32; 3],
     chunk_map: &mut ChunkMap,
+    fluids: &mut FluidMap,
     ev_dirty: &mut MessageWriter<SubChunkNeedRemeshEvent>,
 ) {
     let world_pos = IVec3::from_array(location);
+    if world_pos.y < Y_MIN || world_pos.y > Y_MAX {
+        return;
+    }
 
+    let mut changed = false;
     if let Some(mut access) = world_access_mut(chunk_map, world_pos) {
-        if access.get() == 0 {
-            return;
+        if access.get() != 0 {
+            access.set(0);
+            changed = true;
         }
-        access.set(0);
+    }
+
+    let (chunk_coord, local) = world_to_chunk_xz(world_pos.x, world_pos.z);
+    let lx = local.x as usize;
+    let lz = local.y as usize;
+    let ly = world_y_to_local(world_pos.y);
+    if let Some(fluid_chunk) = fluids.0.get_mut(&chunk_coord) {
+        if fluid_chunk.get(lx, ly, lz) {
+            fluid_chunk.set(lx, ly, lz, false);
+            changed = true;
+        }
+    }
+
+    if changed {
         mark_dirty_block_and_neighbors(chunk_map, world_pos, ev_dirty);
     }
 }
@@ -1980,6 +2045,7 @@ fn apply_remote_block_break(
 fn apply_remote_block_place(
     location: [i32; 3],
     block_id: u16,
+    registry: &BlockRegistry,
     chunk_map: &mut ChunkMap,
     fluids: &mut FluidMap,
     ev_dirty: &mut MessageWriter<SubChunkNeedRemeshEvent>,
@@ -1997,13 +2063,20 @@ fn apply_remote_block_place(
     let lx = local.x as usize;
     let lz = local.y as usize;
     let ly = world_y_to_local(world_pos.y);
+    let is_fluid = registry.is_fluid(block_id);
 
     if let Some(mut access) = world_access_mut(chunk_map, world_pos) {
-        access.set(block_id);
+        access.set(if is_fluid { 0 } else { block_id });
         mark_dirty_block_and_neighbors(chunk_map, world_pos, ev_dirty);
     }
 
-    if let Some(fluid_chunk) = fluids.0.get_mut(&chunk_coord) {
+    let fluid_chunk = fluids
+        .0
+        .entry(chunk_coord)
+        .or_insert_with(|| FluidChunk::new(SEA_LEVEL));
+    if is_fluid {
+        fluid_chunk.set(lx, ly, lz, true);
+    } else {
         fluid_chunk.set(lx, ly, lz, false);
     }
 }

@@ -40,6 +40,8 @@ pub fn load_bootstrap() -> BootstrapResult {
                 server_name: server_settings.server_name.clone(),
                 motd: server_settings.motd.clone(),
                 session_url: public_url.clone(),
+                current_players: 0,
+                max_players: server_settings.max_players,
                 observed_addr: None,
             },
         )

@@ -10,6 +10,10 @@ pub struct LanServerInfo {
     pub motd: String,
     pub session_url: String,
     #[serde(default)]
+    pub current_players: usize,
+    #[serde(default)]
+    pub max_players: usize,
+    #[serde(default)]
     pub observed_addr: Option<String>,
 }
 
@@ -63,6 +67,7 @@ impl LanDiscoveryClient {
 
 pub struct LanDiscoveryServer {
     socket: UdpSocket,
+    info: LanServerInfo,
     payload: Vec<u8>,
 }
 
@@ -70,12 +75,30 @@ impl LanDiscoveryServer {
     pub fn bind(port: u16, info: LanServerInfo) -> io::Result<Self> {
         let socket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], port)))?;
         socket.set_nonblocking(true)?;
+        let payload = serde_json::to_vec(&info)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
 
         Ok(Self {
             socket,
-            payload: serde_json::to_vec(&info)
-                .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?,
+            info,
+            payload,
         })
+    }
+
+    pub fn update_player_counts(
+        &mut self,
+        current_players: usize,
+        max_players: usize,
+    ) -> io::Result<()> {
+        if self.info.current_players == current_players && self.info.max_players == max_players {
+            return Ok(());
+        }
+
+        self.info.current_players = current_players;
+        self.info.max_players = max_players;
+        self.payload = serde_json::to_vec(&self.info)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+        Ok(())
     }
 
     pub fn poll(&self) -> io::Result<()> {

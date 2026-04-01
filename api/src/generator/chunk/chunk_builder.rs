@@ -289,7 +289,7 @@ fn check_base_gen_world_ready(
     if ready {
         commands.remove_resource::<LoadCenter>();
         if multiplayer_connection.uses_local_save_data() {
-            next.set(AppState::Loading(LoadingStates::WaterGen));
+            next.set(AppState::Loading(LoadingStates::CaveGen));
         } else {
             next.set(AppState::InGame(InGameStates::Game));
         }
@@ -585,9 +585,12 @@ fn collect_meshed_subchunks(
                     continue;
                 }
 
-                let base = phys_positions.len() as u32;
-                phys_positions.extend_from_slice(&mb.pos);
-                phys_indices.extend(mb.idx.iter().map(|i| base + *i));
+                // Fluids (e.g. water) are rendered but must not become solid colliders.
+                if !reg.is_fluid(bid) {
+                    let base = phys_positions.len() as u32;
+                    phys_positions.extend_from_slice(&mb.pos);
+                    phys_indices.extend(mb.idx.iter().map(|i| base + *i));
+                }
 
                 let mesh = mb.into_mesh();
                 let ent = commands

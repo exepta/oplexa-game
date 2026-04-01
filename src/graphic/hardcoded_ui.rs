@@ -37,7 +37,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy_extended_ui::styles::CssID;
 use bevy_extended_ui::widgets::{
     BindToID, Button, Div, Img, InputField, InputType, InputValue, Paragraph, ProgressBar,
-    Scrollbar, UIWidgetState,
+    Scrollbar, UIGenID, UIWidgetState,
 };
 use bevy_extended_ui::{ExtendedUiConfiguration, ExtendedUiPlugin};
 use serde::{Deserialize, Serialize};
@@ -182,6 +182,9 @@ enum UiButtonTone {
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 enum UiTextTone {
+    Heading,
+    CardName,
+    CardPing,
     Normal,
     Darker,
 }
@@ -307,6 +310,8 @@ struct ProbedServerStatus {
     matched_saved_key: Option<String>,
     server_name: String,
     motd: String,
+    current_players: usize,
+    max_players: usize,
     ping_ms: Option<u32>,
     last_seen_at: f64,
 }
@@ -319,8 +324,11 @@ struct DisplayServerEntry {
     host: String,
     port: u16,
     motd: String,
+    current_players: Option<usize>,
+    max_players: Option<usize>,
     ping_ms: Option<u32>,
     online: bool,
+    waiting_for_response: bool,
     session_url: String,
 }
 
@@ -340,6 +348,7 @@ struct ServerFormDialogState {
 struct MultiplayerUiState {
     saved_servers: Vec<SavedServerEntry>,
     probed_servers: HashMap<String, ProbedServerStatus>,
+    probe_started_at: HashMap<String, f64>,
     dismissed_server_keys: HashSet<String>,
     display_servers: Vec<DisplayServerEntry>,
     rendered_keys: Vec<String>,
@@ -437,6 +446,7 @@ impl Plugin for HardcodedUiPlugin {
                     style_buttons,
                     style_inputs,
                     style_paragraphs,
+                    style_pause_menu_button_texts,
                     style_images,
                     style_scroll_div_lists,
                     style_div_scrollbars,
@@ -508,7 +518,7 @@ impl Plugin for HardcodedUiPlugin {
                 (reset_world_gen_ui_animation, show_world_gen_ui),
             )
             .add_systems(
-                OnExit(AppState::Loading(LoadingStates::CaveGen)),
+                OnExit(AppState::Loading(LoadingStates::WaterGen)),
                 hide_world_gen_ui,
             )
             .add_systems(

@@ -348,8 +348,10 @@ fn handle_single_player_actions(
 }
 
 fn exit_single_player_screen(
+    mut commands: Commands,
     mut ui_state: ResMut<SinglePlayerUiState>,
     mut ui_interaction: ResMut<UiInteractionState>,
+    item_entities: Query<Entity, With<SinglePlayerListItem>>,
     mut roots: ParamSet<(
         Query<&mut Visibility, With<SinglePlayerRoot>>,
         Query<&mut Visibility, With<CreateWorldRoot>>,
@@ -361,6 +363,11 @@ fn exit_single_player_screen(
     if let Ok(mut visible) = roots.p1().single_mut() {
         *visible = Visibility::Hidden;
     }
+
+    for entity in item_entities.iter() {
+        commands.entity(entity).despawn();
+    }
+
     ui_interaction.menu_open = false;
     ui_state.page = SinglePlayerPage::List;
     ui_state.pending_delete_index = None;

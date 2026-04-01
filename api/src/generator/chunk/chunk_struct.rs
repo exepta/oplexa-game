@@ -28,6 +28,7 @@ pub struct RegLiteEntry {
     pub south: UvRect,
     pub west: UvRect,
     pub opaque: bool,
+    pub fluid: bool,
 }
 #[derive(Clone)]
 pub struct RegLite {
@@ -51,6 +52,7 @@ impl RegLite {
                     south: reg.uv(id, Face::South),
                     west: reg.uv(id, Face::West),
                     opaque: reg.def(id).stats.opaque,
+                    fluid: reg.def(id).stats.fluid,
                 },
             );
         }
@@ -71,6 +73,10 @@ impl RegLite {
     #[inline]
     pub fn opaque(&self, id: BlockId) -> bool {
         self.map.get(&id).map(|e| e.opaque).unwrap_or(false)
+    }
+    #[inline]
+    pub fn fluid(&self, id: BlockId) -> bool {
+        self.map.get(&id).map(|e| e.fluid).unwrap_or(false)
     }
 }
 

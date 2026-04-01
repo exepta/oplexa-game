@@ -61,6 +61,10 @@ fn color_background_hover() -> Color {
     Color::srgb_u8(0x39, 0x3d, 0x4a)
 }
 
+fn color_single_player_list_background() -> Color {
+    Color::srgb_u8(0x26, 0x2a, 0x35)
+}
+
 fn color_accent() -> Color {
     Color::srgb_u8(0x40, 0xc2, 0x99)
 }
@@ -75,6 +79,14 @@ fn color_text() -> Color {
 
 fn color_text_darker() -> Color {
     Color::srgb_u8(0x9f, 0xa1, 0xa0)
+}
+
+fn color_server_offline_border() -> Color {
+    Color::srgb_u8(0xd4, 0x4c, 0x4c)
+}
+
+fn color_server_waiting_border() -> Color {
+    Color::srgb_u8(0xe0, 0x98, 0x2d)
 }
 
 fn apply_button_layout(node: &mut Node, kind: UiButtonKind) {
@@ -219,12 +231,39 @@ fn style_paragraphs(
     mut texts: Query<(&mut TextColor, &mut TextFont, Option<&UiTextTone>), With<Node>>,
 ) {
     for (mut color, mut font, tone) in &mut texts {
-        color.0 = match tone.copied().unwrap_or(UiTextTone::Normal) {
-            UiTextTone::Normal => color_text(),
-            UiTextTone::Darker => color_text_darker(),
+        let tone = tone.copied();
+        color.0 = match tone {
+            Some(UiTextTone::Darker) => color_text_darker(),
+            Some(UiTextTone::CardPing) => color_text_darker(),
+            _ => color_text(),
         };
-        if font.font_size <= 0.0 {
-            font.font_size = 13.0;
+        font.font_size = match tone {
+            Some(UiTextTone::Heading) => 14.0,
+            Some(UiTextTone::CardName) => 13.0,
+            Some(UiTextTone::CardPing) => 11.0,
+            _ => 12.0,
+        };
+    }
+}
+
+fn style_pause_menu_button_texts(
+    buttons: Query<(&UIGenID, &CssID), With<Button>>,
+    mut texts: Query<(&BindToID, &mut TextFont), With<Text>>,
+) {
+    let mut pause_ids = HashSet::new();
+    for (id, css_id) in &buttons {
+        if css_id.0 == PAUSE_PLAY_ID
+            || css_id.0 == PAUSE_CONNECT_ID
+            || css_id.0 == PAUSE_SETTINGS_ID
+            || css_id.0 == PAUSE_CLOSE_ID
+        {
+            pause_ids.insert(id.get());
+        }
+    }
+
+    for (bind, mut font) in &mut texts {
+        if pause_ids.contains(&bind.get()) {
+            font.font_size = 12.0;
         }
     }
 }
@@ -321,8 +360,8 @@ fn style_scroll_div_lists(
                 node.overflow.x = OverflowAxis::Clip;
             }
         }
-        if bg.0 != color_background_hover() {
-            bg.0 = color_background_hover();
+        if bg.0 != color_single_player_list_background() {
+            bg.0 = color_single_player_list_background();
         }
         let border_col = color_background_hover();
         if border.top != border_col

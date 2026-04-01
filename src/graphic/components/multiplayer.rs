@@ -1,4 +1,27 @@
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+enum MultiplayerCardFieldKind {
+    Name,
+    Motd,
+    Ping,
+    Players,
+}
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+struct MultiplayerCardField {
+    index: usize,
+    kind: MultiplayerCardFieldKind,
+}
+
+#[derive(Clone, Debug)]
+struct MultiplayerCardText {
+    name: String,
+    motd: String,
+    ping: String,
+    players: String,
+}
+
 fn enter_multiplayer_screen(
+    time: Res<Time>,
     mut commands: Commands,
     ui_entities: Res<UiEntities>,
     mut ui_state: ResMut<MultiplayerUiState>,
@@ -20,10 +43,14 @@ fn enter_multiplayer_screen(
     }
 
     ui_state.saved_servers = load_saved_servers();
+    ui_state.probe_started_at.clear();
     ui_state.form_dialog = None;
     ui_state.pending_delete_key = None;
     ui_state.joining_key = None;
-    rebuild_display_servers(&mut ui_state, 0.0);
+    probe_runtime.configure();
+    let now = time.elapsed_secs_f64();
+    request_multiplayer_server_probe(&mut ui_state, &mut probe_runtime, now);
+    rebuild_display_servers(&mut ui_state, now);
     rebuild_multiplayer_cards(
         &mut commands,
         ui_entities.multiplayer_server_list,
@@ -33,7 +60,6 @@ fn enter_multiplayer_screen(
         &names_q,
     );
     clear_server_form_inputs(&mut form_inputs);
-    probe_runtime.configure();
 }
 
 fn set_multiplayer_interaction(
@@ -119,7 +145,8 @@ fn handle_multiplayer_actions(
                 });
             }
             MultiplayerAction::RefreshServers => {
-                request_multiplayer_server_probe(&ui_state.saved_servers, &mut probe_runtime, now);
+                ui_state.probe_started_at.clear();
+                request_multiplayer_server_probe(&mut ui_state, &mut probe_runtime, now);
             }
             MultiplayerAction::OpenAddServer => {
                 ui_state.form_dialog = Some(ServerFormDialogState {
@@ -285,7 +312,7 @@ fn poll_multiplayer_servers(
     let now = time.elapsed_secs_f64();
     probe_runtime.probe_timer.tick(time.delta());
     if probe_runtime.probe_timer.just_finished() {
-        request_multiplayer_server_probe(&ui_state.saved_servers, &mut probe_runtime, now);
+        request_multiplayer_server_probe(&mut ui_state, &mut probe_runtime, now);
     }
 
     let Some(client) = probe_runtime.client.as_ref() else {
@@ -376,24 +403,93 @@ fn rebuild_multiplayer_cards(
         }
 
         for (index, server) in ui_state.display_servers.iter().enumerate() {
-            let ping = server
-                .ping_ms
-                .map(|value| format!("{value} ms"))
-                .unwrap_or_else(|| "-".to_string());
+            let text = compose_multiplayer_card_text(server, false);
 
             list.spawn((
                 Button {
-                    text: format!(
-                        "Server Name: {}\nMOTD: {}\nServer IP: {}\nServer Port: {}\nPing: {}",
-                        server.server_name, server.motd, server.host, server.port, ping
-                    ),
+                    text: String::new(),
                     ..default()
                 },
                 CssID(format!("{MULTIPLAYER_CARD_PREFIX}{index}")),
                 UiButtonKind::Card,
                 UiButtonTone::Normal,
                 MultiplayerListItem,
-            ));
+            ))
+            .with_children(|card| {
+                card.spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Row,
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor::DEFAULT,
+                ))
+                .with_children(|row| {
+                    row.spawn((
+                        Paragraph {
+                            text: text.name.clone(),
+                            ..default()
+                        },
+                        UiTextTone::CardName,
+                        MultiplayerCardField {
+                            index,
+                            kind: MultiplayerCardFieldKind::Name,
+                        },
+                        Pickable::IGNORE,
+                    ));
+                    row.spawn((
+                        Paragraph {
+                            text: text.ping.clone(),
+                            ..default()
+                        },
+                        UiTextTone::CardPing,
+                        MultiplayerCardField {
+                            index,
+                            kind: MultiplayerCardFieldKind::Ping,
+                        },
+                        Pickable::IGNORE,
+                    ));
+                });
+
+                card.spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Row,
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor::DEFAULT,
+                ))
+                .with_children(|row| {
+                    row.spawn((
+                        Paragraph {
+                            text: text.motd.clone(),
+                            ..default()
+                        },
+                        UiTextTone::Darker,
+                        MultiplayerCardField {
+                            index,
+                            kind: MultiplayerCardFieldKind::Motd,
+                        },
+                        Pickable::IGNORE,
+                    ));
+                    row.spawn((
+                        Paragraph {
+                            text: text.players.clone(),
+                            ..default()
+                        },
+                        UiTextTone::Normal,
+                        MultiplayerCardField {
+                            index,
+                            kind: MultiplayerCardFieldKind::Players,
+                        },
+                        Pickable::IGNORE,
+                    ));
+                });
+            });
         }
     });
 
@@ -491,31 +587,24 @@ fn sync_multiplayer_dialogs(
 fn sync_multiplayer_card_text(
     ui_state: Res<MultiplayerUiState>,
     connection_state: Res<MultiplayerConnectionState>,
-    mut card_buttons: Query<(&CssID, &mut Button)>,
-    mut delete_text: Query<(&mut Paragraph, Option<&MultiplayerDeleteText>)>,
+    mut text_queries: ParamSet<(
+        Query<(&mut Paragraph, &MultiplayerCardField)>,
+        Query<(&mut Paragraph, &MultiplayerDeleteText)>,
+    )>,
 ) {
-    for (css_id, mut button) in &mut card_buttons {
-        let Some(index) = parse_card_index(css_id.0.as_str(), MULTIPLAYER_CARD_PREFIX) else {
-            continue;
-        };
-        let Some(server) = ui_state.display_servers.get(index) else {
+    for (mut paragraph, field) in &mut text_queries.p0() {
+        let Some(server) = ui_state.display_servers.get(field.index) else {
             continue;
         };
         let connected = is_active_connected_server(server, &connection_state);
-        let motd = if connected && !server.online {
-            "Connected (Discovery unavailable)".to_string()
-        } else {
-            server.motd.clone()
+        let text = compose_multiplayer_card_text(server, connected);
+
+        paragraph.text = match field.kind {
+            MultiplayerCardFieldKind::Name => text.name,
+            MultiplayerCardFieldKind::Motd => text.motd,
+            MultiplayerCardFieldKind::Ping => text.ping,
+            MultiplayerCardFieldKind::Players => text.players,
         };
-        let ping = match server.ping_ms {
-            Some(ping) if server.online => format!("{ping} ms"),
-            _ if connected => "connected".to_string(),
-            _ => "-".to_string(),
-        };
-        button.text = format!(
-            "Server Name: {}\nMOTD: {}\nServer IP: {}\nServer Port: {}\nPing: {}",
-            server.server_name, motd, server.host, server.port, ping
-        );
     }
 
     let name = ui_state
@@ -530,10 +619,7 @@ fn sync_multiplayer_card_text(
         .map(|server| server.server_name.as_str())
         .unwrap_or_default();
 
-    for (mut paragraph, marker) in &mut delete_text {
-        if marker.is_none() {
-            continue;
-        }
+    for (mut paragraph, _) in &mut text_queries.p1() {
         paragraph.text = format!("Delete server `{name}`?");
     }
 }
@@ -554,8 +640,10 @@ fn sync_multiplayer_card_style(
 
         let border_color = if server.online || connected {
             color_accent()
+        } else if server.waiting_for_response {
+            color_server_waiting_border()
         } else {
-            color_background_hover()
+            color_server_offline_border()
         };
 
         border.top = border_color;
@@ -587,6 +675,7 @@ fn exit_multiplayer_screen(
     }
 
     ui_interaction.menu_open = false;
+    ui_state.probe_started_at.clear();
     ui_state.form_dialog = None;
     ui_state.pending_delete_key = None;
     ui_state.joining_key = None;
@@ -648,12 +737,20 @@ fn rebuild_display_servers(ui_state: &mut MultiplayerUiState, now: f64) -> bool 
         .map(|(index, server)| DisplayServerEntry {
             key: server.key(),
             saved_index: Some(index),
-            server_name: server.server_name.clone(),
+            server_name: resolve_display_server_name(
+                Some(server.server_name.as_str()),
+                None,
+                server.host.as_str(),
+                server.port,
+            ),
             host: server.host.clone(),
             port: server.port,
             motd: offline_status_message(server.port),
+            current_players: None,
+            max_players: None,
             ping_ms: None,
             online: false,
+            waiting_for_response: false,
             session_url: server.session_url(),
         })
         .collect::<Vec<_>>();
@@ -700,14 +797,24 @@ fn rebuild_display_servers(ui_state: &mut MultiplayerUiState, now: f64) -> bool 
             .iter_mut()
             .find(|server| server.key == target_key)
         {
-            existing.server_name = status.server_name.clone();
             existing.motd = if online {
                 status.motd.clone()
             } else {
                 offline_status_message(existing.port)
             };
+            existing.current_players = if online {
+                Some(status.current_players)
+            } else {
+                None
+            };
+            existing.max_players = if online {
+                Some(status.max_players)
+            } else {
+                None
+            };
             existing.ping_ms = if online { status.ping_ms } else { None };
             existing.online = online;
+            existing.waiting_for_response = false;
             existing.session_url = status.session_url.clone();
             if let Some((host, port)) = parse_session_url(status.session_url.as_str()) {
                 if existing.saved_index.is_none() {
@@ -715,6 +822,16 @@ fn rebuild_display_servers(ui_state: &mut MultiplayerUiState, now: f64) -> bool 
                 }
                 existing.port = port;
             }
+            let saved_name = existing
+                .saved_index
+                .and_then(|index| ui_state.saved_servers.get(index))
+                .map(|entry| entry.server_name.as_str());
+            existing.server_name = resolve_display_server_name(
+                saved_name,
+                Some(status.server_name.as_str()),
+                existing.host.as_str(),
+                existing.port,
+            );
             continue;
         }
 
@@ -722,7 +839,12 @@ fn rebuild_display_servers(ui_state: &mut MultiplayerUiState, now: f64) -> bool 
             display_servers.push(DisplayServerEntry {
                 key: target_key,
                 saved_index: None,
-                server_name: status.server_name.clone(),
+                server_name: resolve_display_server_name(
+                    None,
+                    Some(status.server_name.as_str()),
+                    host.as_str(),
+                    port,
+                ),
                 host: status.observed_host.clone().unwrap_or(host),
                 port,
                 motd: if online {
@@ -730,11 +852,40 @@ fn rebuild_display_servers(ui_state: &mut MultiplayerUiState, now: f64) -> bool 
                 } else {
                     offline_status_message(port)
                 },
+                current_players: if online {
+                    Some(status.current_players)
+                } else {
+                    None
+                },
+                max_players: if online { Some(status.max_players) } else { None },
                 ping_ms: if online { status.ping_ms } else { None },
                 online,
+                waiting_for_response: false,
                 session_url: status.session_url.clone(),
             });
         }
+    }
+
+    for server in &mut display_servers {
+        if server.online {
+            server.waiting_for_response = false;
+            continue;
+        }
+
+        server.ping_ms = None;
+        server.current_players = None;
+        server.max_players = None;
+
+        let waiting = ui_state
+            .probe_started_at
+            .get(&server.key)
+            .is_some_and(|started_at| (now - *started_at) < SERVER_STALE_AFTER_SECS);
+        server.waiting_for_response = waiting;
+        server.motd = if waiting {
+            waiting_status_message()
+        } else {
+            offline_status_message(server.port)
+        };
     }
 
     display_servers.sort_by(|left, right| {
@@ -777,18 +928,26 @@ fn update_probed_server(
     };
 
     let is_new = !ui_state.probed_servers.contains_key(&storage_key);
+    let storage_key_for_cleanup = storage_key.clone();
+    let matched_saved_key_for_store = matched_saved_key.clone();
     ui_state.probed_servers.insert(
         storage_key,
         ProbedServerStatus {
             session_url: server.session_url,
             observed_host: server.observed_addr,
-            matched_saved_key,
+            matched_saved_key: matched_saved_key_for_store,
             server_name: server.server_name,
             motd: server.motd,
+            current_players: server.current_players,
+            max_players: server.max_players,
             ping_ms,
             last_seen_at: now,
         },
     );
+    ui_state.probe_started_at.remove(&storage_key_for_cleanup);
+    if let Some(key) = matched_saved_key {
+        ui_state.probe_started_at.remove(&key);
+    }
     is_new
 }
 
@@ -845,10 +1004,6 @@ fn read_server_form_inputs(
     }
 
     let server_name = name_text.trim().to_string();
-    if server_name.is_empty() {
-        warn!("Add Server: server name is required.");
-        return None;
-    }
 
     let Some((host, port)) = parse_server_address(address_text.as_str()) else {
         return None;
@@ -949,7 +1104,7 @@ fn resolve_probe_addrs(host: &str, port: u16) -> Vec<SocketAddr> {
 }
 
 fn request_multiplayer_server_probe(
-    saved_servers: &[SavedServerEntry],
+    ui_state: &mut MultiplayerUiState,
     probe_runtime: &mut ServerProbeRuntime,
     now: f64,
 ) {
@@ -963,15 +1118,17 @@ fn request_multiplayer_server_probe(
         probe_runtime.last_broadcast_sent_at = Some(now);
     }
 
-    for server in saved_servers {
+    for server in &ui_state.saved_servers {
+        let server_key = server.key();
         for addr in resolve_probe_addrs(server.host.as_str(), discovery_port_for(server.port)) {
             if let Err(error) = client.query_addr(addr) {
                 warn!("Probe for {} failed: {}", server.key(), error);
                 continue;
             }
+            ui_state.probe_started_at.entry(server_key.clone()).or_insert(now);
             probe_runtime
                 .pending_direct_probes
-                .insert(server.key(), now);
+                .insert(server_key.clone(), now);
         }
     }
 }
@@ -1000,11 +1157,95 @@ fn parse_session_url(session_url: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
-fn offline_status_message(game_port: u16) -> String {
-    format!(
-        "No discovery response on UDP {}.",
-        discovery_port_for(game_port)
-    )
+fn waiting_status_message() -> String {
+    "Waiting for server answer...".to_string()
+}
+
+fn offline_status_message(_game_port: u16) -> String {
+    "Server is Offline!".to_string()
+}
+
+fn resolve_display_server_name(
+    saved_name: Option<&str>,
+    discovered_name: Option<&str>,
+    host: &str,
+    port: u16,
+) -> String {
+    let saved_name = saved_name.unwrap_or_default().trim();
+    if !saved_name.is_empty() {
+        return saved_name.to_string();
+    }
+
+    let discovered_name = discovered_name.unwrap_or_default().trim();
+    if !discovered_name.is_empty() {
+        return discovered_name.to_string();
+    }
+
+    format!("{host}:{port}")
+}
+
+fn trim_card_text(value: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    let char_count = trimmed.chars().count();
+    if char_count <= max_chars {
+        return trimmed.to_string();
+    }
+
+    if max_chars <= 1 {
+        return "…".to_string();
+    }
+
+    let mut shortened = trimmed.chars().take(max_chars - 1).collect::<String>();
+    shortened.push('…');
+    shortened
+}
+
+fn compose_multiplayer_card_text(server: &DisplayServerEntry, connected: bool) -> MultiplayerCardText {
+    let name = trim_card_text(server.server_name.as_str(), 42);
+
+    if !connected && !server.online {
+        let status = if server.waiting_for_response {
+            waiting_status_message()
+        } else {
+            offline_status_message(server.port)
+        };
+        return MultiplayerCardText {
+            name,
+            motd: trim_card_text(status.as_str(), 42),
+            ping: String::new(),
+            players: String::new(),
+        };
+    }
+
+    let motd = if connected && !server.online {
+        "Connected (Discovery unavailable)".to_string()
+    } else {
+        server.motd.clone()
+    };
+    let ping = match server.ping_ms {
+        Some(ping) if server.online => format!("{ping} ms"),
+        _ if connected => "connected".to_string(),
+        _ => "-".to_string(),
+    };
+    let players = format_player_count(server, server.online || connected);
+
+    MultiplayerCardText {
+        name,
+        motd: trim_card_text(motd.as_str(), 42),
+        ping: trim_card_text(ping.as_str(), 14),
+        players: trim_card_text(players.as_str(), 14),
+    }
+}
+
+fn format_player_count(server: &DisplayServerEntry, online: bool) -> String {
+    if !online {
+        return "- / -".to_string();
+    }
+
+    match (server.current_players, server.max_players) {
+        (Some(current), Some(max)) if max > 0 => format!("{current} / {max}"),
+        _ => "- / -".to_string(),
+    }
 }
 
 fn is_active_connected_server(

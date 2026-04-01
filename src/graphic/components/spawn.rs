@@ -26,7 +26,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         text: "Oplexa".to_string(),
                         ..default()
                     },
-                    UiTextTone::Normal,
+                    UiTextTone::Heading,
                 ));
                 panel.spawn((
                     Button {
@@ -94,7 +94,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         text: "Single Player".to_string(),
                         ..default()
                     },
-                    UiTextTone::Normal,
+                    UiTextTone::Heading,
                 ));
                 let list_entity = panel
                     .spawn((
@@ -109,7 +109,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                             overflow: Overflow::scroll_y(),
                             ..default()
                         },
-                        BackgroundColor(color_background_hover().into()),
+                        BackgroundColor(color_single_player_list_background().into()),
                         BorderColor::all(color_background_hover()),
                         SinglePlayerWorldList,
                     ))
@@ -175,6 +175,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                                     ..default()
                                 },
                                 CssID(SINGLE_PLAYER_DELETE_TEXT_ID.to_string()),
+                                UiTextTone::Heading,
                                 SinglePlayerDeleteText,
                             ));
                             box_node
@@ -237,7 +238,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         text: "Create World".to_string(),
                         ..default()
                     },
-                    UiTextTone::Normal,
+                    UiTextTone::Heading,
                 ));
                 panel.spawn((
                     Paragraph {
@@ -330,7 +331,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         text: "Multi Player".to_string(),
                         ..default()
                     },
-                    UiTextTone::Normal,
+                    UiTextTone::Heading,
                 ));
                 let list_entity = panel
                     .spawn((
@@ -430,6 +431,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                                     ..default()
                                 },
                                 CssID(MULTIPLAYER_FORM_TITLE_ID.to_string()),
+                                UiTextTone::Heading,
                             ));
                             box_node.spawn((
                                 Paragraph {
@@ -528,6 +530,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                                     ..default()
                                 },
                                 CssID(MULTIPLAYER_DELETE_TEXT_ID.to_string()),
+                                UiTextTone::Heading,
                                 MultiplayerDeleteText,
                             ));
                             box_node
@@ -578,10 +581,13 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                             BorderColor::all(color_background_hover()),
                         ))
                         .with_children(|box_node| {
-                            box_node.spawn((Paragraph {
-                                text: "Connecting to server ...".to_string(),
-                                ..default()
-                            },));
+                            box_node.spawn((
+                                Paragraph {
+                                    text: "Connecting to server ...".to_string(),
+                                    ..default()
+                                },
+                                UiTextTone::Heading,
+                            ));
                         });
                 });
 
@@ -616,10 +622,13 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                 BorderColor::all(color_background_hover()),
             ))
             .with_children(|panel| {
-                panel.spawn((Paragraph {
-                    text: "Generating World ...".to_string(),
-                    ..default()
-                },));
+                panel.spawn((
+                    Paragraph {
+                        text: "Generating World ...".to_string(),
+                        ..default()
+                    },
+                    UiTextTone::Heading,
+                ));
                 panel.spawn((
                     ProgressBar {
                         value: 0.0,
@@ -643,10 +652,13 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
             ZIndex(62),
         ))
         .with_children(|root| {
-            root.spawn((Paragraph {
-                text: "Leaving world ...".to_string(),
-                ..default()
-            },));
+            root.spawn((
+                Paragraph {
+                    text: "Leaving world ...".to_string(),
+                    ..default()
+                },
+                UiTextTone::Heading,
+            ));
         })
         .id();
 
@@ -712,10 +724,13 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                 BorderColor::all(color_background_hover()),
             ))
             .with_children(|panel| {
-                panel.spawn((Paragraph {
-                    text: "Pause Menu".to_string(),
-                    ..default()
-                },));
+                panel.spawn((
+                    Paragraph {
+                        text: "Pause Menu".to_string(),
+                        ..default()
+                    },
+                    UiTextTone::Heading,
+                ));
                 panel.spawn((
                     Button {
                         text: "Back to Game".to_string(),
@@ -780,10 +795,13 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                 BorderColor::all(color_background_hover()),
             ))
             .with_children(|panel| {
-                panel.spawn((Paragraph {
-                    text: "Inventory".to_string(),
-                    ..default()
-                },));
+                panel.spawn((
+                    Paragraph {
+                        text: "Inventory".to_string(),
+                        ..default()
+                    },
+                    UiTextTone::Heading,
+                ));
                 panel.spawn((
                     Paragraph {
                         text: "Items: 0".to_string(),
