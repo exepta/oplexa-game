@@ -68,7 +68,7 @@ fn drop_selected_hotbar_item(
         return;
     }
 
-    if !matches!(game_mode.0, GameMode::Survival) {
+    if matches!(game_mode.0, GameMode::Spectator) {
         return;
     }
 

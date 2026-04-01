@@ -10,6 +10,9 @@ use crate::core::events::ui_events::{
     ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest, OpenToLanRequest,
     StopLanHostRequest,
 };
+use crate::core::inventory::creative_panel::{
+    CREATIVE_PANEL_COLUMNS, CREATIVE_PANEL_PAGE_SIZE, CreativePanelState,
+};
 use crate::core::inventory::items::{
     ItemRegistry, build_block_item_icon_image, parse_block_icon_cache_key,
     player_drop_spawn_motion, player_drop_world_location, spawn_player_dropped_item_stack,
@@ -104,6 +107,12 @@ const HUD_SLOT_BADGE_PREFIX: &str = "hud-hotbar-slot-badge-";
 const PLAYER_INVENTORY_TOTAL_ID: &str = "player-inventory-total";
 const PLAYER_INVENTORY_FRAME_PREFIX: &str = "player-inventory-frame-";
 const PLAYER_INVENTORY_BADGE_PREFIX: &str = "player-inventory-badge-";
+const CREATIVE_PANEL_TOTAL_ID: &str = "creative-panel-total";
+const CREATIVE_PANEL_PAGE_ID: &str = "creative-panel-page";
+const CREATIVE_PANEL_PREV_ID: &str = "creative-panel-prev";
+const CREATIVE_PANEL_NEXT_ID: &str = "creative-panel-next";
+const CREATIVE_PANEL_SLOT_PREFIX: &str = "creative-panel-slot-";
+const CREATIVE_RECIPE_HINT_ID: &str = "creative-recipe-hint";
 
 const WORLD_GEN_PROGRESS_ID: &str = "world-gen-progress";
 
@@ -166,6 +175,8 @@ struct WorldUnloadRoot;
 struct HudRoot;
 #[derive(Component)]
 struct PlayerInventoryRoot;
+#[derive(Component)]
+struct CreativePanelGridRoot;
 #[derive(Component)]
 struct DebugOverlayRoot;
 
@@ -243,6 +254,11 @@ struct PlayerInventoryUiState {
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct InventoryDragState {
     source_slot: Option<usize>,
+}
+
+#[derive(Resource, Debug, Default, Clone, Copy)]
+struct CreativePanelUiState {
+    synced_once: bool,
 }
 
 #[derive(Resource, Debug, Default, Clone, Copy)]
@@ -429,6 +445,8 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<PauseMenuState>()
             .init_resource::<PlayerInventoryUiState>()
             .init_resource::<InventoryDragState>()
+            .init_resource::<CreativePanelUiState>()
+            .init_resource::<CreativePanelState>()
             .init_resource::<DebugVramState>()
             .init_resource::<SinglePlayerUiState>()
             .init_resource::<MultiplayerUiState>()
@@ -592,8 +610,12 @@ impl Plugin for HardcodedUiPlugin {
                 Update,
                 (
                     toggle_player_inventory_ui,
+                    sync_creative_panel_state_from_registry,
+                    handle_creative_panel_navigation,
+                    handle_creative_panel_clicks,
                     handle_inventory_drag_and_drop,
                     sync_player_inventory_ui,
+                    sync_creative_panel_ui,
                 )
                     .chain()
                     .run_if(in_state(AppState::InGame(InGameStates::Game))),
@@ -634,6 +656,7 @@ include!("components/world_flow.rs");
 include!("components/hud.rs");
 include!("components/pause_menu.rs");
 include!("components/inventory.rs");
+include!("components/inventory_creative.rs");
 include!("components/ui_interaction_sync.rs");
 include!("components/debug_overlay.rs");
 
