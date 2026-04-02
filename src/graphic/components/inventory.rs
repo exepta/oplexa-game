@@ -23,34 +23,33 @@ struct InventoryDragDropDeps<'w, 's> {
     recipe_preview: ResMut<'w, RecipePreviewDialogState>,
     game_mode: Res<'w, GameModeState>,
     multiplayer_connection: Option<Res<'w, MultiplayerConnectionState>>,
+    creative_panel: Res<'w, CreativePanelState>,
+    recipe_registry: Option<Res<'w, RecipeRegistry>>,
+    recipe_type_registry: Option<Res<'w, RecipeTypeRegistry>>,
     cursor_item: ResMut<'w, InventoryCursorItemState>,
-    left_hold: ResMut<'w, InventoryLeftHoldState>,
     inventory: ResMut<'w, PlayerInventory>,
     hand_crafted: ResMut<'w, HandCraftedState>,
     slot_frames: Query<'w, 's, (&'static CssID, &'static UIWidgetState, &'static mut BorderColor)>,
     button_states: Query<'w, 's, (&'static CssID, &'static UIWidgetState), With<Button>>,
     window_q: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
-    inventory_panel_q:
-        Query<'w, 's, (&'static ComputedNode, &'static GlobalTransform), With<InventoryMainPanel>>,
+    inventory_panel_q: Query<
+        'w,
+        's,
+        (&'static ComputedNode, &'static UiGlobalTransform),
+        With<InventoryMainPanel>,
+    >,
     inventory_drop_zone_q: Query<
         'w,
         's,
-        (&'static ComputedNode, &'static GlobalTransform),
+        (&'static ComputedNode, &'static UiGlobalTransform),
         With<InventoryDropZonePanel>,
     >,
-    recipe_preview_panel_q: Query<
-        'w,
-        's,
-        (&'static ComputedNode, &'static GlobalTransform),
-        With<RecipePreviewDialogPanel>,
-    >,
+    recipe_preview_panel_q:
+        Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<RecipePreviewDialogPanel>>,
     player_q: Query<'w, 's, &'static Transform, With<Player>>,
     drop_requests: MessageWriter<'w, DropItemRequest>,
     craft_requests: MessageWriter<'w, CraftHandCraftedRequest>,
 }
-
-const LEFT_HOLD_INITIAL_DELAY_SECS: f64 = 0.18;
-const LEFT_HOLD_REPEAT_INTERVAL_SECS: f64 = 0.03;
 
 fn toggle_player_inventory_ui(
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -60,7 +59,6 @@ fn toggle_player_inventory_ui(
     mut root: Query<&mut Visibility, With<PlayerInventoryRoot>>,
     mut inventory_ui: ResMut<PlayerInventoryUiState>,
     mut cursor_item: ResMut<InventoryCursorItemState>,
-    mut left_hold: ResMut<InventoryLeftHoldState>,
     mut recipe_preview: ResMut<RecipePreviewDialogState>,
     mut inventory: ResMut<PlayerInventory>,
     mut hand_crafted: ResMut<HandCraftedState>,
@@ -74,7 +72,6 @@ fn toggle_player_inventory_ui(
     if inventory_ui.open && keyboard.just_pressed(close_key) {
         if recipe_preview.open {
             recipe_preview.open = false;
-            left_hold.source_slot = None;
             return;
         }
 
@@ -87,7 +84,6 @@ fn toggle_player_inventory_ui(
             flush_cursor_item_to_inventory(&mut cursor_item, &mut inventory, item_registry);
         }
         inventory_ui.open = false;
-        left_hold.source_slot = None;
         recipe_preview.open = false;
         ui_interaction.inventory_open = false;
         set_inventory_cursor(false, &mut cursor_q);
@@ -107,7 +103,6 @@ fn toggle_player_inventory_ui(
 
     inventory_ui.open = !inventory_ui.open;
     if !inventory_ui.open {
-        left_hold.source_slot = None;
         recipe_preview.open = false;
         if let Some(item_registry) = item_registry.as_ref() {
             flush_hand_crafted_inputs_to_inventory(
@@ -135,7 +130,6 @@ fn close_player_inventory_ui(
     mut inventory_ui: ResMut<PlayerInventoryUiState>,
     mut root: Query<&mut Visibility, With<PlayerInventoryRoot>>,
     mut cursor_item: ResMut<InventoryCursorItemState>,
-    mut left_hold: ResMut<InventoryLeftHoldState>,
     mut recipe_preview: ResMut<RecipePreviewDialogState>,
     mut inventory: ResMut<PlayerInventory>,
     mut hand_crafted: ResMut<HandCraftedState>,
@@ -150,7 +144,6 @@ fn close_player_inventory_ui(
         flush_cursor_item_to_inventory(&mut cursor_item, &mut inventory, item_registry);
     }
     inventory_ui.open = false;
-    left_hold.source_slot = None;
     recipe_preview.open = false;
     ui_interaction.inventory_open = false;
     set_inventory_cursor(false, &mut cursor_q);
@@ -173,8 +166,10 @@ fn handle_inventory_drag_and_drop(
         mut recipe_preview,
         game_mode,
         multiplayer_connection,
+        creative_panel,
+        recipe_registry,
+        recipe_type_registry,
         mut cursor_item,
-        mut left_hold,
         mut inventory,
         mut hand_crafted,
         mut slot_frames,
@@ -191,24 +186,11 @@ fn handle_inventory_drag_and_drop(
     let hovered_slot = sync_inventory_slot_hover_border(&mut slot_frames, inventory_ui.open);
 
     if !inventory_ui.open {
-        left_hold.source_slot = None;
-        return;
-    }
-
-    if mouse.just_released(MouseButton::Left) {
-        left_hold.source_slot = None;
-    }
-
-    let close_key = convert(global_config.input.ui_close_back.as_str()).unwrap_or(KeyCode::Escape);
-    if recipe_preview.open && keyboard.just_pressed(close_key) {
-        recipe_preview.open = false;
-        left_hold.source_slot = None;
         return;
     }
 
     if mouse.just_pressed(MouseButton::Left) && recipe_preview.open {
         if is_button_hovered(&button_states, RECIPE_PREVIEW_FILL_ID) {
-            left_hold.source_slot = None;
             fill_hand_crafted_from_recipe_preview(
                 &recipe_preview,
                 &mut inventory,
@@ -221,14 +203,45 @@ fn handle_inventory_drag_and_drop(
 
         if !is_cursor_inside_panel(&window_q, &recipe_preview_panel_q) {
             recipe_preview.open = false;
-            left_hold.source_slot = None;
             return;
         }
     }
 
+    let recipe_open_key = convert(global_config.input.inventory_recipe_open.as_str())
+        .unwrap_or(KeyCode::KeyR);
+    if keyboard.just_pressed(recipe_open_key) {
+        let Some(recipe_registry) = recipe_registry.as_ref() else {
+            return;
+        };
+        let resolved_recipe = recipe_type_registry.as_ref().and_then(|types| {
+            resolve_hand_crafted_recipe(
+                &hand_crafted,
+                recipe_registry,
+                types,
+                &drop_deps.item_registry,
+            )
+        });
+        let Some(item_id) = hovered_item_id(
+            &button_states,
+            &inventory,
+            &hand_crafted,
+            &creative_panel,
+            &recipe_preview,
+            resolved_recipe.as_ref(),
+        ) else {
+            return;
+        };
+        let _ = open_recipe_preview_dialog_for_item(
+            item_id,
+            recipe_registry,
+            &drop_deps.item_registry,
+            &mut recipe_preview,
+        );
+        return;
+    }
+
     let shift_pressed = keyboard.pressed(KeyCode::ShiftLeft);
     if shift_pressed && mouse.just_pressed(MouseButton::Left) && cursor_item.slot.is_empty() {
-        left_hold.source_slot = None;
         match hovered_slot {
             Some(InventoryUiSlotTarget::Player(slot_index)) => {
                 let _ = transfer_player_slot_to_hand_crafted(
@@ -255,7 +268,6 @@ fn handle_inventory_drag_and_drop(
         && hovered_slot == Some(InventoryUiSlotTarget::HandCraftedResult)
         && !matches!(game_mode.0, GameMode::Spectator)
     {
-        left_hold.source_slot = None;
         craft_requests.write(CraftHandCraftedRequest);
         return;
     }
@@ -263,7 +275,6 @@ fn handle_inventory_drag_and_drop(
     if mouse.just_pressed(MouseButton::Middle)
         && let Some(slot_target) = hovered_slot
     {
-        left_hold.source_slot = None;
         let _ = take_half_from_target_to_cursor(
             slot_target,
             &mut cursor_item,
@@ -277,31 +288,28 @@ fn handle_inventory_drag_and_drop(
     if mouse.just_pressed(MouseButton::Right)
         && let Some(slot_target) = hovered_slot
     {
-        left_hold.source_slot = None;
-        let _ = place_one_from_cursor_on_target(
-            slot_target,
-            &mut cursor_item,
-            &mut inventory,
-            &mut hand_crafted,
-            &drop_deps.item_registry,
-        );
+        if !cursor_item.slot.is_empty() {
+            let _ = place_one_from_cursor_on_target(
+                slot_target,
+                &mut cursor_item,
+                &mut inventory,
+                &mut hand_crafted,
+                &drop_deps.item_registry,
+            );
+        }
         return;
     }
 
     if mouse.just_pressed(MouseButton::Left)
         && let Some(slot_target) = hovered_slot
     {
-        left_hold.source_slot = None;
         if cursor_item.slot.is_empty() {
-            if take_one_from_target_to_cursor(
+            let _ = take_all_from_target_to_cursor(
                 slot_target,
                 &mut cursor_item,
                 &mut inventory,
                 &mut hand_crafted,
-            ) {
-                left_hold.source_slot = hold_source_from_target(slot_target);
-                left_hold.next_pull_at_secs = time.elapsed_secs_f64() + LEFT_HOLD_INITIAL_DELAY_SECS;
-            }
+            );
         } else {
             let _ = place_all_from_cursor_on_target(
                 slot_target,
@@ -321,7 +329,6 @@ fn handle_inventory_drag_and_drop(
         let clicked_inside_inventory = is_cursor_inside_panel(&window_q, &inventory_panel_q);
         let clicked_inside_drop_zone = is_cursor_inside_panel(&window_q, &inventory_drop_zone_q);
         if clicked_inside_inventory && !clicked_inside_drop_zone {
-            left_hold.source_slot = None;
             return;
         }
 
@@ -334,7 +341,6 @@ fn handle_inventory_drag_and_drop(
         };
         let dropped_slot = cursor_item.slot;
         cursor_item.slot = InventorySlot::default();
-        left_hold.source_slot = None;
 
         if multiplayer_connection.as_ref().is_some_and(|state| state.connected) {
             let (spawn_center, initial_velocity) =
@@ -414,36 +420,6 @@ fn handle_inventory_drag_and_drop(
             );
         }
         return;
-    }
-
-    if mouse.pressed(MouseButton::Left)
-        && let Some(source_slot) = left_hold.source_slot
-    {
-        if cursor_item.slot.is_empty() {
-            left_hold.source_slot = None;
-            return;
-        }
-
-        let now_secs = time.elapsed_secs_f64();
-        if now_secs < left_hold.next_pull_at_secs {
-            return;
-        }
-
-        let mut steps = 0u8;
-        while left_hold.next_pull_at_secs <= now_secs && steps < 8 {
-            if !pull_one_from_hold_source(
-                source_slot,
-                &mut cursor_item,
-                &mut inventory,
-                &mut hand_crafted,
-                &drop_deps.item_registry,
-            ) {
-                left_hold.source_slot = None;
-                break;
-            }
-            left_hold.next_pull_at_secs += LEFT_HOLD_REPEAT_INTERVAL_SECS;
-            steps += 1;
-        }
     }
 }
 
@@ -958,19 +934,7 @@ fn transfer_hand_crafted_slot_to_inventory(
     true
 }
 
-fn hold_source_from_target(target: InventoryUiSlotTarget) -> Option<InventoryHoldSource> {
-    match target {
-        InventoryUiSlotTarget::Player(index) if index < PLAYER_INVENTORY_SLOTS => {
-            Some(InventoryHoldSource::Player(index))
-        }
-        InventoryUiSlotTarget::HandCrafted(index) if index < HAND_CRAFTED_INPUT_SLOTS => {
-            Some(InventoryHoldSource::HandCrafted(index))
-        }
-        _ => None,
-    }
-}
-
-fn take_one_from_target_to_cursor(
+fn take_all_from_target_to_cursor(
     slot_target: InventoryUiSlotTarget,
     cursor_item: &mut InventoryCursorItemState,
     inventory: &mut PlayerInventory,
@@ -982,10 +946,10 @@ fn take_one_from_target_to_cursor(
 
     match slot_target {
         InventoryUiSlotTarget::Player(index) if index < PLAYER_INVENTORY_SLOTS => {
-            take_one_from_slot_to_cursor(&mut inventory.slots[index], &mut cursor_item.slot)
+            take_all_from_slot_to_cursor(&mut inventory.slots[index], &mut cursor_item.slot)
         }
         InventoryUiSlotTarget::HandCrafted(index) if index < HAND_CRAFTED_INPUT_SLOTS => {
-            take_one_from_slot_to_cursor(&mut hand_crafted.input_slots[index], &mut cursor_item.slot)
+            take_all_from_slot_to_cursor(&mut hand_crafted.input_slots[index], &mut cursor_item.slot)
         }
         _ => false,
     }
@@ -1065,64 +1029,13 @@ fn place_all_from_cursor_on_target(
     }
 }
 
-fn pull_one_from_hold_source(
-    source_slot: InventoryHoldSource,
-    cursor_item: &mut InventoryCursorItemState,
-    inventory: &mut PlayerInventory,
-    hand_crafted: &mut HandCraftedState,
-    item_registry: &ItemRegistry,
-) -> bool {
-    if cursor_item.slot.is_empty() {
+fn take_all_from_slot_to_cursor(slot: &mut InventorySlot, cursor_slot: &mut InventorySlot) -> bool {
+    if slot.is_empty() || !cursor_slot.is_empty() {
         return false;
     }
 
-    match source_slot {
-        InventoryHoldSource::Player(index) if index < PLAYER_INVENTORY_SLOTS => pull_one_to_cursor_from_slot(
-            &mut inventory.slots[index],
-            &mut cursor_item.slot,
-            item_registry,
-        ),
-        InventoryHoldSource::HandCrafted(index) if index < HAND_CRAFTED_INPUT_SLOTS => {
-            pull_one_to_cursor_from_slot(
-                &mut hand_crafted.input_slots[index],
-                &mut cursor_item.slot,
-                item_registry,
-            )
-        }
-        _ => false,
-    }
-}
-
-fn pull_one_to_cursor_from_slot(
-    slot: &mut InventorySlot,
-    cursor_slot: &mut InventorySlot,
-    item_registry: &ItemRegistry,
-) -> bool {
-    if slot.is_empty() || cursor_slot.is_empty() || slot.item_id != cursor_slot.item_id {
-        return false;
-    }
-
-    let stack_max = item_registry
-        .stack_limit(cursor_slot.item_id)
-        .min(PLAYER_INVENTORY_STACK_MAX)
-        .max(1);
-    if cursor_slot.count >= stack_max {
-        return false;
-    }
-
-    cursor_slot.count += 1;
-    decrement_slot_count(slot);
-    true
-}
-
-fn take_one_from_slot_to_cursor(slot: &mut InventorySlot, cursor_slot: &mut InventorySlot) -> bool {
-    if slot.is_empty() {
-        return false;
-    }
-
-    cursor_slot.item_id = slot.item_id;
-    cursor_slot.count = 1;
-    decrement_slot_count(slot);
+    *cursor_slot = *slot;
+    *slot = InventorySlot::default();
     true
 }
 
@@ -1487,32 +1400,20 @@ fn is_button_hovered(
 
 fn is_cursor_inside_panel<F: QueryFilter>(
     window_q: &Query<&Window, With<PrimaryWindow>>,
-    panel_q: &Query<(&ComputedNode, &GlobalTransform), F>,
+    panel_q: &Query<(&ComputedNode, &UiGlobalTransform), F>,
 ) -> bool {
     let Ok(window) = window_q.single() else {
         return false;
     };
-    let Some(cursor_pos) = window.cursor_position() else {
+    let Some(cursor_pos) = window.physical_cursor_position() else {
         return false;
     };
     let Ok((computed_node, transform)) = panel_q.single() else {
         return false;
     };
 
-    let size = computed_node.size();
-    if size.x <= 0.0 || size.y <= 0.0 {
+    if !computed_node.size().cmpgt(Vec2::ZERO).all() {
         return false;
     }
-
-    let cursor_ui = Vec2::new(
-        cursor_pos.x - (window.width() * 0.5),
-        (window.height() * 0.5) - cursor_pos.y,
-    );
-    let center = transform.translation().truncate();
-    let half = size * 0.5;
-
-    cursor_ui.x >= center.x - half.x
-        && cursor_ui.x <= center.x + half.x
-        && cursor_ui.y >= center.y - half.y
-        && cursor_ui.y <= center.y + half.y
+    computed_node.contains_point(*transform, cursor_pos)
 }

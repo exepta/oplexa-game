@@ -14,6 +14,9 @@ pub struct GlobalConfig {
     /// Settings related to rendering and display.
     pub graphics: GraphicsConfig,
 
+    /// Settings related to gameplay behavior.
+    pub gameplay: GameplayConfig,
+
     /// Settings related to user input mappings and sensitivities.
     pub input: InputConfig,
 }
@@ -22,6 +25,7 @@ impl Default for GlobalConfig {
     fn default() -> Self {
         Self {
             graphics: GraphicsConfig::default(),
+            gameplay: GameplayConfig::default(),
             input: InputConfig::default(),
         }
     }
@@ -30,6 +34,7 @@ impl Default for GlobalConfig {
 impl GlobalConfig {
     pub fn ensure_config_files_exist() {
         Self::ensure_default_config_file("config/graphics.toml", &GraphicsConfig::default());
+        Self::ensure_default_config_file("config/gameplay.toml", &GameplayConfig::default());
         Self::ensure_default_config_file("config/input.toml", &InputConfig::default());
     }
 
@@ -72,6 +77,7 @@ impl GlobalConfig {
 
         Self {
             graphics: Self::load("config/graphics.toml"),
+            gameplay: Self::load("config/gameplay.toml"),
             input: Self::load("config/input.toml"),
         }
     }
@@ -84,6 +90,7 @@ impl GlobalConfig {
     pub fn save_all(&self) {
         Self::ensure_config_files_exist();
         Self::save(&self.graphics, "config/graphics.toml");
+        Self::save(&self.gameplay, "config/gameplay.toml");
         Self::save(&self.input, "config/input.toml");
     }
 }
@@ -134,6 +141,28 @@ impl Default for GraphicsConfig {
 }
 
 // =======================================================
+//                         Gameplay
+// =======================================================
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct GameplayConfig {
+    /// Vertical sensitivity multiplier for look input.
+    pub mouse_sensitivity_vertical: f32,
+
+    /// Horizontal sensitivity multiplier for look input.
+    pub mouse_sensitivity_horizontal: f32,
+}
+
+impl Default for GameplayConfig {
+    fn default() -> Self {
+        Self {
+            mouse_sensitivity_vertical: 1.0,
+            mouse_sensitivity_horizontal: 1.0,
+        }
+    }
+}
+
+// =======================================================
 //                          Input
 // =======================================================
 
@@ -146,22 +175,6 @@ impl Default for GraphicsConfig {
 /// control scheme.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct InputConfig {
-    // Camera
-    /// Vertical sensitivity for mouse movement when controlling the camera.
-    pub mouse_sensitivity_vertical: f32,
-
-    /// Horizontal sensitivity for mouse movement when controlling the camera.
-    pub mouse_sensitivity_horizontal: f32,
-
-    /// Amount to zoom in per scroll unit or mouse wheel step.
-    pub mouse_zoom_in: f32,
-
-    /// Amount to zoom out per scroll unit or mouse wheel step.
-    pub mouse_zoom_out: f32,
-
-    /// Key or button mapping used to unlock or free the mouse cursor from the window.
-    pub mouse_screen_unlock: String,
-
     // Player
     /// Key or button mapping for moving the player character upward.
     pub move_up: String,
@@ -204,6 +217,10 @@ pub struct InputConfig {
     /// Key or button mapping to close UI dialogs or go back in menus.
     pub ui_close_back: String,
 
+    /// Key to open a recipe dialog for the currently hovered inventory item.
+    #[serde(default = "default_inventory_recipe_open_key")]
+    pub inventory_recipe_open: String,
+
     // Debug
     /// Shows system stats
     pub debug_overlay: String,
@@ -218,12 +235,6 @@ pub struct InputConfig {
 impl Default for InputConfig {
     fn default() -> Self {
         Self {
-            mouse_sensitivity_vertical: 0.75,
-            mouse_sensitivity_horizontal: 0.75,
-            mouse_zoom_in: 3.5,
-            mouse_zoom_out: 10.0,
-            mouse_screen_unlock: String::from("Escape"),
-
             move_up: String::from("W"),
             move_down: String::from("S"),
             move_left: String::from("A"),
@@ -238,6 +249,7 @@ impl Default for InputConfig {
             ui_menu: String::from("Enter"),
             ui_inventory: String::from("Tab"),
             ui_close_back: String::from("Escape"),
+            inventory_recipe_open: default_inventory_recipe_open_key(),
 
             debug_overlay: String::from("F3"),
             chunk_grid: String::from("F9"),
@@ -248,6 +260,10 @@ impl Default for InputConfig {
 
 fn default_drop_item_key() -> String {
     String::from("Q")
+}
+
+fn default_inventory_recipe_open_key() -> String {
+    String::from("R")
 }
 
 // =======================================================

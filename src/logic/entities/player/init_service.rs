@@ -244,8 +244,8 @@ fn release_cursor_on_escape(
     keys: Res<ButtonInput<KeyCode>>,
     game_config: Res<GlobalConfig>,
 ) {
-    let unlock = convert(game_config.input.mouse_screen_unlock.as_str())
-        .expect("Invalid mouse screen unlock");
+    let unlock = convert(game_config.input.ui_close_back.as_str())
+        .expect("Invalid close/back key");
     if !keys.just_pressed(unlock) {
         return;
     }
@@ -263,6 +263,7 @@ fn mouse_look(
     >,
     mut q_cam: Query<(&ChildOf, &mut Transform), (With<PlayerCamera>, Without<Player>)>,
     cursor_q: Query<&CursorOptions, With<PrimaryWindow>>,
+    game_config: Res<GlobalConfig>,
 ) {
     let Ok(cursor) = cursor_q.single() else {
         return;
@@ -284,8 +285,8 @@ fn mouse_look(
         return;
     }
 
-    ctrl.yaw -= delta.x * ctrl.sensitivity;
-    ctrl.pitch -= delta.y * ctrl.sensitivity;
+    ctrl.yaw -= delta.x * ctrl.sensitivity * game_config.gameplay.mouse_sensitivity_horizontal;
+    ctrl.pitch -= delta.y * ctrl.sensitivity * game_config.gameplay.mouse_sensitivity_vertical;
 
     let limit = std::f32::consts::FRAC_PI_2 - 0.01;
     ctrl.pitch = ctrl.pitch.clamp(-limit, limit);

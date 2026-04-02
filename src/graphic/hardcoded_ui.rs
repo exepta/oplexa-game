@@ -291,18 +291,6 @@ struct InventoryCursorItemState {
     slot: InventorySlot,
 }
 
-#[derive(Resource, Debug, Default, Clone, Copy)]
-struct InventoryLeftHoldState {
-    source_slot: Option<InventoryHoldSource>,
-    next_pull_at_secs: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InventoryHoldSource {
-    Player(usize),
-    HandCrafted(usize),
-}
-
 #[derive(Resource, Debug, Clone, Copy)]
 struct RecipePreviewDialogState {
     open: bool,
@@ -515,7 +503,6 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<PauseMenuState>()
             .init_resource::<PlayerInventoryUiState>()
             .init_resource::<InventoryCursorItemState>()
-            .init_resource::<InventoryLeftHoldState>()
             .init_resource::<RecipePreviewDialogState>()
             .init_resource::<CreativePanelUiState>()
             .init_resource::<CreativePanelState>()

@@ -1,21 +1,24 @@
-mouse_sensitivity_vertical = 1.0
-mouse_sensitivity_horizontal = 1.0
-mouse_zoom_in = 3.5
-mouse_zoom_out = 10.0
-mouse_screen_unlock = "Escape"
+# Movement
 move_up = "W"
 move_down = "S"
 move_left = "A"
 move_right = "D"
 jump = "Space"
 sprint = "ShiftLeft"
+
+# Interaction
 interact = "E"
 drop_item = "Q"
 attack = "MouseLeft"
 toggle_game_mode = "F2"
 ui_menu = "Escape"
 ui_inventory = "Tab"
+
+# Ui
 ui_close_back = "Escape"
+inventory_recipe_open = "R"
+
+# Debug
 debug_overlay = "F3"
 chunk_grid = "F9"
 world_inspector = "F1"
