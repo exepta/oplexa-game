@@ -802,11 +802,12 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                     flex_direction: FlexDirection::Row,
                     column_gap: Val::Px(12.0),
                     padding: UiRect::all(Val::Px(14.0)),
-                    border: UiRect::all(Val::Px(1.0)),
+                    border: UiRect::all(Val::Px(2.0)),
                     ..default()
                 },
+                InventoryMainPanel,
                 BackgroundColor(color_background().into()),
-                BorderColor::all(color_background_hover()),
+                BorderColor::all(color_accent()),
             ))
             .with_children(|panel| {
                 panel.spawn((
@@ -826,6 +827,93 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         },
                         UiTextTone::Heading,
                     ));
+                    left.spawn((
+                        Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            padding: UiRect::all(Val::Px(8.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BackgroundColor(color_single_player_list_background().into()),
+                        BorderColor::all(color_background_hover()),
+                    ))
+                    .with_children(|craft_panel| {
+                        craft_panel.spawn((
+                            Paragraph {
+                                text: "Hand Crafted".to_string(),
+                                ..default()
+                            },
+                            UiTextTone::CardName,
+                        ));
+                        craft_panel.spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                align_items: AlignItems::Center,
+                                column_gap: Val::Px(8.0),
+                                ..default()
+                            },
+                            BackgroundColor::DEFAULT,
+                        ))
+                        .with_children(|row| {
+                            for i in 1..=HAND_CRAFTED_INPUT_SLOTS {
+                                let idx = format!("{i:02}");
+                                row.spawn((
+                                    Button {
+                                        text: String::new(),
+                                        ..default()
+                                    },
+                                    Visibility::Inherited,
+                                    CssID(format!("{HAND_CRAFTED_FRAME_PREFIX}{idx}")),
+                                    UiButtonKind::InventorySlot,
+                                    UiButtonTone::Normal,
+                                ))
+                                .with_children(|slot| {
+                                    slot.spawn((
+                                        Paragraph {
+                                            text: String::new(),
+                                            ..default()
+                                        },
+                                        CssID(format!("{HAND_CRAFTED_BADGE_PREFIX}{idx}")),
+                                        BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                        Visibility::Hidden,
+                                        Pickable::IGNORE,
+                                    ));
+                                });
+                            }
+
+                            row.spawn((
+                                Paragraph {
+                                    text: "->".to_string(),
+                                    ..default()
+                                },
+                                UiTextTone::Darker,
+                            ));
+                            row.spawn((
+                                Button {
+                                    text: String::new(),
+                                    ..default()
+                                },
+                                Visibility::Inherited,
+                                CssID(HAND_CRAFTED_RESULT_FRAME_ID.to_string()),
+                                UiButtonKind::InventoryResultSlot,
+                                UiButtonTone::Normal,
+                            ))
+                            .with_children(|slot| {
+                                slot.spawn((
+                                    Paragraph {
+                                        text: String::new(),
+                                        ..default()
+                                    },
+                                    CssID(HAND_CRAFTED_RESULT_BADGE_ID.to_string()),
+                                    BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                    Visibility::Hidden,
+                                    Pickable::IGNORE,
+                                ));
+                            });
+                        });
+                    });
                     left.spawn((
                         Paragraph {
                             text: "Items: 0".to_string(),
@@ -883,6 +971,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         border: UiRect::all(Val::Px(1.0)),
                         ..default()
                     },
+                    InventoryDropZonePanel,
                     BackgroundColor(color_single_player_list_background().into()),
                     BorderColor::all(color_background_hover()),
                 ))
@@ -993,7 +1082,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         ));
                         recipes.spawn((
                             Paragraph {
-                                text: "Rezepte kommen spaeter als Popup (nicht als Reiter)."
+                                text: "Nutze oben 2 Slots -> Ergebnis rechts. Klick auf das Ergebnis craftet."
                                     .to_string(),
                                 ..default()
                             },
@@ -1002,6 +1091,232 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         ));
                     });
                 });
+            });
+            root.spawn((
+                Name::new("Inventory Tooltip"),
+                InventoryTooltipRoot,
+                Visibility::Hidden,
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    min_width: Val::Px(170.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(2.0),
+                    padding: UiRect::axes(Val::Px(13.0), Val::Px(11.0)),
+                    border: UiRect::all(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(color_background_hover().with_alpha(0.96)),
+                BorderColor::all(color_accent()),
+                ZIndex(110),
+            ))
+            .with_children(|tooltip| {
+                tooltip.spawn((
+                    Paragraph {
+                        text: String::new(),
+                        ..default()
+                    },
+                    CssID(INVENTORY_TOOLTIP_NAME_ID.to_string()),
+                    UiTextTone::TooltipName,
+                    Pickable::IGNORE,
+                ));
+                tooltip.spawn((
+                    Paragraph {
+                        text: String::new(),
+                        ..default()
+                    },
+                    CssID(INVENTORY_TOOLTIP_KEY_ID.to_string()),
+                    UiTextTone::TooltipKey,
+                    Pickable::IGNORE,
+                ));
+            });
+            root.spawn((
+                Name::new("Recipe Preview Dialog Root"),
+                RecipePreviewDialogRoot,
+                Visibility::Hidden,
+                Pickable::IGNORE,
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor::DEFAULT,
+                ZIndex(85),
+            ))
+            .with_children(|overlay| {
+                overlay
+                    .spawn((
+                        Visibility::Inherited,
+                        RecipePreviewDialogPanel,
+                        Node {
+                            width: Val::Px(300.0),
+                            min_width: Val::Px(300.0),
+                            min_height: Val::Px(400.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(10.0),
+                            padding: UiRect::all(Val::Px(12.0)),
+                            border: UiRect::all(Val::Px(2.0)),
+                            ..default()
+                        },
+                        BackgroundColor(color_background().into()),
+                        BorderColor::all(color_accent()),
+                    ))
+                    .with_children(|panel| {
+                        panel.spawn((
+                            Paragraph {
+                                text: "Recipe".to_string(),
+                                ..default()
+                            },
+                            CssID(RECIPE_PREVIEW_TITLE_ID.to_string()),
+                            UiTextTone::Heading,
+                        ));
+                        panel.spawn((
+                            Paragraph {
+                                text: "Hand Crafted".to_string(),
+                                ..default()
+                            },
+                            UiTextTone::Darker,
+                        ));
+                        panel.spawn((
+                            Visibility::Inherited,
+                            Node {
+                                width: Val::Percent(100.0),
+                                align_items: AlignItems::Center,
+                                justify_content: JustifyContent::Center,
+                                column_gap: Val::Px(8.0),
+                                padding: UiRect::all(Val::Px(8.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            BackgroundColor(color_single_player_list_background().into()),
+                            BorderColor::all(color_background_hover()),
+                        ))
+                        .with_children(|row| {
+                            for i in 1..=HAND_CRAFTED_INPUT_SLOTS {
+                                let idx = format!("{i:02}");
+                                row.spawn((
+                                    Button {
+                                        text: String::new(),
+                                        ..default()
+                                    },
+                                    Visibility::Inherited,
+                                    CssID(format!("{RECIPE_PREVIEW_INPUT_FRAME_PREFIX}{idx}")),
+                                    UiButtonKind::InventorySlot,
+                                    UiButtonTone::Normal,
+                                ))
+                                .with_children(|slot| {
+                                    slot.spawn((
+                                        Paragraph {
+                                            text: String::new(),
+                                            ..default()
+                                        },
+                                        CssID(format!("{RECIPE_PREVIEW_INPUT_BADGE_PREFIX}{idx}")),
+                                        BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                        Visibility::Hidden,
+                                        Pickable::IGNORE,
+                                    ));
+                                });
+                            }
+
+                            row.spawn((
+                                Paragraph {
+                                    text: "->".to_string(),
+                                    ..default()
+                                },
+                                UiTextTone::Darker,
+                            ));
+                            row.spawn((
+                                Button {
+                                    text: String::new(),
+                                    ..default()
+                                },
+                                Visibility::Inherited,
+                                CssID(RECIPE_PREVIEW_RESULT_FRAME_ID.to_string()),
+                                UiButtonKind::InventoryResultSlot,
+                                UiButtonTone::Normal,
+                            ))
+                            .with_children(|slot| {
+                                slot.spawn((
+                                    Paragraph {
+                                        text: String::new(),
+                                        ..default()
+                                    },
+                                    CssID(RECIPE_PREVIEW_RESULT_BADGE_ID.to_string()),
+                                    BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                    Visibility::Hidden,
+                                    Pickable::IGNORE,
+                                ));
+                            });
+                        });
+                        panel.spawn((
+                            Paragraph {
+                                text: "Nur Vorschau: Items sind hier nicht entnehmbar.".to_string(),
+                                ..default()
+                            },
+                            UiTextTone::Darker,
+                        ));
+                        panel.spawn((
+                            Button {
+                                text: "+".to_string(),
+                                ..default()
+                            },
+                            CssID(RECIPE_PREVIEW_FILL_ID.to_string()),
+                            UiButtonKind::Action,
+                            UiButtonTone::Accent,
+                        ));
+                    });
+            });
+            root.spawn((
+                Name::new("Inventory Cursor Item"),
+                InventoryCursorItemRoot,
+                Visibility::Hidden,
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    width: Val::Px(56.0),
+                    height: Val::Px(56.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(2.0),
+                    padding: UiRect::all(Val::Px(3.0)),
+                    ..default()
+                },
+                ZIndex(95),
+            ))
+            .with_children(|slot| {
+                slot.spawn((
+                    InventoryCursorItemIcon,
+                    ImageNode::default(),
+                    Node {
+                        width: Val::Px(36.8),
+                        height: Val::Px(36.8),
+                        justify_self: JustifySelf::Center,
+                        align_self: AlignSelf::Center,
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                ));
+                slot.spawn((
+                    Paragraph {
+                        text: String::new(),
+                        ..default()
+                    },
+                    CssID(INVENTORY_CURSOR_BADGE_ID.to_string()),
+                    BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                    Visibility::Hidden,
+                    Pickable::IGNORE,
+                    InventoryCursorItemBadge,
+                ));
             });
         })
         .id();

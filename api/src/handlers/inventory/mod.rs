@@ -15,6 +15,7 @@ pub enum CreativePanelClickResult {
 pub fn apply_creative_panel_click(
     game_mode: &GameModeState,
     clicked_item_id: ItemId,
+    grant_full_stack: bool,
     inventory: &mut PlayerInventory,
     item_registry: &ItemRegistry,
 ) -> CreativePanelClickResult {
@@ -25,7 +26,11 @@ pub fn apply_creative_panel_click(
         return CreativePanelClickResult::Ignored;
     }
 
-    let requested = item_registry.stack_limit(clicked_item_id).max(1);
+    let requested = if grant_full_stack {
+        item_registry.stack_limit(clicked_item_id).max(1)
+    } else {
+        1
+    };
     let leftover = inventory.add_item(clicked_item_id, requested, item_registry);
     let inserted = requested.saturating_sub(leftover);
 

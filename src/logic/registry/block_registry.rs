@@ -1,4 +1,5 @@
 use crate::core::inventory::items::ItemRegistry;
+use crate::core::inventory::recipe::{RecipeTypeRegistry, load_recipe_registry};
 use crate::core::states::states::{AppState, BeforeUiState};
 use crate::core::world::block::BlockRegistry;
 use bevy::prelude::*;
@@ -24,6 +25,9 @@ fn start_block_registry(
         "assets/items",
         &block_registry,
     );
+    let recipe_type_registry = RecipeTypeRegistry::with_defaults();
+    let recipe_registry =
+        load_recipe_registry("assets/recipes", &item_registry, &recipe_type_registry);
 
     let block_names = block_registry
         .defs
@@ -36,7 +40,7 @@ fn start_block_registry(
         .defs
         .iter()
         .skip(1)
-        .map(|item| item.key.as_str())
+        .map(|item| item.localized_name.as_str())
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -53,5 +57,7 @@ fn start_block_registry(
 
     commands.insert_resource(block_registry);
     commands.insert_resource(item_registry);
+    commands.insert_resource(recipe_type_registry);
+    commands.insert_resource(recipe_registry);
     next.set(AppState::Screen(BeforeUiState::Menu));
 }

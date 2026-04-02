@@ -17,7 +17,7 @@ impl InventorySlot {
     }
 }
 
-#[derive(Resource, Debug)]
+#[derive(Resource, Debug, Clone)]
 pub struct PlayerInventory {
     pub slots: [InventorySlot; PLAYER_INVENTORY_SLOTS],
 }

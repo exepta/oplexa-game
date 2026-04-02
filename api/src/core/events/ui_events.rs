@@ -16,6 +16,9 @@ pub struct OpenToLanRequest;
 pub struct StopLanHostRequest;
 
 #[derive(Message, Clone, Copy, Debug, Default)]
+pub struct CraftHandCraftedRequest;
+
+#[derive(Message, Clone, Copy, Debug, Default)]
 pub struct DropItemRequest {
     pub item_id: u16,
     pub amount: u16,

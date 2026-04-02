@@ -98,7 +98,7 @@ pub fn collect_creative_panel_item_ids(item_registry: &ItemRegistry) -> Vec<Item
             .category
             .cmp(&right_def.category)
             .then_with(|| left_def.name.cmp(&right_def.name))
-            .then_with(|| left_def.key.cmp(&right_def.key))
+            .then_with(|| left_def.localized_name.cmp(&right_def.localized_name))
     });
     ids
 }
