@@ -1,5 +1,23 @@
 use api::handlers::inventory::apply_creative_panel_click;
 
+#[derive(Deserialize)]
+struct RecipePreviewHandCraftedDataJson {
+    #[serde(default)]
+    craft: std::collections::HashMap<String, RecipePreviewHandCraftedEntryJson>,
+}
+
+#[derive(Deserialize)]
+struct RecipePreviewHandCraftedEntryJson {
+    item: String,
+    #[serde(default = "recipe_preview_default_required_count")]
+    count: u16,
+}
+
+#[inline]
+fn recipe_preview_default_required_count() -> u16 {
+    1
+}
+
 fn sync_creative_panel_state_from_registry(
     item_registry: Res<ItemRegistry>,
     mut creative_ui: ResMut<CreativePanelUiState>,
@@ -50,17 +68,25 @@ fn handle_creative_panel_navigation(
 }
 
 fn handle_creative_panel_clicks(
+    keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     inventory_ui: Res<PlayerInventoryUiState>,
     game_mode: Res<GameModeState>,
     creative_panel: Res<CreativePanelState>,
+    recipe_registry: Option<Res<RecipeRegistry>>,
     item_registry: Res<ItemRegistry>,
+    cursor_item: Res<InventoryCursorItemState>,
+    mut recipe_preview: ResMut<RecipePreviewDialogState>,
     mut inventory: ResMut<PlayerInventory>,
     mut slot_frames: Query<(&CssID, &UIWidgetState, &mut BorderColor), With<Button>>,
 ) {
     let hovered_slot = sync_creative_slot_hover_border(&mut slot_frames, inventory_ui.open);
 
     if !inventory_ui.open || !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    if !cursor_item.slot.is_empty() {
         return;
     }
 
@@ -71,7 +97,34 @@ fn handle_creative_panel_clicks(
         return;
     };
 
-    let _ = apply_creative_panel_click(&game_mode, item_id, &mut inventory, &item_registry);
+    match game_mode.0 {
+        GameMode::Creative => {
+            recipe_preview.open = false;
+            let grant_full_stack = keyboard.pressed(KeyCode::ShiftLeft);
+            let _ = apply_creative_panel_click(
+                &game_mode,
+                item_id,
+                grant_full_stack,
+                &mut inventory,
+                &item_registry,
+            );
+        }
+        GameMode::Survival => {
+            let Some(recipe_registry) = recipe_registry.as_ref() else {
+                recipe_preview.open = false;
+                return;
+            };
+            let _ = open_recipe_preview_dialog_for_item(
+                item_id,
+                recipe_registry,
+                &item_registry,
+                &mut recipe_preview,
+            );
+        }
+        GameMode::Spectator => {
+            recipe_preview.open = false;
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -100,7 +153,10 @@ fn sync_creative_panel_ui(
                 GameMode::Creative => {
                     "Klick auf Item legt es ins Inventar. Rezepte folgen als Popup.".to_string()
                 }
-                _ => "Survival: Klicks sind ohne Funktion. Rezepte folgen als Popup.".to_string(),
+                GameMode::Survival => {
+                    "Survival: Klick auf Item zeigt das Recipe als Dialog.".to_string()
+                }
+                GameMode::Spectator => "Spectator: Item-Klick ist deaktiviert.".to_string(),
             };
             continue;
         }
@@ -133,6 +189,77 @@ fn sync_creative_panel_ui(
     }
 
 }
+
+fn open_recipe_preview_dialog_for_item(
+    item_id: ItemId,
+    recipe_registry: &RecipeRegistry,
+    item_registry: &ItemRegistry,
+    recipe_preview: &mut RecipePreviewDialogState,
+) -> bool {
+    for recipe in &recipe_registry.recipes {
+        if recipe.result.item_id != item_id {
+            continue;
+        }
+
+        for crafting in &recipe.crafting {
+            if crafting.recipe_type.localized_name()
+                != crate::core::inventory::recipe::HAND_CRAFTED_TYPE_LOCALIZED
+            {
+                continue;
+            }
+
+            let Ok(parsed) = serde_json::from_value::<RecipePreviewHandCraftedDataJson>(
+                crafting.data.clone(),
+            ) else {
+                continue;
+            };
+            if parsed.craft.is_empty() {
+                continue;
+            }
+
+            let mut input_slots = [InventorySlot::default(); HAND_CRAFTED_INPUT_SLOTS];
+            let mut valid = true;
+
+            for (slot_raw, requirement) in parsed.craft {
+                let Some(slot_index) = slot_raw.parse::<usize>().ok() else {
+                    valid = false;
+                    break;
+                };
+                if slot_index >= HAND_CRAFTED_INPUT_SLOTS {
+                    valid = false;
+                    break;
+                }
+                let Some(requirement_item_id) = item_registry.id_opt(requirement.item.as_str())
+                else {
+                    valid = false;
+                    break;
+                };
+                input_slots[slot_index] = InventorySlot {
+                    item_id: requirement_item_id,
+                    count: requirement.count.max(1),
+                };
+            }
+
+            if !valid {
+                continue;
+            }
+
+            recipe_preview.open = true;
+            recipe_preview.input_slots = input_slots;
+            recipe_preview.result_slot = InventorySlot {
+                item_id: recipe.result.item_id,
+                count: recipe.result.count.max(1),
+            };
+            return true;
+        }
+    }
+
+    recipe_preview.open = false;
+    recipe_preview.input_slots = [InventorySlot::default(); HAND_CRAFTED_INPUT_SLOTS];
+    recipe_preview.result_slot = InventorySlot::default();
+    false
+}
+
 
 fn parse_creative_slot_index(css_id: &str) -> Option<usize> {
     css_id

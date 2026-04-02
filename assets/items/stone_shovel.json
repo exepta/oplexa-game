@@ -1,5 +1,5 @@
 {
-  "id": "stone_shovel",
+  "localized_name": "oplexa:stone_shovel",
   "name": "Stone Shovel",
   "max_stack_size": 1,
   "category": "tool",

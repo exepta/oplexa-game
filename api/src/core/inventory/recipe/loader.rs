@@ -1,0 +1,138 @@
+use crate::core::inventory::items::ItemRegistry;
+use crate::core::inventory::recipe::registry::{RecipeRegistry, RecipeTypeRegistry};
+use crate::core::inventory::recipe::types::{
+    NamespacedKey, RecipeCraftingEntry, RecipeDefinition, RecipeResultDef,
+};
+use bevy::prelude::*;
+use serde::Deserialize;
+use serde_json::Value;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+#[derive(Deserialize)]
+struct RecipeJson {
+    #[serde(default, rename = "type")]
+    recipe_kind: String,
+    #[serde(default)]
+    crafting: Vec<RecipeCraftingEntryJson>,
+    result: RecipeResultJson,
+}
+
+#[derive(Deserialize)]
+struct RecipeCraftingEntryJson {
+    #[serde(rename = "type")]
+    recipe_type: String,
+    #[serde(default)]
+    data: Value,
+}
+
+#[derive(Deserialize)]
+struct RecipeResultJson {
+    item: String,
+    #[serde(default = "default_result_count")]
+    count: u16,
+}
+
+pub fn load_recipe_registry(
+    recipes_dir: &str,
+    item_registry: &ItemRegistry,
+    recipe_type_registry: &RecipeTypeRegistry,
+) -> RecipeRegistry {
+    let mut recipes = Vec::new();
+
+    let mut paths = recipe_json_paths_recursively(Path::new(recipes_dir));
+    paths.sort_unstable();
+
+    for path in paths {
+        let source_path = path.to_string_lossy().to_string();
+        let Ok(raw_json) = fs::read_to_string(path.as_path()) else {
+            warn!("Could not read recipe JSON '{}'", source_path);
+            continue;
+        };
+
+        let Ok(recipe_json) = serde_json::from_str::<RecipeJson>(raw_json.as_str()) else {
+            warn!("Invalid recipe JSON '{}'", source_path);
+            continue;
+        };
+
+        let mut crafting = Vec::with_capacity(recipe_json.crafting.len());
+        for raw_entry in recipe_json.crafting {
+            let Some(recipe_type) = NamespacedKey::parse(raw_entry.recipe_type.as_str()) else {
+                warn!(
+                    "Skipping recipe entry in '{}': invalid crafting type '{}'",
+                    source_path, raw_entry.recipe_type
+                );
+                continue;
+            };
+            if !recipe_type_registry.has_handler(&recipe_type) {
+                debug!(
+                    "Recipe '{}' references unknown recipe type '{}'; it will remain inactive until a plugin registers that type.",
+                    source_path, recipe_type
+                );
+            }
+            crafting.push(RecipeCraftingEntry {
+                recipe_type,
+                data: raw_entry.data,
+            });
+        }
+
+        if crafting.is_empty() {
+            warn!(
+                "Skipping recipe '{}': no valid crafting entries after validation",
+                source_path
+            );
+            continue;
+        }
+
+        let Some(result_item_id) = item_registry.id_opt(recipe_json.result.item.as_str()) else {
+            warn!(
+                "Skipping recipe '{}': unknown result item '{}'",
+                source_path, recipe_json.result.item
+            );
+            continue;
+        };
+        let result_count = recipe_json.result.count.max(1);
+
+        recipes.push(RecipeDefinition {
+            source_path,
+            recipe_kind: recipe_json.recipe_kind,
+            crafting,
+            result: RecipeResultDef {
+                item_id: result_item_id,
+                item_localized_name: recipe_json.result.item,
+                count: result_count,
+            },
+        });
+    }
+
+    info!("Loaded {} recipe(s) from '{}'", recipes.len(), recipes_dir);
+    RecipeRegistry { recipes }
+}
+
+fn recipe_json_paths_recursively(root: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    collect_recipe_json_paths(root, &mut paths);
+    paths
+}
+
+fn collect_recipe_json_paths(dir: &Path, paths: &mut Vec<PathBuf>) {
+    let Ok(read_dir) = fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_recipe_json_paths(path.as_path(), paths);
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+}
+
+#[inline]
+fn default_result_count() -> u16 {
+    1
+}

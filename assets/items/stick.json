@@ -1,5 +1,5 @@
 {
-  "id": "stick",
+  "localized_name": "oplexa:stick",
   "name": "Stick",
   "max_stack_size": -1,
   "category": "material",

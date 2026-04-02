@@ -17,13 +17,15 @@ use std::path::{Path, PathBuf};
 
 /// Prefix used by virtual UI icon keys for block items.
 pub const BLOCK_ICON_CACHE_PREFIX: &str = "block-icon://";
+/// Default provider used when an item JSON omits an explicit `provider:`.
+pub const DEFAULT_ITEM_PROVIDER: &str = "oplexa";
 
 /// Registry that stores all item definitions plus block↔item relations.
 #[derive(Resource, Clone, Debug)]
 pub struct ItemRegistry {
     /// Indexed item definitions (`index == ItemId`).
     pub defs: Vec<ItemDef>,
-    /// Maps item key to numeric item id.
+    /// Maps localized item name (`provider:key`) to numeric item id.
     pub key_to_id: HashMap<String, ItemId>,
     /// Maps block id to the corresponding item id.
     pub block_to_item: Vec<Option<ItemId>>,
@@ -56,10 +58,20 @@ impl ItemRegistry {
         self.def_opt(id).map(|item| item.name.as_str())
     }
 
-    /// Returns the numeric id for a key, if present.
+    /// Returns the numeric id for a localized item name, if present.
+    ///
+    /// For compatibility, non-namespaced values (for example `stick`) are
+    /// interpreted as `{DEFAULT_ITEM_PROVIDER}:stick`.
     #[inline]
     pub fn id_opt(&self, key: &str) -> Option<ItemId> {
-        self.key_to_id.get(key).copied()
+        self.key_to_id.get(key).copied().or_else(|| {
+            if key.contains(':') {
+                return None;
+            }
+            self.key_to_id
+                .get(format!("{DEFAULT_ITEM_PROVIDER}:{key}").as_str())
+                .copied()
+        })
     }
 
     /// Returns `EMPTY_ITEM_ID` when the key is unknown.
@@ -167,7 +179,9 @@ impl ItemRegistry {
         let mut item_to_block = Vec::with_capacity(64);
 
         defs.push(ItemDef {
+            provider: "internal".to_string(),
             key: "empty".to_string(),
+            localized_name: "internal:empty".to_string(),
             name: "Empty".to_string(),
             max_stack_size: DEFAULT_ITEM_STACK_SIZE,
             category: "internal".to_string(),
@@ -181,6 +195,7 @@ impl ItemRegistry {
             tool: None,
             world_drop: ItemWorldDropConfig::default(),
         });
+        key_to_id.insert("internal:empty".to_string(), EMPTY_ITEM_ID);
         key_to_id.insert("empty".to_string(), EMPTY_ITEM_ID);
         item_to_block.push(None);
 
@@ -199,17 +214,22 @@ impl ItemRegistry {
         materials: &mut Assets<StandardMaterial>,
         block_registry: &BlockRegistry,
     ) {
-        if item_json.id.trim().is_empty() {
+        let Some(item_identity) = parse_item_identity(item_json.localized_name.as_str()) else {
             return;
-        }
+        };
         let mapped_block = if item_json.block_item {
-            resolve_mapped_block_id(&item_json, block_registry)
+            resolve_mapped_block_id(&item_json, item_identity.key.as_str(), block_registry)
         } else {
             None
         };
         let render_kind = resolve_item_render_kind(&item_json);
-        let texture_path = resolve_item_texture_path(&item_json, mapped_block, block_registry);
-        let tool = resolve_item_tool_def(&item_json);
+        let texture_path = resolve_item_texture_path(
+            &item_json,
+            item_identity.key.as_str(),
+            mapped_block,
+            block_registry,
+        );
+        let tool = resolve_item_tool_def(&item_json, item_identity.key.as_str());
         let (image, material) = match render_kind {
             ItemRenderKind::Flat => {
                 let image: Handle<Image> = asset_server.load(texture_path.clone());
@@ -230,9 +250,11 @@ impl ItemRegistry {
         };
 
         let item_id = self.push_item(ItemDef {
-            key: item_json.id.clone(),
+            provider: item_identity.provider,
+            key: item_identity.key.clone(),
+            localized_name: item_identity.localized_name.clone(),
             name: if item_json.name.trim().is_empty() {
-                prettify_key(&item_json.id)
+                prettify_key(item_identity.key.as_str())
             } else {
                 item_json.name
             },
@@ -257,21 +279,27 @@ impl ItemRegistry {
     }
 
     fn insert_json_item_headless(&mut self, item_json: ItemJson, block_registry: &BlockRegistry) {
-        if item_json.id.trim().is_empty() {
+        let Some(item_identity) = parse_item_identity(item_json.localized_name.as_str()) else {
             return;
-        }
+        };
         let mapped_block = if item_json.block_item {
-            resolve_mapped_block_id(&item_json, block_registry)
+            resolve_mapped_block_id(&item_json, item_identity.key.as_str(), block_registry)
         } else {
             None
         };
-        let texture_path = resolve_item_texture_path_headless(&item_json, mapped_block);
-        let tool = resolve_item_tool_def(&item_json);
+        let texture_path = resolve_item_texture_path_headless(
+            &item_json,
+            item_identity.key.as_str(),
+            mapped_block,
+        );
+        let tool = resolve_item_tool_def(&item_json, item_identity.key.as_str());
 
         let item_id = self.push_item(ItemDef {
-            key: item_json.id.clone(),
+            provider: item_identity.provider,
+            key: item_identity.key.clone(),
+            localized_name: item_identity.localized_name.clone(),
             name: if item_json.name.trim().is_empty() {
-                prettify_key(&item_json.id)
+                prettify_key(item_identity.key.as_str())
             } else {
                 item_json.name
             },
@@ -303,13 +331,15 @@ impl ItemRegistry {
 
             let block_id = block_id as BlockId;
             let block_def = block_registry.def(block_id);
-            let base_key = block_def.name.clone();
-            let item_key = unique_key(&self.key_to_id, &base_key);
+            let item_key = block_def.name.clone();
+            let localized_name = format!("{DEFAULT_ITEM_PROVIDER}:{item_key}");
             let texture_path = block_icon_cache_key(block_id);
             let image: Handle<Image> = asset_server.load("textures/items/missing.png");
 
             let item_id = self.push_item(ItemDef {
+                provider: DEFAULT_ITEM_PROVIDER.to_string(),
                 key: item_key,
+                localized_name,
                 name: prettify_block_name(&block_def.name),
                 max_stack_size: DEFAULT_ITEM_STACK_SIZE,
                 category: "block".to_string(),
@@ -335,9 +365,12 @@ impl ItemRegistry {
 
             let block_id = block_id as BlockId;
             let block_def = block_registry.def(block_id);
-            let item_key = unique_key(&self.key_to_id, &block_def.name);
+            let item_key = block_def.name.clone();
+            let localized_name = format!("{DEFAULT_ITEM_PROVIDER}:{item_key}");
             let item_id = self.push_item(ItemDef {
+                provider: DEFAULT_ITEM_PROVIDER.to_string(),
                 key: item_key,
+                localized_name,
                 name: prettify_block_name(&block_def.name),
                 max_stack_size: DEFAULT_ITEM_STACK_SIZE,
                 category: "block".to_string(),
@@ -356,12 +389,16 @@ impl ItemRegistry {
     }
 
     fn push_item(&mut self, def: ItemDef) -> ItemId {
-        if let Some(existing) = self.key_to_id.get(&def.key).copied() {
+        if let Some(existing) = self.key_to_id.get(&def.localized_name).copied() {
+            debug!(
+                "Duplicate item '{}' ignored; keeping existing id {}",
+                def.localized_name, existing
+            );
             return existing;
         }
 
         let id = self.defs.len() as ItemId;
-        self.key_to_id.insert(def.key.clone(), id);
+        self.key_to_id.insert(def.localized_name.clone(), id);
         self.defs.push(def);
         self.item_to_block.push(None);
         id
@@ -379,7 +416,8 @@ impl ItemRegistry {
 
 #[derive(Deserialize)]
 struct ItemJson {
-    id: String,
+    #[serde(default, alias = "id")]
+    localized_name: String,
     #[serde(default)]
     name: String,
     #[serde(default = "default_json_stack_size")]
@@ -438,6 +476,13 @@ enum ItemRenderKind {
     Block,
 }
 
+#[derive(Clone, Debug)]
+struct ItemIdentity {
+    provider: String,
+    key: String,
+    localized_name: String,
+}
+
 fn item_json_paths(items_dir: &str) -> Vec<PathBuf> {
     let dir = Path::new(items_dir);
     let mut paths = Vec::new();
@@ -469,8 +514,34 @@ fn normalize_stack_size(value: i32) -> u16 {
     }
 }
 
+fn parse_item_identity(raw_localized_name: &str) -> Option<ItemIdentity> {
+    let trimmed = raw_localized_name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let (provider, key) = if let Some((provider, key)) = trimmed.split_once(':') {
+        (provider.trim(), key.trim())
+    } else {
+        (DEFAULT_ITEM_PROVIDER, trimmed)
+    };
+
+    if provider.is_empty() || key.is_empty() {
+        return None;
+    }
+
+    let provider = provider.to_ascii_lowercase();
+    let key = key.to_ascii_lowercase();
+    Some(ItemIdentity {
+        localized_name: format!("{provider}:{key}"),
+        provider,
+        key,
+    })
+}
+
 fn resolve_mapped_block_id(
     item_json: &ItemJson,
+    item_key: &str,
     block_registry: &BlockRegistry,
 ) -> Option<BlockId> {
     if let Some(block_name) = item_json
@@ -481,11 +552,10 @@ fn resolve_mapped_block_id(
         return block_registry.id_opt(block_name);
     }
 
-    guess_block_name_from_item_key(&item_json.id)
-        .and_then(|name| block_registry.id_opt(name.as_str()))
+    guess_block_name_from_item_key(item_key).and_then(|name| block_registry.id_opt(name.as_str()))
 }
 
-fn resolve_item_tool_def(item_json: &ItemJson) -> Option<ToolDef> {
+fn resolve_item_tool_def(item_json: &ItemJson, item_key: &str) -> Option<ToolDef> {
     let kind = item_json.tool.kind.trim();
     if !kind.is_empty() {
         if let Ok(tool_type) = kind.parse::<ToolType>() {
@@ -496,12 +566,13 @@ fn resolve_item_tool_def(item_json: &ItemJson) -> Option<ToolDef> {
         }
     }
 
-    infer_tool_from_item_key(item_json.id.as_str())
+    infer_tool_from_item_key(item_key)
 }
 
 /// Resolves the UI texture path for one item definition in graphics mode.
 fn resolve_item_texture_path(
     item_json: &ItemJson,
+    item_key: &str,
     mapped_block: Option<BlockId>,
     block_registry: &BlockRegistry,
 ) -> String {
@@ -519,7 +590,7 @@ fn resolve_item_texture_path(
                 return String::from("textures/items/missing.png");
             }
             let Some(block_id) =
-                resolve_item_render_block_id(item_json, mapped_block, block_registry)
+                resolve_item_render_block_id(item_json, item_key, mapped_block, block_registry)
             else {
                 return String::from("textures/items/missing.png");
             };
@@ -531,6 +602,7 @@ fn resolve_item_texture_path(
 /// Resolves the UI texture path for one item definition in headless mode.
 fn resolve_item_texture_path_headless(
     item_json: &ItemJson,
+    _item_key: &str,
     mapped_block: Option<BlockId>,
 ) -> String {
     match resolve_item_render_kind(item_json) {
@@ -577,6 +649,7 @@ fn resolve_item_render_kind(item_json: &ItemJson) -> ItemRenderKind {
 /// Resolves the block id for an item using render JSON and legacy mapping fields.
 fn resolve_item_render_block_id(
     item_json: &ItemJson,
+    item_key: &str,
     mapped_block: Option<BlockId>,
     block_registry: &BlockRegistry,
 ) -> Option<BlockId> {
@@ -588,8 +661,7 @@ fn resolve_item_render_block_id(
     if let Some(block_id) = mapped_block {
         return Some(block_id);
     }
-    guess_block_name_from_item_key(&item_json.id)
-        .and_then(|name| block_registry.id_opt(name.as_str()))
+    guess_block_name_from_item_key(item_key).and_then(|name| block_registry.id_opt(name.as_str()))
 }
 
 #[inline]
@@ -658,21 +730,6 @@ fn prettify_block_name(block_name: &str) -> String {
         return prettify_key(base);
     }
     prettify_key(block_name)
-}
-
-fn unique_key(existing: &HashMap<String, ItemId>, preferred: &str) -> String {
-    if !existing.contains_key(preferred) {
-        return preferred.to_string();
-    }
-
-    let mut index = 1usize;
-    loop {
-        let candidate = format!("{preferred}_item_{index}");
-        if !existing.contains_key(&candidate) {
-            return candidate;
-        }
-        index += 1;
-    }
 }
 
 fn default_true() -> bool {

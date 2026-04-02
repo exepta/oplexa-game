@@ -74,7 +74,7 @@ fn color_accent_hover() -> Color {
 }
 
 fn color_text() -> Color {
-    Color::srgb_u8(0xdb, 0xdb, 0xdb)
+    Color::WHITE
 }
 
 fn color_text_darker() -> Color {
@@ -133,6 +133,16 @@ fn apply_button_layout(node: &mut Node, kind: UiButtonKind) {
         UiButtonKind::InventorySlot => {
             node.width = Val::Px(56.0);
             node.height = Val::Px(56.0);
+            node.border = UiRect::all(Val::Px(1.0));
+            node.justify_content = JustifyContent::Center;
+            node.align_items = AlignItems::Center;
+            node.flex_direction = FlexDirection::Column;
+            node.row_gap = Val::Px(2.0);
+            node.padding = UiRect::all(Val::Px(3.0));
+        }
+        UiButtonKind::InventoryResultSlot => {
+            node.width = Val::Px(67.2);
+            node.height = Val::Px(67.2);
             node.border = UiRect::all(Val::Px(1.0));
             node.justify_content = JustifyContent::Center;
             node.align_items = AlignItems::Center;
@@ -235,12 +245,16 @@ fn style_paragraphs(
         color.0 = match tone {
             Some(UiTextTone::Darker) => color_text_darker(),
             Some(UiTextTone::CardPing) => color_text_darker(),
+            Some(UiTextTone::TooltipName) => color_accent(),
+            Some(UiTextTone::TooltipKey) => Color::srgb_u8(0xc5, 0xc7, 0xcd),
             _ => color_text(),
         };
         font.font_size = match tone {
             Some(UiTextTone::Heading) => 14.0,
             Some(UiTextTone::CardName) => 13.0,
             Some(UiTextTone::CardPing) => 11.0,
+            Some(UiTextTone::TooltipName) => 12.0,
+            Some(UiTextTone::TooltipKey) => 11.0,
             _ => 12.0,
         };
     }
@@ -248,7 +262,7 @@ fn style_paragraphs(
 
 fn style_pause_menu_button_texts(
     buttons: Query<(&UIGenID, &CssID), With<Button>>,
-    mut texts: Query<(&BindToID, &mut TextFont), With<Text>>,
+    mut texts: Query<(&BindToID, &mut TextFont, &mut TextColor), With<Text>>,
 ) {
     let mut pause_ids = HashSet::new();
     for (id, css_id) in &buttons {
@@ -261,9 +275,10 @@ fn style_pause_menu_button_texts(
         }
     }
 
-    for (bind, mut font) in &mut texts {
+    for (bind, mut font, mut color) in &mut texts {
         if pause_ids.contains(&bind.get()) {
             font.font_size = 12.0;
+            color.0 = Color::WHITE;
         }
     }
 }
@@ -298,6 +313,11 @@ fn style_slot_count_badges(
     for (css_id, mut node, mut font, mut text_color) in &mut badges {
         if !css_id.0.starts_with(HUD_SLOT_BADGE_PREFIX)
             && !css_id.0.starts_with(PLAYER_INVENTORY_BADGE_PREFIX)
+            && !css_id.0.starts_with(HAND_CRAFTED_BADGE_PREFIX)
+            && !css_id.0.starts_with(RECIPE_PREVIEW_INPUT_BADGE_PREFIX)
+            && css_id.0 != HAND_CRAFTED_RESULT_BADGE_ID
+            && css_id.0 != RECIPE_PREVIEW_RESULT_BADGE_ID
+            && css_id.0 != INVENTORY_CURSOR_BADGE_ID
         {
             continue;
         }

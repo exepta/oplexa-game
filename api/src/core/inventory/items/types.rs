@@ -26,8 +26,12 @@ impl Default for ItemWorldDropConfig {
 /// Runtime item definition used by inventory, UI and world-drop systems.
 #[derive(Clone, Debug)]
 pub struct ItemDef {
-    /// Stable item key (for example: `stick` or `dirt_block`).
+    /// Provider namespace (for example: `oplexa`).
+    pub provider: String,
+    /// Provider-local key (for example: `stick` or `dirt_block`).
     pub key: String,
+    /// Fully qualified item name (`provider:key`).
+    pub localized_name: String,
     /// Display name shown in UI.
     pub name: String,
     /// Maximum number of this item in one inventory slot.

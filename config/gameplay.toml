@@ -1,0 +1,4 @@
+# Game relevant settings like gameplay changes. You can configure your mouse
+# sensitivity or other important things.
+mouse_sensitivity_vertical = 1.0
+mouse_sensitivity_horizontal = 1.0

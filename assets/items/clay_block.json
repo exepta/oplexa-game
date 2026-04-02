@@ -1,5 +1,5 @@
 {
-  "id": "clay_block",
+  "localized_name": "oplexa:clay_block",
   "name": "Clay Block",
   "max_stack_size": -1,
   "category": "block",

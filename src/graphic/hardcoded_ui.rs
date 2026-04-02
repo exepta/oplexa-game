@@ -3,19 +3,22 @@ use crate::core::debug::{
     BuildInfo, DebugGridState, DebugOverlayState, SysStats, WorldInspectorState,
 };
 use crate::core::entities::player::inventory::{
-    InventorySlot, PLAYER_INVENTORY_SLOTS, PlayerInventory,
+    InventorySlot, PLAYER_INVENTORY_SLOTS, PLAYER_INVENTORY_STACK_MAX, PlayerInventory,
 };
 use crate::core::entities::player::{GameMode, GameModeState, Player};
 use crate::core::events::ui_events::{
-    ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest, OpenToLanRequest,
-    StopLanHostRequest,
+    ConnectToServerRequest, CraftHandCraftedRequest, DisconnectFromServerRequest, DropItemRequest,
+    OpenToLanRequest, StopLanHostRequest,
 };
 use crate::core::inventory::creative_panel::{
     CREATIVE_PANEL_COLUMNS, CREATIVE_PANEL_PAGE_SIZE, CreativePanelState,
 };
 use crate::core::inventory::items::{
-    ItemRegistry, build_block_item_icon_image, parse_block_icon_cache_key,
+    ItemId, ItemRegistry, build_block_item_icon_image, parse_block_icon_cache_key,
     player_drop_spawn_motion, player_drop_world_location, spawn_player_dropped_item_stack,
+};
+use crate::core::inventory::recipe::{
+    HAND_CRAFTED_INPUT_SLOTS, HandCraftedState, RecipeRegistry, RecipeTypeRegistry, ResolvedRecipe,
 };
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
 use crate::core::states::states::{
@@ -107,6 +110,19 @@ const HUD_SLOT_BADGE_PREFIX: &str = "hud-hotbar-slot-badge-";
 const PLAYER_INVENTORY_TOTAL_ID: &str = "player-inventory-total";
 const PLAYER_INVENTORY_FRAME_PREFIX: &str = "player-inventory-frame-";
 const PLAYER_INVENTORY_BADGE_PREFIX: &str = "player-inventory-badge-";
+const HAND_CRAFTED_FRAME_PREFIX: &str = "hand-crafted-frame-";
+const HAND_CRAFTED_BADGE_PREFIX: &str = "hand-crafted-badge-";
+const HAND_CRAFTED_RESULT_FRAME_ID: &str = "hand-crafted-result-frame";
+const HAND_CRAFTED_RESULT_BADGE_ID: &str = "hand-crafted-result-badge";
+const INVENTORY_TOOLTIP_NAME_ID: &str = "inventory-tooltip-name";
+const INVENTORY_TOOLTIP_KEY_ID: &str = "inventory-tooltip-key";
+const INVENTORY_CURSOR_BADGE_ID: &str = "inventory-cursor-badge";
+const RECIPE_PREVIEW_TITLE_ID: &str = "recipe-preview-title";
+const RECIPE_PREVIEW_INPUT_FRAME_PREFIX: &str = "recipe-preview-input-frame-";
+const RECIPE_PREVIEW_INPUT_BADGE_PREFIX: &str = "recipe-preview-input-badge-";
+const RECIPE_PREVIEW_RESULT_FRAME_ID: &str = "recipe-preview-result-frame";
+const RECIPE_PREVIEW_RESULT_BADGE_ID: &str = "recipe-preview-result-badge";
+const RECIPE_PREVIEW_FILL_ID: &str = "recipe-preview-fill";
 const CREATIVE_PANEL_TOTAL_ID: &str = "creative-panel-total";
 const CREATIVE_PANEL_PAGE_ID: &str = "creative-panel-page";
 const CREATIVE_PANEL_PREV_ID: &str = "creative-panel-prev";
@@ -176,6 +192,22 @@ struct HudRoot;
 #[derive(Component)]
 struct PlayerInventoryRoot;
 #[derive(Component)]
+struct InventoryMainPanel;
+#[derive(Component)]
+struct InventoryDropZonePanel;
+#[derive(Component)]
+struct InventoryTooltipRoot;
+#[derive(Component)]
+struct InventoryCursorItemRoot;
+#[derive(Component)]
+struct InventoryCursorItemIcon;
+#[derive(Component)]
+struct InventoryCursorItemBadge;
+#[derive(Component)]
+struct RecipePreviewDialogRoot;
+#[derive(Component)]
+struct RecipePreviewDialogPanel;
+#[derive(Component)]
 struct CreativePanelGridRoot;
 #[derive(Component)]
 struct DebugOverlayRoot;
@@ -186,6 +218,7 @@ enum UiButtonKind {
     ActionRow,
     Card,
     InventorySlot,
+    InventoryResultSlot,
 }
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,6 +234,8 @@ enum UiTextTone {
     CardPing,
     Normal,
     Darker,
+    TooltipName,
+    TooltipKey,
 }
 
 #[derive(Component)]
@@ -252,8 +287,25 @@ struct PlayerInventoryUiState {
 }
 
 #[derive(Resource, Debug, Default, Clone, Copy)]
-struct InventoryDragState {
-    source_slot: Option<usize>,
+struct InventoryCursorItemState {
+    slot: InventorySlot,
+}
+
+#[derive(Resource, Debug, Clone, Copy)]
+struct RecipePreviewDialogState {
+    open: bool,
+    input_slots: [InventorySlot; HAND_CRAFTED_INPUT_SLOTS],
+    result_slot: InventorySlot,
+}
+
+impl Default for RecipePreviewDialogState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            input_slots: [InventorySlot::default(); HAND_CRAFTED_INPUT_SLOTS],
+            result_slot: InventorySlot::default(),
+        }
+    }
 }
 
 #[derive(Resource, Debug, Default, Clone, Copy)]
@@ -437,6 +489,12 @@ enum MainMenuAction {
     QuitGame,
 }
 
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum InGameInventoryUiSet {
+    Input,
+    Sync,
+}
+
 impl Plugin for HardcodedUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LoadingProgress>()
@@ -444,7 +502,8 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<WorldUnloadUiState>()
             .init_resource::<PauseMenuState>()
             .init_resource::<PlayerInventoryUiState>()
-            .init_resource::<InventoryDragState>()
+            .init_resource::<InventoryCursorItemState>()
+            .init_resource::<RecipePreviewDialogState>()
             .init_resource::<CreativePanelUiState>()
             .init_resource::<CreativePanelState>()
             .init_resource::<DebugVramState>()
@@ -455,6 +514,10 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<SysStats>()
             .insert_non_send_resource(ServerProbeRuntime::default())
             .add_plugins(ExtendedUiPlugin)
+            .configure_sets(
+                Update,
+                (InGameInventoryUiSet::Input, InGameInventoryUiSet::Sync).chain(),
+            )
             .add_systems(
                 Startup,
                 (configure_extended_ui, spawn_hardcoded_ui, prime_sys_stats),
@@ -609,22 +672,29 @@ impl Plugin for HardcodedUiPlugin {
             .add_systems(
                 Update,
                 (
-                    toggle_player_inventory_ui,
-                    sync_creative_panel_state_from_registry,
-                    handle_creative_panel_navigation,
-                    handle_creative_panel_clicks,
-                    handle_inventory_drag_and_drop,
-                    sync_player_inventory_ui,
-                    sync_creative_panel_ui,
+                    toggle_player_inventory_ui.in_set(InGameInventoryUiSet::Input),
+                    sync_creative_panel_state_from_registry.in_set(InGameInventoryUiSet::Input),
+                    handle_creative_panel_navigation.in_set(InGameInventoryUiSet::Input),
+                    handle_creative_panel_clicks.in_set(InGameInventoryUiSet::Input),
+                    handle_inventory_drag_and_drop.in_set(InGameInventoryUiSet::Input),
                 )
-                    .chain()
+                    .run_if(in_state(AppState::InGame(InGameStates::Game))),
+            )
+            .add_systems(
+                Update,
+                (
+                    sync_player_inventory_ui.in_set(InGameInventoryUiSet::Sync),
+                    sync_creative_panel_ui.in_set(InGameInventoryUiSet::Sync),
+                    sync_inventory_cursor_item_ui.in_set(InGameInventoryUiSet::Sync),
+                    sync_inventory_tooltip_ui.in_set(InGameInventoryUiSet::Sync),
+                )
                     .run_if(in_state(AppState::InGame(InGameStates::Game))),
             )
             .add_systems(
                 Update,
                 sync_ingame_ui_interaction_state
                     .after(sync_pause_time)
-                    .after(sync_player_inventory_ui)
+                    .after(InGameInventoryUiSet::Sync)
                     .run_if(is_state_in_game),
             )
             .add_systems(
