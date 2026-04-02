@@ -1,9 +1,15 @@
 mod registry;
+pub mod tools;
 mod types;
 mod world_item;
 
 pub use registry::{
     BLOCK_ICON_CACHE_PREFIX, ItemRegistry, build_block_item_icon_image, parse_block_icon_cache_key,
+};
+pub use tools::{
+    ToolDef, ToolLevel, ToolRequirement, ToolType, block_requirement_for_id,
+    block_requirement_for_name, can_drop_from_block, infer_tool_from_item_key,
+    mining_speed_multiplier,
 };
 pub use types::{DEFAULT_ITEM_STACK_SIZE, EMPTY_ITEM_ID, ItemDef, ItemId, ItemWorldDropConfig};
 pub use world_item::{

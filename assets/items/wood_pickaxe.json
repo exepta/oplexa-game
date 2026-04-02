@@ -1,0 +1,21 @@
+{
+  "id": "wood_pickaxe",
+  "name": "Wood Pickaxe",
+  "max_stack_size": 1,
+  "category": "tool",
+  "block_item": false,
+  "placeable": false,
+  "tags": ["tool", "pickaxe", "wood"],
+  "rarity": "common",
+  "render": {
+    "type": "flat",
+    "texture": "textures/items/wood_pickaxe.png"
+  },
+  "tool": {
+    "type": "pickaxe",
+    "level": 1
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

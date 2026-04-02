@@ -8,6 +8,7 @@
   "stats": {
     "hardness": 2.7,
     "blast_resistance": 1.5,
+    "level": "0",
     "opaque": true,
     "emissive": 0.0
   }

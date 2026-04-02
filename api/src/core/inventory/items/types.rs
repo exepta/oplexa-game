@@ -1,3 +1,4 @@
+use crate::core::inventory::items::tools::ToolDef;
 use bevy::prelude::*;
 
 /// Numeric identifier for an item definition.
@@ -47,6 +48,8 @@ pub struct ItemDef {
     pub tags: Vec<String>,
     /// Free-form rarity label from JSON.
     pub rarity: String,
+    /// Optional tool metadata used for mining rules.
+    pub tool: Option<ToolDef>,
     /// World drop behavior flags.
     pub world_drop: ItemWorldDropConfig,
 }

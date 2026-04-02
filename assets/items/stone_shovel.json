@@ -1,0 +1,21 @@
+{
+  "id": "stone_shovel",
+  "name": "Stone Shovel",
+  "max_stack_size": 1,
+  "category": "tool",
+  "block_item": false,
+  "placeable": false,
+  "tags": ["tool", "shovel", "stone"],
+  "rarity": "common",
+  "render": {
+    "type": "flat",
+    "texture": "textures/items/stone_shovel.png"
+  },
+  "tool": {
+    "type": "shovel",
+    "level": 2
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}
