@@ -588,6 +588,7 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<DebugOverlayState>()
             .init_resource::<DebugGridState>()
             .init_resource::<SysStats>()
+            .init_resource::<ActiveInventorySavePath>()
             .insert_non_send_resource(ServerProbeRuntime::default())
             .add_plugins(ExtendedUiPlugin)
             .configure_sets(
@@ -619,7 +620,12 @@ impl Plugin for HardcodedUiPlugin {
             .add_systems(Last, style_scroll_div_contents)
             .add_systems(
                 OnEnter(AppState::Screen(BeforeUiState::Menu)),
-                (show_main_menu, set_menu_cursor),
+                (
+                    clear_inventory_context_when_entering_screen,
+                    show_main_menu,
+                    set_menu_cursor,
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,
@@ -633,7 +639,11 @@ impl Plugin for HardcodedUiPlugin {
             )
             .add_systems(
                 OnEnter(AppState::Screen(BeforeUiState::SinglePlayer)),
-                enter_single_player_screen,
+                (
+                    clear_inventory_context_when_entering_screen,
+                    enter_single_player_screen,
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,
@@ -654,7 +664,11 @@ impl Plugin for HardcodedUiPlugin {
             )
             .add_systems(
                 OnEnter(AppState::Screen(BeforeUiState::MultiPlayer)),
-                enter_multiplayer_screen,
+                (
+                    clear_inventory_context_when_entering_screen,
+                    enter_multiplayer_screen,
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,
@@ -676,7 +690,12 @@ impl Plugin for HardcodedUiPlugin {
             )
             .add_systems(
                 OnEnter(AppState::Loading(LoadingStates::BaseGen)),
-                (reset_world_gen_ui_animation, show_world_gen_ui),
+                (
+                    load_inventory_for_world_entry,
+                    reset_world_gen_ui_animation,
+                    show_world_gen_ui,
+                )
+                    .chain(),
             )
             .add_systems(
                 OnExit(AppState::Loading(LoadingStates::WaterGen)),
@@ -758,6 +777,10 @@ impl Plugin for HardcodedUiPlugin {
             )
             .add_systems(
                 Update,
+                persist_inventory_on_change.run_if(in_state(AppState::InGame(InGameStates::Game))),
+            )
+            .add_systems(
+                Update,
                 (
                     sync_player_inventory_ui.in_set(InGameInventoryUiSet::Sync),
                     sync_creative_panel_ui.in_set(InGameInventoryUiSet::Sync),
@@ -775,7 +798,12 @@ impl Plugin for HardcodedUiPlugin {
             )
             .add_systems(
                 OnExit(AppState::InGame(InGameStates::Game)),
-                close_player_inventory_ui,
+                (
+                    close_player_inventory_ui,
+                    persist_inventory_on_world_exit,
+                    clear_inventory_after_world_exit,
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,
@@ -803,6 +831,7 @@ include!("components/hud.rs");
 include!("components/pause_menu.rs");
 include!("components/inventory.rs");
 include!("components/inventory_creative.rs");
+include!("components/inventory_persistence.rs");
 include!("components/ui_interaction_sync.rs");
 include!("components/debug_overlay.rs");
 

@@ -3,7 +3,7 @@ enabled = true
 connect_on_startup = false
 session_url = "http://127.0.0.1:14191"
 player_name = "?"
-#client_uuid = "d4a12b00-6ec5-4b3d-9b76-76598776663f"
+#client_uuid = "24742a6d-2d7d-4d70-8f0e-8d3ec1be1eee"
 # e6c6a7a8-dfa2-428a-a71b-ce5efca7cddb
 # d4a12b00-6ec5-4b3d-9b76-76598776663f
 prod = false

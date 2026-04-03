@@ -741,6 +741,7 @@ fn init_bevy_app(
     multiplayer_settings: NetworkSettings,
     client_identity: ClientIdentity,
 ) {
+    let client_uuid = client_identity.uuid.clone();
     let build = BuildInfo {
         app_name: "Game Version",
         app_version: env!("CARGO_PKG_VERSION"),
@@ -751,6 +752,7 @@ fn init_bevy_app(
         .insert_resource(build)
         .insert_resource(ClearColor(Color::Srgba(Srgba::rgb_u8(20, 25, 27))))
         .insert_resource(WorldInspectorState(false))
+        .insert_resource(MultiplayerConnectionState::with_client_uuid(client_uuid))
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
