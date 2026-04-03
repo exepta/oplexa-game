@@ -1,6 +1,11 @@
+mod chat;
 mod connections;
 mod gameplay;
 
+pub use chat::{
+    ServerCommandRegistry, create_server_console_input, handle_chat_messages,
+    handle_console_commands,
+};
 pub use connections::{
     cleanup_orphaned_players, handle_auth_messages, handle_client_connected,
     handle_client_disconnected, handle_new_client, poll_lan_discovery, purge_stale_players,

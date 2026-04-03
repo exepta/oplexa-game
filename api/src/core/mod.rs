@@ -1,3 +1,5 @@
+pub mod chat;
+pub mod commands;
 pub mod config;
 pub mod debug;
 pub mod entities;
@@ -10,6 +12,7 @@ pub mod states;
 pub mod ui;
 pub mod world;
 
+use crate::core::chat::ChatLog;
 use crate::core::config::*;
 use crate::core::entities::EntitiesModule;
 use crate::core::events::EventModule;
@@ -28,6 +31,7 @@ impl Plugin for CoreModule {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorldGenConfig>();
         app.init_resource::<CrosshairConfig>();
+        app.init_resource::<ChatLog>();
         app.init_resource::<SelectedBlock>();
         app.init_resource::<MiningState>();
         app.init_resource::<MiningOverlayRoot>();

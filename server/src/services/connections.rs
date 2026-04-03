@@ -3,10 +3,11 @@ use crate::{
     models::HostedPlayer,
     state::{ServerRuntimeConfig, ServerState},
 };
+use api::core::commands::{CommandSender, GameModeKind, SystemMessageLevel, SystemSender};
 use api::core::network::protocols::{
     Auth, OrderedReliable, PlayerJoined, PlayerLeft, PlayerSnapshot, ServerAuthRejected,
-    ServerBlockBreak, ServerBlockPlace, ServerDropSpawn, ServerWelcome, UnorderedReliable,
-    UnorderedUnreliable,
+    ServerBlockBreak, ServerBlockPlace, ServerChatMessage, ServerDropSpawn, ServerWelcome,
+    UnorderedReliable, UnorderedUnreliable,
 };
 use bevy::ecs::event::EntityTrigger;
 use bevy::prelude::*;
@@ -35,11 +36,12 @@ pub fn handle_new_client(trigger: On<Add, ClientOf>, mut commands: Commands) {
         MessageReceiver::<ClientBlockPlace>::default(),
         MessageReceiver::<ClientDropItem>::default(),
         MessageReceiver::<ClientDropPickup>::default(),
+        MessageReceiver::<ClientChatMessage>::default(),
     ));
     // Import message types used above (re-exported from protocols)
     use api::core::network::protocols::{
-        ClientBlockBreak, ClientBlockPlace, ClientChunkInterest, ClientDropItem, ClientDropPickup,
-        ClientKeepAlive, PlayerMove,
+        ClientBlockBreak, ClientBlockPlace, ClientChatMessage, ClientChunkInterest, ClientDropItem,
+        ClientDropPickup, ClientKeepAlive, PlayerMove,
     };
 }
 
@@ -74,6 +76,16 @@ pub fn handle_client_disconnected(
         );
         let msg = PlayerLeft::new(player.player_id);
         let _ = multi_sender.send::<_, UnorderedReliable>(&msg, *server, &NetworkTarget::All);
+        let _ = multi_sender.send::<_, UnorderedReliable>(
+            &ServerChatMessage::new(
+                CommandSender::System(SystemSender::Server {
+                    level: SystemMessageLevel::Info,
+                }),
+                format!("Player {} disconnected.", player.username),
+            ),
+            *server,
+            &NetworkTarget::All,
+        );
     }
 
     // Remove any pending chunk work for this connection
@@ -139,6 +151,16 @@ pub fn cleanup_orphaned_players(
             }
             let _ = multi_sender.send::<_, UnorderedReliable>(
                 &PlayerLeft::new(player.player_id),
+                *server,
+                &NetworkTarget::All,
+            );
+            let _ = multi_sender.send::<_, UnorderedReliable>(
+                &ServerChatMessage::new(
+                    CommandSender::System(SystemSender::Server {
+                        level: SystemMessageLevel::Info,
+                    }),
+                    format!("Player {} disconnected.", player.username),
+                ),
                 *server,
                 &NetworkTarget::All,
             );
@@ -227,6 +249,7 @@ pub fn handle_auth_messages(
                 player_id: state.next_player_id,
                 username: username.clone(),
                 client_uuid,
+                game_mode: GameModeKind::Creative,
                 translation: config.spawn_translation,
                 yaw: 0.0,
                 pitch: 0.0,
@@ -322,6 +345,16 @@ pub fn handle_auth_messages(
                 *server,
                 &NetworkTarget::All,
             );
+            let _ = multi_sender.send::<_, UnorderedReliable>(
+                &ServerChatMessage::new(
+                    CommandSender::System(SystemSender::Server {
+                        level: SystemMessageLevel::Info,
+                    }),
+                    format!("Player {} joined the game.", username),
+                ),
+                *server,
+                &NetworkTarget::All,
+            );
             let _ = multi_sender.send::<_, UnorderedUnreliable>(
                 &PlayerSnapshot::new(player_id, config.spawn_translation, 0.0, 0.0),
                 *server,
@@ -366,6 +399,16 @@ pub fn purge_stale_players(
         if let Some(player) = state.players.remove(&entity) {
             let _ = multi_sender.send::<_, UnorderedReliable>(
                 &PlayerLeft::new(player.player_id),
+                *server,
+                &NetworkTarget::All,
+            );
+            let _ = multi_sender.send::<_, UnorderedReliable>(
+                &ServerChatMessage::new(
+                    CommandSender::System(SystemSender::Server {
+                        level: SystemMessageLevel::Info,
+                    }),
+                    format!("Player {} disconnected.", player.username),
+                ),
                 *server,
                 &NetworkTarget::All,
             );
