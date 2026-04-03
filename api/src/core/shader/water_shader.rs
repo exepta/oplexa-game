@@ -10,6 +10,7 @@ mod water_types {
     use bevy::prelude::*;
     use bevy::render::render_resource::ShaderType;
 
+    /// Represents water params used by the `core::shader::water_shader` module.
     #[derive(Clone, Copy, Default, ShaderType, Debug)]
     pub struct WaterParams {
         pub uv_rect: Vec4,
@@ -19,6 +20,7 @@ mod water_types {
     }
 }
 
+/// Represents water material used by the `core::shader::water_shader` module.
 #[derive(AsBindGroup, Asset, TypePath, Clone, Debug)]
 pub struct WaterMaterial {
     #[uniform(0, visibility = "VertexFragment")]
@@ -29,20 +31,25 @@ pub struct WaterMaterial {
     pub atlas: Handle<Image>,
 }
 
+/// Represents water mat handle used by the `core::shader::water_shader` module.
 #[derive(Resource, Clone)]
 pub struct WaterMatHandle(pub Handle<WaterMaterial>);
 
 impl Material for WaterMaterial {
+    /// Runs the `vertex_shader` routine for vertex shader in the `core::shader::water_shader` module.
     fn vertex_shader() -> ShaderRef {
         ShaderRef::Path("shaders/water.wgsl".into())
     }
+    /// Runs the `fragment_shader` routine for fragment shader in the `core::shader::water_shader` module.
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Path("shaders/water.wgsl".into())
     }
+    /// Runs the `alpha_mode` routine for alpha mode in the `core::shader::water_shader` module.
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Premultiplied
     }
 
+    /// Runs the `specialize` routine for specialize in the `core::shader::water_shader` module.
     fn specialize(
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,

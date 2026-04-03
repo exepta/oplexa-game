@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use bevy::tasks::Task;
 use std::collections::{HashMap, VecDeque};
 
+/// Represents mesh backlog used by the `generator::chunk::chunk_struct` module.
 #[derive(Resource, Default)]
 pub struct MeshBacklog(pub VecDeque<(IVec2, usize)>);
 
@@ -19,6 +20,7 @@ pub struct PendingMesh(
     pub HashMap<(IVec2, usize), Task<((IVec2, usize), Vec<(BlockId, MeshBuild)>)>>,
 );
 
+/// Represents reg lite entry used by the `generator::chunk::chunk_struct` module.
 #[derive(Clone, Copy)]
 pub struct RegLiteEntry {
     pub top: UvRect,
@@ -30,12 +32,14 @@ pub struct RegLiteEntry {
     pub opaque: bool,
     pub fluid: bool,
 }
+/// Represents reg lite used by the `generator::chunk::chunk_struct` module.
 #[derive(Clone)]
 pub struct RegLite {
     pub map: HashMap<BlockId, RegLiteEntry>,
 }
 
 impl RegLite {
+    /// Runs the `from_reg` routine for from reg in the `generator::chunk::chunk_struct` module.
     pub fn from_reg(reg: &BlockRegistry) -> Self {
         let mut map = HashMap::new();
         for &id in reg.name_to_id.values() {
@@ -58,6 +62,7 @@ impl RegLite {
         }
         Self { map }
     }
+    /// Runs the `uv` routine for uv in the `generator::chunk::chunk_struct` module.
     #[inline]
     pub fn uv(&self, id: BlockId, face: Face) -> UvRect {
         let e = self.map.get(&id).expect("unknown id");
@@ -70,16 +75,19 @@ impl RegLite {
             Face::West => e.west,
         }
     }
+    /// Runs the `opaque` routine for opaque in the `generator::chunk::chunk_struct` module.
     #[inline]
     pub fn opaque(&self, id: BlockId) -> bool {
         self.map.get(&id).map(|e| e.opaque).unwrap_or(false)
     }
+    /// Runs the `fluid` routine for fluid in the `generator::chunk::chunk_struct` module.
     #[inline]
     pub fn fluid(&self, id: BlockId) -> bool {
         self.map.get(&id).map(|e| e.fluid).unwrap_or(false)
     }
 }
 
+/// Represents mesh build used by the `generator::chunk::chunk_struct` module.
 pub struct MeshBuild {
     pub pos: Vec<[f32; 3]>,
     pub nrm: Vec<[f32; 3]>,
@@ -88,6 +96,7 @@ pub struct MeshBuild {
 }
 
 impl MeshBuild {
+    /// Creates a new instance for the `generator::chunk::chunk_struct` module.
     pub fn new() -> Self {
         Self {
             pos: vec![],
@@ -96,6 +105,7 @@ impl MeshBuild {
             idx: vec![],
         }
     }
+    /// Runs the `quad` routine for quad in the `generator::chunk::chunk_struct` module.
     pub fn quad(&mut self, q: [[f32; 3]; 4], n: [f32; 3], uv: [[f32; 2]; 4]) {
         let base = self.pos.len() as u32;
         self.pos.extend_from_slice(&q);
@@ -104,6 +114,7 @@ impl MeshBuild {
         self.idx
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
+    /// Runs the `into_mesh` routine for into mesh in the `generator::chunk::chunk_struct` module.
     pub fn into_mesh(self) -> Mesh {
         let mut m = Mesh::new(
             PrimitiveTopology::TriangleList,
@@ -124,6 +135,7 @@ impl MeshBuild {
         m
     }
 
+    /// Runs the `mesh_is_empty` routine for mesh is empty in the `generator::chunk::chunk_struct` module.
     #[allow(dead_code)]
     pub fn mesh_is_empty(m: &Mesh) -> bool {
         match m.attribute(Mesh::ATTRIBUTE_POSITION) {
@@ -134,6 +146,7 @@ impl MeshBuild {
     }
 }
 
+/// Represents border snapshot used by the `generator::chunk::chunk_struct` module.
 #[derive(Clone)]
 pub struct BorderSnapshot {
     pub y0: usize,

@@ -1,8 +1,10 @@
+/// Runs the `enter_single_player_screen` routine for enter single player screen in the `graphic::components::single_player` module.
 fn enter_single_player_screen(
     time: Res<Time>,
     mut commands: Commands,
     ui_entities: Res<UiEntities>,
     mut ui_state: ResMut<SinglePlayerUiState>,
+    mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     world_gen_config: Res<WorldGenConfig>,
     item_entities: Query<Entity, With<SinglePlayerListItem>>,
     mut create_inputs: Query<(&CssID, &mut InputField, &mut InputValue)>,
@@ -22,6 +24,7 @@ fn enter_single_player_screen(
     ui_state.pending_delete_index = None;
     ui_state.last_card_click = Some((usize::MAX, time.elapsed_secs_f64()));
     ui_state.closing_for_world_load = false;
+    multiplayer_connection.set_world_data_mode_local();
 
     refresh_single_player_content(&mut ui_state, world_gen_config.seed);
     rebuild_single_player_cards(
@@ -42,6 +45,7 @@ fn enter_single_player_screen(
     }
 }
 
+/// Sets single player interaction for the `graphic::components::single_player` module.
 fn set_single_player_interaction(
     ui_state: Res<SinglePlayerUiState>,
     mut ui_interaction: ResMut<UiInteractionState>,
@@ -59,6 +63,7 @@ fn set_single_player_interaction(
     }
 }
 
+/// Synchronizes single player visibility for the `graphic::components::single_player` module.
 fn sync_single_player_visibility(
     ui_state: Res<SinglePlayerUiState>,
     mut roots: ParamSet<(
@@ -103,6 +108,7 @@ fn sync_single_player_visibility(
     }
 }
 
+/// Synchronizes single player delete dialog for the `graphic::components::single_player` module.
 fn sync_single_player_delete_dialog(
     ui_state: Res<SinglePlayerUiState>,
     mut paragraphs: Query<(&mut Paragraph, Option<&SinglePlayerDeleteText>)>,
@@ -121,6 +127,7 @@ fn sync_single_player_delete_dialog(
     }
 }
 
+/// Synchronizes single player card style for the `graphic::components::single_player` module.
 fn sync_single_player_card_style(
     ui_state: Res<SinglePlayerUiState>,
     mut cards: Query<(&CssID, &mut BorderColor, &mut BackgroundColor), With<Button>>,
@@ -144,6 +151,7 @@ fn sync_single_player_card_style(
     }
 }
 
+/// Handles single player back navigation for the `graphic::components::single_player` module.
 fn handle_single_player_back_navigation(
     keyboard: Res<ButtonInput<KeyCode>>,
     global_config: Res<GlobalConfig>,
@@ -170,6 +178,7 @@ fn handle_single_player_back_navigation(
     }
 }
 
+/// Handles single player actions for the `graphic::components::single_player` module.
 #[allow(clippy::too_many_arguments)]
 fn handle_single_player_actions(
     time: Res<Time>,
@@ -347,6 +356,7 @@ fn handle_single_player_actions(
     }
 }
 
+/// Runs the `exit_single_player_screen` routine for exit single player screen in the `graphic::components::single_player` module.
 fn exit_single_player_screen(
     mut commands: Commands,
     mut ui_state: ResMut<SinglePlayerUiState>,
@@ -375,6 +385,7 @@ fn exit_single_player_screen(
     ui_state.closing_for_world_load = false;
 }
 
+/// Refreshes single player content for the `graphic::components::single_player` module.
 fn refresh_single_player_content(ui_state: &mut SinglePlayerUiState, default_seed: i32) {
     let selected_name = ui_state
         .selected_index
@@ -412,6 +423,7 @@ fn find_scroll_content_child(
     None
 }
 
+/// Runs the `rebuild_single_player_cards` routine for rebuild single player cards in the `graphic::components::single_player` module.
 fn rebuild_single_player_cards(
     commands: &mut Commands,
     list_entity: Entity,
@@ -454,6 +466,7 @@ fn rebuild_single_player_cards(
     });
 }
 
+/// Runs the `collect_single_player_actions` routine for collect single player actions in the `graphic::components::single_player` module.
 fn collect_single_player_actions(
     widgets: &mut Query<(&CssID, &mut UIWidgetState), With<Button>>,
 ) -> Vec<SinglePlayerAction> {
@@ -482,6 +495,7 @@ fn collect_single_player_actions(
     actions
 }
 
+/// Parses single player action for the `graphic::components::single_player` module.
 fn parse_single_player_action(id: &str) -> Option<SinglePlayerAction> {
     if id == SINGLE_PLAYER_CREATE_WORLD_ID {
         return Some(SinglePlayerAction::OpenCreateWorld);
@@ -507,12 +521,14 @@ fn parse_single_player_action(id: &str) -> Option<SinglePlayerAction> {
     parse_world_card_index(id).map(SinglePlayerAction::SelectWorld)
 }
 
+/// Parses world card index for the `graphic::components::single_player` module.
 fn parse_world_card_index(id: &str) -> Option<usize> {
     id.strip_prefix(SINGLE_PLAYER_WORLD_CARD_PREFIX)?
         .parse::<usize>()
         .ok()
 }
 
+/// Reads create world inputs for the `graphic::components::single_player` module.
 fn read_create_world_inputs(
     create_inputs: &mut Query<(&CssID, &mut InputField, &mut InputValue)>,
 ) -> Option<(String, Option<i32>)> {
@@ -551,6 +567,7 @@ fn read_create_world_inputs(
     Some((name, seed))
 }
 
+/// Clears create world inputs for the `graphic::components::single_player` module.
 fn clear_create_world_inputs(
     create_inputs: &mut Query<(&CssID, &mut InputField, &mut InputValue)>,
 ) {
@@ -564,6 +581,7 @@ fn clear_create_world_inputs(
     }
 }
 
+/// Runs the `list_saved_worlds` routine for list saved worlds in the `graphic::components::single_player` module.
 fn list_saved_worlds(default_seed: i32) -> Vec<SavedWorldEntry> {
     let root = saves_root();
     if let Err(error) = fs::create_dir_all(&root) {
@@ -595,6 +613,7 @@ fn list_saved_worlds(default_seed: i32) -> Vec<SavedWorldEntry> {
     worlds
 }
 
+/// Reads world seed for the `graphic::components::single_player` module.
 fn read_world_seed(world_path: &Path, default_seed: i32) -> i32 {
     let meta_path = world_path.join(WORLD_META_FILE);
     let Ok(text) = fs::read_to_string(meta_path) else {
@@ -605,6 +624,7 @@ fn read_world_seed(world_path: &Path, default_seed: i32) -> i32 {
         .unwrap_or(default_seed)
 }
 
+/// Creates world with name for the `graphic::components::single_player` module.
 fn create_world_with_name(
     raw_name: &str,
     seed_override: Option<i32>,
@@ -644,6 +664,7 @@ fn create_world_with_name(
     })
 }
 
+/// Runs the `normalize_world_name` routine for normalize world name in the `graphic::components::single_player` module.
 fn normalize_world_name(raw_name: &str) -> String {
     raw_name
         .trim()
@@ -655,6 +676,7 @@ fn normalize_world_name(raw_name: &str) -> String {
         .collect::<String>()
 }
 
+/// Runs the `unique_world_path` routine for unique world path in the `graphic::components::single_player` module.
 fn unique_world_path(root: &Path, base_name: &str) -> PathBuf {
     let candidate = root.join(base_name);
     if !candidate.exists() {
@@ -671,6 +693,7 @@ fn unique_world_path(root: &Path, base_name: &str) -> PathBuf {
     root.join(format!("{base_name}-{}", generate_seed(1, 0xA11CE_u64)))
 }
 
+/// Generates seed for the `graphic::components::single_player` module.
 fn generate_seed(default_seed: i32, salt: u64) -> i32 {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -685,6 +708,7 @@ fn generate_seed(default_seed: i32, salt: u64) -> i32 {
     seed
 }
 
+/// Writes world meta for the `graphic::components::single_player` module.
 fn write_world_meta(world_path: &Path, seed: i32) -> Result<(), std::io::Error> {
     let meta = WorldMeta { seed };
     let text = serde_json::to_string_pretty(&meta)
@@ -692,6 +716,7 @@ fn write_world_meta(world_path: &Path, seed: i32) -> Result<(), std::io::Error> 
     fs::write(world_path.join(WORLD_META_FILE), text)
 }
 
+/// Loads world and start for the `graphic::components::single_player` module.
 #[allow(clippy::too_many_arguments)]
 fn load_world_and_start(
     world: &SavedWorldEntry,
@@ -727,6 +752,7 @@ fn load_world_and_start(
     next_state.set(AppState::Loading(LoadingStates::BaseGen));
 }
 
+/// Runs the `saves_root` routine for saves root in the `graphic::components::single_player` module.
 fn saves_root() -> PathBuf {
     default_saves_root()
 }

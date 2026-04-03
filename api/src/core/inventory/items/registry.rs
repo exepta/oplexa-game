@@ -173,6 +173,7 @@ impl ItemRegistry {
         registry
     }
 
+    /// Creates with empty for the `core::inventory::items::registry` module.
     fn new_with_empty(block_registry: &BlockRegistry) -> Self {
         let mut defs = Vec::with_capacity(64);
         let mut key_to_id = HashMap::with_capacity(64);
@@ -207,6 +208,7 @@ impl ItemRegistry {
         }
     }
 
+    /// Inserts json item for the `core::inventory::items::registry` module.
     fn insert_json_item(
         &mut self,
         item_json: ItemJson,
@@ -278,6 +280,7 @@ impl ItemRegistry {
         }
     }
 
+    /// Inserts json item headless for the `core::inventory::items::registry` module.
     fn insert_json_item_headless(&mut self, item_json: ItemJson, block_registry: &BlockRegistry) {
         let Some(item_identity) = parse_item_identity(item_json.localized_name.as_str()) else {
             return;
@@ -323,6 +326,7 @@ impl ItemRegistry {
         }
     }
 
+    /// Runs the `ensure_block_items` routine for ensure block items in the `core::inventory::items::registry` module.
     fn ensure_block_items(&mut self, asset_server: &AssetServer, block_registry: &BlockRegistry) {
         for block_id in 1..block_registry.defs.len() {
             if self.block_to_item[block_id].is_some() {
@@ -357,6 +361,7 @@ impl ItemRegistry {
         }
     }
 
+    /// Runs the `ensure_block_items_headless` routine for ensure block items headless in the `core::inventory::items::registry` module.
     fn ensure_block_items_headless(&mut self, block_registry: &BlockRegistry) {
         for block_id in 1..block_registry.defs.len() {
             if self.block_to_item[block_id].is_some() {
@@ -388,6 +393,7 @@ impl ItemRegistry {
         }
     }
 
+    /// Runs the `push_item` routine for push item in the `core::inventory::items::registry` module.
     fn push_item(&mut self, def: ItemDef) -> ItemId {
         if let Some(existing) = self.key_to_id.get(&def.localized_name).copied() {
             debug!(
@@ -404,6 +410,7 @@ impl ItemRegistry {
         id
     }
 
+    /// Runs the `bind_block_item` routine for bind block item in the `core::inventory::items::registry` module.
     fn bind_block_item(&mut self, block_id: BlockId, item_id: ItemId) {
         if let Some(slot) = self.block_to_item.get_mut(block_id as usize) {
             *slot = Some(item_id);
@@ -414,6 +421,7 @@ impl ItemRegistry {
     }
 }
 
+/// Represents item json used by the `core::inventory::items::registry` module.
 #[derive(Deserialize)]
 struct ItemJson {
     #[serde(default, alias = "id")]
@@ -444,12 +452,14 @@ struct ItemJson {
     world_drop: ItemWorldDropJson,
 }
 
+/// Represents item world drop json used by the `core::inventory::items::registry` module.
 #[derive(Deserialize, Default)]
 struct ItemWorldDropJson {
     #[serde(default = "default_true")]
     pickupable: bool,
 }
 
+/// Represents item render json used by the `core::inventory::items::registry` module.
 #[derive(Deserialize, Default)]
 struct ItemRenderJson {
     #[serde(default, rename = "type")]
@@ -462,6 +472,7 @@ struct ItemRenderJson {
     projection: String,
 }
 
+/// Represents item tool json used by the `core::inventory::items::registry` module.
 #[derive(Deserialize, Default)]
 struct ItemToolJson {
     #[serde(default, rename = "type")]
@@ -470,12 +481,14 @@ struct ItemToolJson {
     level: u8,
 }
 
+/// Defines the possible item render kind variants in the `core::inventory::items::registry` module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ItemRenderKind {
     Flat,
     Block,
 }
 
+/// Represents item identity used by the `core::inventory::items::registry` module.
 #[derive(Clone, Debug)]
 struct ItemIdentity {
     provider: String,
@@ -483,6 +496,7 @@ struct ItemIdentity {
     localized_name: String,
 }
 
+/// Runs the `item_json_paths` routine for item json paths in the `core::inventory::items::registry` module.
 fn item_json_paths(items_dir: &str) -> Vec<PathBuf> {
     let dir = Path::new(items_dir);
     let mut paths = Vec::new();
@@ -501,11 +515,13 @@ fn item_json_paths(items_dir: &str) -> Vec<PathBuf> {
     paths
 }
 
+/// Reads json for the `core::inventory::items::registry` module.
 fn read_json<T: for<'de> Deserialize<'de>>(path: &str) -> T {
     let text = fs::read_to_string(path).expect("failed to read item json");
     serde_json::from_str(&text).expect("invalid item json")
 }
 
+/// Runs the `normalize_stack_size` routine for normalize stack size in the `core::inventory::items::registry` module.
 fn normalize_stack_size(value: i32) -> u16 {
     if value <= 0 {
         DEFAULT_ITEM_STACK_SIZE
@@ -514,6 +530,7 @@ fn normalize_stack_size(value: i32) -> u16 {
     }
 }
 
+/// Parses item identity for the `core::inventory::items::registry` module.
 fn parse_item_identity(raw_localized_name: &str) -> Option<ItemIdentity> {
     let trimmed = raw_localized_name.trim();
     if trimmed.is_empty() {
@@ -539,6 +556,7 @@ fn parse_item_identity(raw_localized_name: &str) -> Option<ItemIdentity> {
     })
 }
 
+/// Runs the `resolve_mapped_block_id` routine for resolve mapped block id in the `core::inventory::items::registry` module.
 fn resolve_mapped_block_id(
     item_json: &ItemJson,
     item_key: &str,
@@ -555,6 +573,7 @@ fn resolve_mapped_block_id(
     guess_block_name_from_item_key(item_key).and_then(|name| block_registry.id_opt(name.as_str()))
 }
 
+/// Runs the `resolve_item_tool_def` routine for resolve item tool def in the `core::inventory::items::registry` module.
 fn resolve_item_tool_def(item_json: &ItemJson, item_key: &str) -> Option<ToolDef> {
     let kind = item_json.tool.kind.trim();
     if !kind.is_empty() {
@@ -664,6 +683,7 @@ fn resolve_item_render_block_id(
     guess_block_name_from_item_key(item_key).and_then(|name| block_registry.id_opt(name.as_str()))
 }
 
+/// Runs the `first_non_empty` routine for first non empty in the `core::inventory::items::registry` module.
 #[inline]
 fn first_non_empty<'a>(candidates: &[&'a str]) -> Option<&'a str> {
     candidates
@@ -672,6 +692,7 @@ fn first_non_empty<'a>(candidates: &[&'a str]) -> Option<&'a str> {
         .find(|value| !value.trim().is_empty())
 }
 
+/// Runs the `block_icon_cache_key` routine for block icon cache key in the `core::inventory::items::registry` module.
 fn block_icon_cache_key(block_id: BlockId) -> String {
     format!("{BLOCK_ICON_CACHE_PREFIX}{block_id}")
 }
@@ -682,6 +703,7 @@ pub fn parse_block_icon_cache_key(path: &str) -> Option<BlockId> {
         .and_then(|raw| raw.parse::<u16>().ok())
 }
 
+/// Guesses block name from item key for the `core::inventory::items::registry` module.
 fn guess_block_name_from_item_key(item_key: &str) -> Option<String> {
     let key = item_key.trim();
     if key.is_empty() {
@@ -697,6 +719,7 @@ fn guess_block_name_from_item_key(item_key: &str) -> Option<String> {
     Some(format!("{key}_block"))
 }
 
+/// Runs the `normalize_item_texture_path` routine for normalize item texture path in the `core::inventory::items::registry` module.
 fn normalize_item_texture_path(path: &str) -> String {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -708,6 +731,7 @@ fn normalize_item_texture_path(path: &str) -> String {
     trimmed.to_string()
 }
 
+/// Runs the `prettify_key` routine for prettify key in the `core::inventory::items::registry` module.
 fn prettify_key(key: &str) -> String {
     key.replace('_', " ")
         .split_whitespace()
@@ -725,6 +749,7 @@ fn prettify_key(key: &str) -> String {
         .join(" ")
 }
 
+/// Runs the `prettify_block_name` routine for prettify block name in the `core::inventory::items::registry` module.
 fn prettify_block_name(block_name: &str) -> String {
     if let Some(base) = block_name.strip_suffix("_block") {
         return prettify_key(base);
@@ -732,18 +757,22 @@ fn prettify_block_name(block_name: &str) -> String {
     prettify_key(block_name)
 }
 
+/// Runs the `default_true` routine for default true in the `core::inventory::items::registry` module.
 fn default_true() -> bool {
     true
 }
 
+/// Runs the `default_rarity` routine for default rarity in the `core::inventory::items::registry` module.
 fn default_rarity() -> String {
     String::from("common")
 }
 
+/// Runs the `default_json_stack_size` routine for default json stack size in the `core::inventory::items::registry` module.
 fn default_json_stack_size() -> i32 {
     DEFAULT_ITEM_STACK_SIZE as i32
 }
 
+/// Runs the `default_json_tool_level` routine for default json tool level in the `core::inventory::items::registry` module.
 fn default_json_tool_level() -> u8 {
     1
 }
@@ -785,6 +814,7 @@ pub fn build_block_item_icon_image(
     ))
 }
 
+/// Renders isometric block icon for the `core::inventory::items::registry` module.
 fn render_isometric_block_icon(
     atlas_path: &Path,
     top_uv: UvRect,
@@ -910,6 +940,7 @@ fn non_transparent_bounds(image: &RgbaImage) -> Option<(u32, u32, u32, u32)> {
     }
 }
 
+/// Draws textured parallelogram for the `core::inventory::items::registry` module.
 fn draw_textured_parallelogram(
     canvas: &mut RgbaImage,
     atlas: &RgbaImage,
@@ -991,6 +1022,7 @@ fn draw_textured_parallelogram(
     }
 }
 
+/// Runs the `alpha_blend_pixel` routine for alpha blend pixel in the `core::inventory::items::registry` module.
 fn alpha_blend_pixel(canvas: &mut RgbaImage, x: u32, y: u32, src: [u8; 4]) {
     let dst = canvas.get_pixel_mut(x, y);
     let src_a = src[3] as f32 / 255.0;

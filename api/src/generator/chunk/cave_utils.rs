@@ -10,6 +10,7 @@ const Y_CLEARANCE: i32 = 6;
 Parameters & IDs
 ========================= */
 
+/// Represents cave params used by the `generator::chunk::cave_utils` module.
 #[derive(Debug, Clone)]
 pub struct CaveParams {
     /* -------- global / tunnels -------- */
@@ -71,13 +72,16 @@ pub struct CaveBlockIds {
 Tiny deterministic RNG
 ========================= */
 
+/// Represents rng used by the `generator::chunk::cave_utils` module.
 #[derive(Clone)]
 struct Rng(u64);
 impl Rng {
+    /// Creates a new instance for the `generator::chunk::cave_utils` module.
     #[inline]
     fn new(seed: u64) -> Self {
         Self(seed | 1)
     }
+    /// Runs the `next_u64` routine for next u64 in the `generator::chunk::cave_utils` module.
     #[inline]
     fn next_u64(&mut self) -> u64 {
         let mut x = self.0;
@@ -87,24 +91,29 @@ impl Rng {
         self.0 = x;
         x
     }
+    /// Runs the `f01` routine for f01 in the `generator::chunk::cave_utils` module.
     #[inline]
     fn f01(&mut self) -> f32 {
         (self.next_u64() >> 11) as f32 * (1.0 / ((1u64 << 53) as f32))
     }
+    /// Runs the `range_f` routine for range f in the `generator::chunk::cave_utils` module.
     #[inline]
     fn range_f(&mut self, a: f32, b: f32) -> f32 {
         a + (b - a) * self.f01()
     }
+    /// Runs the `range_i` routine for range i in the `generator::chunk::cave_utils` module.
     #[inline]
     fn range_i(&mut self, a: i32, b: i32) -> i32 {
         a + ((self.next_u64() % (1 + (b - a) as u64)) as i32)
     }
+    /// Runs the `prob` routine for prob in the `generator::chunk::cave_utils` module.
     #[inline]
     fn prob(&mut self, p: f32) -> bool {
         self.f01() < p
     }
 }
 
+/// Runs the `div_floor` routine for div floor in the `generator::chunk::cave_utils` module.
 #[inline]
 fn div_floor(a: i32, b: i32) -> i32 {
     let d = a / b;
@@ -116,6 +125,7 @@ fn div_floor(a: i32, b: i32) -> i32 {
     }
 }
 
+/// Runs the `region_seed` routine for region seed in the `generator::chunk::cave_utils` module.
 fn region_seed(world_seed: i32, region: IVec2) -> u64 {
     let a = region.x as i64;
     let b = region.y as i64;
@@ -137,6 +147,7 @@ pub fn chunk_to_region(chunk: IVec2, region_chunks: i32) -> IVec2 {
 Tunnels (worms)
 ========================= */
 
+/// Represents worm used by the `generator::chunk::cave_utils` module.
 #[derive(Clone, Debug)]
 struct Worm {
     start: Vec3,
@@ -147,6 +158,7 @@ struct Worm {
     step_len: f32,
 }
 
+/// Runs the `worms_for_region` routine for worms for region in the `generator::chunk::cave_utils` module.
 fn worms_for_region(params: &CaveParams, region: IVec2, chunk_size: IVec2) -> Vec<Worm> {
     let mut rng = Rng::new(region_seed(params.seed, region));
 
@@ -205,6 +217,7 @@ fn worms_for_region(params: &CaveParams, region: IVec2, chunk_size: IVec2) -> Ve
 Caverns (clusters of big rooms)
 ========================= */
 
+/// Represents cavern room used by the `generator::chunk::cave_utils` module.
 #[derive(Clone)]
 struct CavernRoom {
     center: Vec3,
@@ -213,6 +226,7 @@ struct CavernRoom {
     rz: f32,
 }
 
+/// Represents cavern cluster used by the `generator::chunk::cave_utils` module.
 #[derive(Clone)]
 struct CavernCluster {
     rooms: Vec<CavernRoom>,
@@ -220,6 +234,7 @@ struct CavernCluster {
     noisy: bool,
 }
 
+/// Runs the `caverns_for_region` routine for caverns for region in the `generator::chunk::cave_utils` module.
 fn caverns_for_region(params: &CaveParams, region: IVec2, chunk_size: IVec2) -> Vec<CavernCluster> {
     let mut rng = Rng::new(region_seed(
         params.seed.wrapping_add(0xA5A5_0001u32 as i32),
@@ -293,6 +308,7 @@ fn caverns_for_region(params: &CaveParams, region: IVec2, chunk_size: IVec2) -> 
     out
 }
 
+/// Runs the `mega_caverns_for_region` routine for mega caverns for region in the `generator::chunk::cave_utils` module.
 fn mega_caverns_for_region(
     params: &CaveParams,
     region: IVec2,
@@ -371,6 +387,7 @@ fn mega_caverns_for_region(
 Geometry helpers
 ========================= */
 
+/// Runs the `lerp` routine for lerp in the `generator::chunk::cave_utils` module.
 #[inline]
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
@@ -503,6 +520,7 @@ fn append_noisy_ellipsoid_into_chunk(
 Public: per-chunk edits
 ========================= */
 
+/// Runs the `worm_edits_for_chunk` routine for worm edits for chunk in the `generator::chunk::cave_utils` module.
 pub fn worm_edits_for_chunk(
     params: &CaveParams,
     chunk_coord: IVec2,

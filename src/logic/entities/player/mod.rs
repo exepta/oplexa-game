@@ -11,9 +11,11 @@ use crate::logic::entities::player::look_at_service::LookAtService;
 use crate::logic::entities::player::water_hud_service::UnderwaterFxPlugin;
 use bevy::prelude::*;
 
+/// Represents player services used by the `logic::entities::player` module.
 pub struct PlayerServices;
 
 impl Plugin for PlayerServices {
+    /// Builds this component for the `logic::entities::player` module.
     fn build(&self, app: &mut App) {
         app.add_plugins((
             PlayerInitialize,

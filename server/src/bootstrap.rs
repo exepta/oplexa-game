@@ -14,6 +14,7 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+/// Represents bootstrap result used by the `bootstrap` module.
 pub struct BootstrapResult {
     pub discovery: Option<LanDiscoveryServer>,
     pub runtime_config: ServerRuntimeConfig,
@@ -21,6 +22,7 @@ pub struct BootstrapResult {
     pub bind_addr: SocketAddr,
 }
 
+/// Loads bootstrap for the `bootstrap` module.
 pub fn load_bootstrap() -> BootstrapResult {
     let settings_path = DedicatedServerSettings::settings_path("server.settings.toml");
     let server_settings = DedicatedServerSettings::load_or_create(&settings_path);
@@ -49,8 +51,12 @@ pub fn load_bootstrap() -> BootstrapResult {
     );
 
     info!(
-        "Server will listen on {} (session URL: {}, world: {:?}, seed: {})",
-        bind_addr, public_url, world_root, world_seed
+        "Server will listen on {} (session URL: {}, world: {:?}, seed: {}, dead-entity-check={}s)",
+        bind_addr,
+        public_url,
+        world_root,
+        world_seed,
+        server_settings.dead_entity_check_interval_secs
     );
 
     BootstrapResult {
@@ -70,6 +76,7 @@ pub fn load_bootstrap() -> BootstrapResult {
             chunk_stream_inflight_per_client: server_settings.chunk_stream_inflight_per_client,
             chunk_flight_timeout_ms: server_settings.chunk_flight_timeout_ms,
             max_stream_radius: server_settings.max_stream_radius,
+            dead_entity_check_interval_secs: server_settings.dead_entity_check_interval_secs,
         },
         world_root,
         bind_addr,
@@ -108,9 +115,11 @@ pub struct ServerBootstrapConfig {
 
 // ── World preparation helpers ─────────────────────────────────────────────────
 
+/// Runs the `prepare_server_world` routine for prepare server world in the `bootstrap` module.
 fn prepare_server_world(settings: &DedicatedServerSettings) -> (PathBuf, i32, [f32; 3]) {
     let world_root =
         PathBuf::from("worlds").join(normalize_world_name(settings.world_name.as_str()));
+    info!("Preparing server world at {:?}", world_root);
     if let Err(error) = fs::create_dir_all(world_root.join("region")) {
         panic!(
             "Failed to create server world at {:?}: {}",
@@ -119,23 +128,37 @@ fn prepare_server_world(settings: &DedicatedServerSettings) -> (PathBuf, i32, [f
     }
 
     let seed_file = world_root.join("seed.txt");
-    let world_seed = read_world_seed(&seed_file).unwrap_or_else(|| {
+    let world_seed = if let Some(seed) = read_world_seed(&seed_file) {
+        info!("Loaded world seed {} from {:?}", seed, seed_file);
+        seed
+    } else {
         if let Err(error) = fs::write(&seed_file, settings.world_seed.to_string()) {
             panic!("Failed to write world seed file {:?}: {}", seed_file, error);
         }
+        info!(
+            "Created world seed {} at {:?}",
+            settings.world_seed, seed_file
+        );
         settings.world_seed
-    });
+    };
 
+    info!("Ensuring spawn chunks are built...");
     let spawn_translation = ensure_world_spawn_generated(&world_root, world_seed);
+    info!(
+        "World ready. Spawn translation: [{:.2}, {:.2}, {:.2}]",
+        spawn_translation[0], spawn_translation[1], spawn_translation[2]
+    );
 
     (world_root, world_seed, spawn_translation)
 }
 
+/// Reads world seed for the `bootstrap` module.
 fn read_world_seed(path: &Path) -> Option<i32> {
     let text = fs::read_to_string(path).ok()?;
     text.trim().parse::<i32>().ok()
 }
 
+/// Runs the `normalize_world_name` routine for normalize world name in the `bootstrap` module.
 fn normalize_world_name(raw_name: &str) -> String {
     let normalized = raw_name
         .trim()

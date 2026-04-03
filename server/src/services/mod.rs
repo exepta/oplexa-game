@@ -2,8 +2,8 @@ mod connections;
 mod gameplay;
 
 pub use connections::{
-    handle_auth_messages, handle_client_connected, handle_client_disconnected, handle_new_client,
-    poll_lan_discovery, purge_stale_players,
+    cleanup_orphaned_players, handle_auth_messages, handle_client_connected,
+    handle_client_disconnected, handle_new_client, poll_lan_discovery, purge_stale_players,
 };
 pub use gameplay::{
     flush_chunk_streaming, handle_block_break_messages, handle_block_place_messages,

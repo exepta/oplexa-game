@@ -4,12 +4,14 @@ use std::io;
 use std::net::{IpAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 
+/// Represents network settings used by the `core::network::config` module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkSettings {
     pub client: ClientNetworkSettings,
 }
 
 impl Default for NetworkSettings {
+    /// Runs the `default` routine for default in the `core::network::config` module.
     fn default() -> Self {
         Self {
             client: ClientNetworkSettings::default(),
@@ -18,6 +20,7 @@ impl Default for NetworkSettings {
 }
 
 impl NetworkSettings {
+    /// Loads or create for the `core::network::config` module.
     pub fn load_or_create(path: impl AsRef<Path>) -> Self {
         let path = path.as_ref();
 
@@ -34,6 +37,7 @@ impl NetworkSettings {
         }
     }
 
+    /// Saves the requested data for the `core::network::config` module.
     pub fn save(&self, path: impl AsRef<Path>) -> io::Result<()> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
@@ -45,24 +49,32 @@ impl NetworkSettings {
     }
 }
 
+/// Represents client network settings used by the `core::network::config` module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientNetworkSettings {
     pub enabled: bool,
     pub connect_on_startup: bool,
     pub session_url: String,
     pub player_name: String,
+    #[serde(default)]
+    pub prod: bool,
+    #[serde(default)]
+    pub client_uuid: Option<String>,
     pub lan_discovery: bool,
     pub lan_discovery_port: u16,
     pub transform_send_interval_ms: u64,
 }
 
 impl Default for ClientNetworkSettings {
+    /// Runs the `default` routine for default in the `core::network::config` module.
     fn default() -> Self {
         Self {
             enabled: true,
             connect_on_startup: false,
             session_url: "http://127.0.0.1:14191".to_string(),
             player_name: "Player".to_string(),
+            prod: false,
+            client_uuid: None,
             lan_discovery: true,
             lan_discovery_port: 14192,
             transform_send_interval_ms: 50,
@@ -70,6 +82,7 @@ impl Default for ClientNetworkSettings {
     }
 }
 
+/// Represents dedicated server settings used by the `core::network::config` module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct DedicatedServerSettings {
@@ -95,9 +108,12 @@ pub struct DedicatedServerSettings {
     pub chunk_flight_timeout_ms: u64,
     #[serde(default = "default_max_stream_radius")]
     pub max_stream_radius: i32,
+    #[serde(default = "default_dead_entity_check_interval_secs")]
+    pub dead_entity_check_interval_secs: u64,
 }
 
 impl Default for DedicatedServerSettings {
+    /// Runs the `default` routine for default in the `core::network::config` module.
     fn default() -> Self {
         Self {
             ip: "auto".to_string(),
@@ -115,11 +131,13 @@ impl Default for DedicatedServerSettings {
             chunk_stream_inflight_per_client: default_chunk_stream_inflight_per_client(),
             chunk_flight_timeout_ms: default_chunk_flight_timeout_ms(),
             max_stream_radius: default_max_stream_radius(),
+            dead_entity_check_interval_secs: default_dead_entity_check_interval_secs(),
         }
     }
 }
 
 impl DedicatedServerSettings {
+    /// Loads or create for the `core::network::config` module.
     pub fn load_or_create(path: impl AsRef<Path>) -> Self {
         let path = path.as_ref();
 
@@ -136,6 +154,7 @@ impl DedicatedServerSettings {
         }
     }
 
+    /// Saves the requested data for the `core::network::config` module.
     pub fn save(&self, path: impl AsRef<Path>) -> io::Result<()> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
@@ -147,6 +166,7 @@ impl DedicatedServerSettings {
         fs::write(path, contents)
     }
 
+    /// Runs the `settings_path` routine for settings path in the `core::network::config` module.
     pub fn settings_path(default_path: &str) -> PathBuf {
         if let Ok(path) = std::env::var("OPLEXA_SERVER_SETTINGS")
             && !path.trim().is_empty()
@@ -157,10 +177,12 @@ impl DedicatedServerSettings {
         PathBuf::from(default_path)
     }
 
+    /// Runs the `bind_addr` routine for bind addr in the `core::network::config` module.
     pub fn bind_addr(&self) -> String {
         format!("0.0.0.0:{}", self.port)
     }
 
+    /// Runs the `advertised_host` routine for advertised host in the `core::network::config` module.
     pub fn advertised_host(&self) -> String {
         if self.ip.trim().is_empty() || self.ip.eq_ignore_ascii_case("auto") {
             resolve_local_ip()
@@ -171,47 +193,63 @@ impl DedicatedServerSettings {
         }
     }
 
+    /// Runs the `session_url` routine for session url in the `core::network::config` module.
     pub fn session_url(&self) -> String {
         format!("http://{}:{}", self.advertised_host(), self.port)
     }
 
+    /// Runs the `discovery_port` routine for discovery port in the `core::network::config` module.
     pub fn discovery_port(&self) -> u16 {
         self.port.saturating_add(1)
     }
 }
 
+/// Runs the `default_max_players` routine for default max players in the `core::network::config` module.
 fn default_max_players() -> usize {
     10
 }
 
+/// Runs the `default_client_timeout` routine for default client timeout in the `core::network::config` module.
 fn default_client_timeout() -> u64 {
     60
 }
 
+/// Runs the `default_chunk_stream_sends_per_tick_base` routine for default chunk stream sends per tick base in the `core::network::config` module.
 fn default_chunk_stream_sends_per_tick_base() -> usize {
     24
 }
 
+/// Runs the `default_chunk_stream_sends_per_tick_per_client` routine for default chunk stream sends per tick per client in the `core::network::config` module.
 fn default_chunk_stream_sends_per_tick_per_client() -> usize {
     6
 }
 
+/// Runs the `default_chunk_stream_sends_per_tick_max` routine for default chunk stream sends per tick max in the `core::network::config` module.
 fn default_chunk_stream_sends_per_tick_max() -> usize {
     256
 }
 
+/// Runs the `default_chunk_stream_inflight_per_client` routine for default chunk stream inflight per client in the `core::network::config` module.
 fn default_chunk_stream_inflight_per_client() -> usize {
     24
 }
 
+/// Runs the `default_chunk_flight_timeout_ms` routine for default chunk flight timeout ms in the `core::network::config` module.
 fn default_chunk_flight_timeout_ms() -> u64 {
     500
 }
 
+/// Runs the `default_max_stream_radius` routine for default max stream radius in the `core::network::config` module.
 fn default_max_stream_radius() -> i32 {
     12
 }
 
+/// Runs the `default_dead_entity_check_interval_secs` routine for default dead entity check interval secs in the `core::network::config` module.
+fn default_dead_entity_check_interval_secs() -> u64 {
+    20
+}
+
+/// Runs the `resolve_local_ip` routine for resolve local ip in the `core::network::config` module.
 fn resolve_local_ip() -> Option<IpAddr> {
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;

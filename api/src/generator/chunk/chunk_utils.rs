@@ -22,6 +22,7 @@ pub(crate) const DIR4: [IVec2; 4] = [
     IVec2::new(0, -1),
 ];
 
+/// Runs the `mesh_subchunk_async` routine for mesh subchunk async in the `generator::chunk::chunk_utils` module.
 pub async fn mesh_subchunk_async(
     chunk: &ChunkData,
     reg: &RegLite,
@@ -224,6 +225,7 @@ pub async fn mesh_subchunk_async(
     by_block.into_iter().map(|(k, b)| (k, b)).collect()
 }
 
+/// Saves chunk sync for the `generator::chunk::chunk_utils` module.
 #[allow(dead_code)]
 pub fn save_chunk_sync(
     ws: &WorldSave,
@@ -240,6 +242,7 @@ pub fn save_chunk_sync(
     cache.write_chunk_replace(ws, coord, &merged)
 }
 
+/// Saves chunk at root sync for the `generator::chunk::chunk_utils` module.
 pub fn save_chunk_at_root_sync(
     ws_root: PathBuf,
     coord: IVec2,
@@ -258,6 +261,7 @@ pub fn save_chunk_at_root_sync(
     rf.write_slot_replace(idx, &merged)
 }
 
+/// Loads or gen chunk async for the `generator::chunk::chunk_utils` module.
 pub async fn load_or_gen_chunk_async(
     ws_root: PathBuf,
     coord: IVec2,
@@ -294,6 +298,7 @@ pub async fn load_or_gen_chunk_async(
     generate_chunk_async_biome(coord, reg, cfg.seed, biomes).await
 }
 
+/// Runs the `snapshot_borders` routine for snapshot borders in the `generator::chunk::chunk_utils` module.
 pub fn snapshot_borders(
     chunk_map: &ChunkMap,
     coord: IVec2,
@@ -350,6 +355,7 @@ pub fn snapshot_borders(
     snap
 }
 
+/// Runs the `area_ready` routine for area ready in the `generator::chunk::chunk_utils` module.
 pub fn area_ready(
     center: IVec2,
     radius: i32,
@@ -392,6 +398,7 @@ pub fn area_chunks_in_map(center: IVec2, radius: i32, chunk_map: &ChunkMap) -> b
     true
 }
 
+/// Runs the `despawn_mesh_set` routine for despawn mesh set in the `generator::chunk::chunk_utils` module.
 pub fn despawn_mesh_set(
     keys: impl IntoIterator<Item = (IVec2, u8, BlockId)>,
     mesh_index: &mut ChunkMeshIndex,
@@ -409,6 +416,7 @@ pub fn despawn_mesh_set(
     }
 }
 
+/// Runs the `safe_despawn_entity` routine for safe despawn entity in the `generator::chunk::chunk_utils` module.
 pub fn safe_despawn_entity(commands: &mut Commands, ent: Entity) {
     commands.queue(move |world: &mut World| {
         if world.get_entity(ent).is_ok() {
@@ -417,17 +425,21 @@ pub fn safe_despawn_entity(commands: &mut Commands, ent: Entity) {
     });
 }
 
+/// Checks whether spawn mesh in the `generator::chunk::chunk_utils` module.
 pub fn can_spawn_mesh(pending_mesh: &PendingMesh) -> bool {
     pending_mesh.0.len() < MAX_INFLIGHT_MESH
 }
+/// Checks whether spawn gen in the `generator::chunk::chunk_utils` module.
 pub fn can_spawn_gen(pending_gen: &PendingGen) -> bool {
     pending_gen.0.len() < MAX_INFLIGHT_GEN
 }
 
+/// Runs the `backlog_contains` routine for backlog contains in the `generator::chunk::chunk_utils` module.
 pub fn backlog_contains(backlog: &MeshBacklog, key: (IVec2, usize)) -> bool {
     backlog.0.iter().any(|&k| k == key)
 }
 
+/// Runs the `enqueue_mesh` routine for enqueue mesh in the `generator::chunk::chunk_utils` module.
 pub fn enqueue_mesh(backlog: &mut MeshBacklog, pending: &PendingMesh, key: (IVec2, usize)) {
     if pending.0.contains_key(&key) {
         return;
@@ -438,11 +450,13 @@ pub fn enqueue_mesh(backlog: &mut MeshBacklog, pending: &PendingMesh, key: (IVec
     backlog.0.push_back(key);
 }
 
+/// Encodes chunk for the `generator::chunk::chunk_utils` module.
 pub fn encode_chunk(ch: &ChunkData) -> Vec<u8> {
     let ser = wincode::serialize(&ch.blocks).expect("encode blocks");
     compress_prepend_size(&ser)
 }
 
+/// Decodes chunk for the `generator::chunk::chunk_utils` module.
 pub fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
     let de = decompress_size_prepended(buf)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -461,16 +475,19 @@ pub fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
     Ok(c)
 }
 
+/// Runs the `leap` routine for leap in the `generator::chunk::chunk_utils` module.
 #[inline]
 pub fn leap(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
+/// Runs the `map01` routine for map01 in the `generator::chunk::chunk_utils` module.
 #[inline]
 pub fn map01(x: f32) -> f32 {
     x * 0.5 + 0.5
 }
 
+/// Runs the `chunk_to_region_slot` routine for chunk to region slot in the `generator::chunk::chunk_utils` module.
 #[inline]
 pub fn chunk_to_region_slot(c: IVec2) -> (IVec2, usize) {
     let rx = div_floor(c.x, REGION_SIZE);
@@ -481,6 +498,7 @@ pub fn chunk_to_region_slot(c: IVec2) -> (IVec2, usize) {
     (IVec2::new(rx, rz), idx)
 }
 
+/// Runs the `col_rand_u32` routine for col rand u32 in the `generator::chunk::chunk_utils` module.
 #[inline]
 pub(crate) fn col_rand_u32(x: i32, z: i32, seed: u32) -> u32 {
     let mut n = (x as u32).wrapping_mul(374761393) ^ (z as u32).wrapping_mul(668265263) ^ seed;
@@ -489,25 +507,30 @@ pub(crate) fn col_rand_u32(x: i32, z: i32, seed: u32) -> u32 {
     n ^ (n >> 16)
 }
 
+/// Runs the `div_floor` routine for div floor in the `generator::chunk::chunk_utils` module.
 #[inline]
 fn div_floor(a: i32, b: i32) -> i32 {
     (a as f32 / b as f32).floor() as i32
 }
+/// Runs the `mod_floor` routine for mod floor in the `generator::chunk::chunk_utils` module.
 #[inline]
 fn mod_floor(a: i32, b: i32) -> i32 {
     a - div_floor(a, b) * b
 }
 
+/// Checks whether waiting in the `generator::chunk::chunk_utils` module.
 #[inline]
 pub fn is_waiting(state: &State<AppState>) -> bool {
     matches!(state.get(), AppState::Loading(LoadingStates::BaseGen))
 }
 
+/// Runs the `neighbors_ready` routine for neighbors ready in the `generator::chunk::chunk_utils` module.
 #[inline]
 pub(crate) fn neighbors_ready(chunk_map: &ChunkMap, c: IVec2) -> bool {
     neighbors4_iter(c).all(|nc| chunk_map.chunks.contains_key(&nc))
 }
 
+/// Runs the `neighbors4_iter` routine for neighbors4 iter in the `generator::chunk::chunk_utils` module.
 #[inline]
 pub(crate) fn neighbors4_iter(c: IVec2) -> impl Iterator<Item = IVec2> {
     DIR4.into_iter().map(move |d| c + d)

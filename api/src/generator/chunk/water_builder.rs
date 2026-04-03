@@ -23,44 +23,55 @@ const MAX_INFLIGHT_WATER_LOAD: usize = 32;
 const MAX_INFLIGHT_WATER_MESH: usize = 64;
 const MAX_WATER_MESH_APPLY_PER_FRAME: usize = MAX_UPDATE_FRAMES / 2;
 
+/// Represents water boot used by the `generator::chunk::water_builder` module.
 #[derive(Resource, Default)]
 struct WaterBoot {
     started: bool,
 }
 
+/// Represents water gen queue used by the `generator::chunk::water_builder` module.
 #[derive(Resource, Default)]
 struct WaterGenQueue {
     work: VecDeque<IVec2>,
 }
 
+/// Represents water meshing todo used by the `generator::chunk::water_builder` module.
 #[derive(Resource, Default)]
 pub struct WaterMeshingTodo(pub HashSet<IVec2>);
 
+/// Represents pending water load used by the `generator::chunk::water_builder` module.
 #[derive(Resource, Default)]
 pub struct PendingWaterLoad(pub HashMap<IVec2, bevy::tasks::Task<(IVec2, FluidChunk)>>);
 
+/// Represents water mesh backlog used by the `generator::chunk::water_builder` module.
 #[derive(Resource, Default)]
 pub struct WaterMeshBacklog(pub VecDeque<(IVec2, usize)>);
 
+/// Represents pending water mesh used by the `generator::chunk::water_builder` module.
 #[derive(Resource, Default)]
 pub struct PendingWaterMesh(
     pub HashMap<(IVec2, usize), bevy::tasks::Task<((IVec2, usize), WaterMeshBuild)>>,
 );
 
+/// Represents pending water save used by the `generator::chunk::water_builder` module.
 #[derive(Resource, Default)]
 pub struct PendingWaterSave(pub HashMap<IVec2, bevy::tasks::Task<IVec2>>);
 
+/// Represents water flow queue used by the `generator::chunk::water_builder` module.
 #[derive(Resource, Default)]
 pub struct WaterFlowQueue(pub(crate) VecDeque<FlowJob>);
 
+/// Represents pending water flow used by the `generator::chunk::water_builder` module.
 #[derive(Resource, Default)]
 pub struct PendingWaterFlow(pub HashMap<u64, bevy::tasks::Task<(u64, FlowResult)>>);
 
+/// Represents water flow ids used by the `generator::chunk::water_builder` module.
 #[derive(Resource, Default)]
 pub struct WaterFlowIds {
     next: u64,
 }
 impl WaterFlowIds {
+    /// Runs the `next` routine for next in the `generator::chunk::water_builder` module.
     fn next(&mut self) -> u64 {
         let id = self.next;
         self.next += 1;
@@ -68,6 +79,7 @@ impl WaterFlowIds {
     }
 }
 
+/// Represents water cleanup state used by the `generator::chunk::water_builder` module.
 #[derive(SystemParam)]
 struct WaterCleanupState<'w, 's> {
     boot: ResMut<'w, WaterBoot>,
@@ -83,9 +95,11 @@ struct WaterCleanupState<'w, 's> {
     _marker: std::marker::PhantomData<&'s ()>,
 }
 
+/// Represents water builder used by the `generator::chunk::water_builder` module.
 pub struct WaterBuilder;
 
 impl Plugin for WaterBuilder {
+    /// Builds this component for the `generator::chunk::water_builder` module.
     fn build(&self, app: &mut App) {
         app.init_resource::<WaterBoot>()
             .init_resource::<WaterGenQueue>()
@@ -163,14 +177,17 @@ impl Plugin for WaterBuilder {
     }
 }
 
+/// Runs the `uses_local_world_data` routine for uses local world data in the `generator::chunk::water_builder` module.
 fn uses_local_world_data(multiplayer_connection: Res<MultiplayerConnectionState>) -> bool {
     multiplayer_connection.uses_local_save_data()
 }
 
+/// Runs the `uses_remote_world_data` routine for uses remote world data in the `generator::chunk::water_builder` module.
 fn uses_remote_world_data(multiplayer_connection: Res<MultiplayerConnectionState>) -> bool {
     !multiplayer_connection.uses_local_save_data()
 }
 
+/// Runs the `flow_task_run` routine for flow task run in the `generator::chunk::water_builder` module.
 async fn flow_task_run(
     solid_snap: SolidSnapshot,
     water_snap: WaterSnap,
@@ -278,6 +295,7 @@ async fn flow_task_run(
     res
 }
 
+/// Runs the `enqueue_flow_on_block_removed` routine for enqueue flow on block removed in the `generator::chunk::water_builder` module.
 fn enqueue_flow_on_block_removed(
     mut ev: MessageReader<BlockBreakByPlayerEvent>,
     fluids: Res<FluidMap>,
@@ -349,6 +367,7 @@ fn enqueue_flow_on_block_removed(
     }
 }
 
+/// Runs the `schedule_flow_jobs` routine for schedule flow jobs in the `generator::chunk::water_builder` module.
 fn schedule_flow_jobs(
     mut queue: ResMut<WaterFlowQueue>,
     mut pending: ResMut<PendingWaterFlow>,
@@ -385,6 +404,7 @@ fn schedule_flow_jobs(
     }
 }
 
+/// Runs the `collect_flow_jobs` routine for collect flow jobs in the `generator::chunk::water_builder` module.
 fn collect_flow_jobs(
     mut pending: ResMut<PendingWaterFlow>,
     mut fluids: ResMut<FluidMap>,
@@ -449,6 +469,7 @@ fn collect_flow_jobs(
     }
 }
 
+/// Runs the `enqueue_mesh_for_cell` routine for enqueue mesh for cell in the `generator::chunk::water_builder` module.
 #[inline]
 fn enqueue_mesh_for_cell(backlog: &mut WaterMeshBacklog, c: IVec2, x: i32, y: i32, z: i32) {
     let clamp = |v: i32, lo: i32, hi: i32| v.max(lo).min(hi);
@@ -478,6 +499,7 @@ fn enqueue_mesh_for_cell(backlog: &mut WaterMeshBacklog, c: IVec2, x: i32, y: i3
     }
 }
 
+/// Runs the `water_gen_build_worklist` routine for water gen build worklist in the `generator::chunk::water_builder` module.
 fn water_gen_build_worklist(
     mut q: ResMut<WaterGenQueue>,
     chunk_map: Res<ChunkMap>,
@@ -490,6 +512,7 @@ fn water_gen_build_worklist(
     boot.started = true;
 }
 
+/// Runs the `water_track_new_chunks` routine for water track new chunks in the `generator::chunk::water_builder` module.
 fn water_track_new_chunks(
     mut q: ResMut<WaterGenQueue>,
     chunk_map: Res<ChunkMap>,
@@ -499,6 +522,7 @@ fn water_track_new_chunks(
     rebuild_water_work_queue_impl(&mut q.work, &chunk_map, &water, &pending);
 }
 
+/// Runs the `schedule_water_generation_jobs` routine for schedule water generation jobs in the `generator::chunk::water_builder` module.
 fn schedule_water_generation_jobs(
     mut q: ResMut<WaterGenQueue>,
     chunk_map: Res<ChunkMap>,
@@ -569,6 +593,7 @@ fn schedule_water_generation_jobs(
     }
 }
 
+/// Runs the `collect_water_generation_jobs` routine for collect water generation jobs in the `generator::chunk::water_builder` module.
 fn collect_water_generation_jobs(
     mut pending: ResMut<PendingWaterLoad>,
     chunk_map: Res<ChunkMap>,
@@ -612,6 +637,7 @@ fn collect_water_generation_jobs(
     }
 }
 
+/// Runs the `water_mark_from_dirty` routine for water mark from dirty in the `generator::chunk::water_builder` module.
 fn water_mark_from_dirty(
     mut ev: MessageReader<SubChunkNeedRemeshEvent>,
     mut todo: ResMut<WaterMeshingTodo>,
@@ -624,6 +650,7 @@ fn water_mark_from_dirty(
     }
 }
 
+/// Runs the `water_finish_check` routine for water finish check in the `generator::chunk::water_builder` module.
 fn water_finish_check(
     chunk_map: Res<ChunkMap>,
     water: Res<FluidMap>,
@@ -653,6 +680,7 @@ fn water_finish_check(
     }
 }
 
+/// Runs the `water_unload_on_event` routine for water unload on event in the `generator::chunk::water_builder` module.
 fn water_unload_on_event(
     mut commands: Commands,
     mut ev: MessageReader<ChunkUnloadEvent>,
@@ -718,6 +746,7 @@ fn water_unload_on_event(
     }
 }
 
+/// Runs the `cleanup_water_runtime_on_exit` routine for cleanup water runtime on exit in the `generator::chunk::water_builder` module.
 fn cleanup_water_runtime_on_exit(
     mut commands: Commands,
     mut water: ResMut<FluidMap>,
@@ -762,6 +791,7 @@ fn cleanup_water_runtime_on_exit(
     cleanup.flow_ids.next = 0;
 }
 
+/// Runs the `collect_water_save_tasks` routine for collect water save tasks in the `generator::chunk::water_builder` module.
 fn collect_water_save_tasks(mut pending: ResMut<PendingWaterSave>) {
     let mut done = Vec::new();
     for (coord, task) in pending.0.iter_mut() {
@@ -774,6 +804,7 @@ fn collect_water_save_tasks(mut pending: ResMut<PendingWaterSave>) {
     }
 }
 
+/// Saves all water on exit for the `generator::chunk::water_builder` module.
 fn save_all_water_on_exit(
     ws: Res<WorldSave>,
     mut cache: ResMut<RegionCache>,
@@ -795,6 +826,7 @@ fn save_all_water_on_exit(
     }
 }
 
+/// Runs the `water_backlog_from_todo` routine for water backlog from todo in the `generator::chunk::water_builder` module.
 fn water_backlog_from_todo(
     mut todo: ResMut<WaterMeshingTodo>,
     water: Res<FluidMap>,
@@ -820,6 +852,7 @@ fn water_backlog_from_todo(
     }
 }
 
+/// Runs the `water_drain_mesh_backlog` routine for water drain mesh backlog in the `generator::chunk::water_builder` module.
 fn water_drain_mesh_backlog(
     mut backlog: ResMut<WaterMeshBacklog>,
     mut pending: ResMut<PendingWaterMesh>,
@@ -874,6 +907,7 @@ fn water_drain_mesh_backlog(
     }
 }
 
+/// Runs the `water_collect_meshed_subchunks` routine for water collect meshed subchunks in the `generator::chunk::water_builder` module.
 fn water_collect_meshed_subchunks(
     mut commands: Commands,
     mut pending: ResMut<PendingWaterMesh>,
@@ -950,6 +984,7 @@ fn water_collect_meshed_subchunks(
     }
 }
 
+/// Runs the `try_enqueue` routine for try enqueue in the `generator::chunk::water_builder` module.
 #[inline]
 fn try_enqueue(
     c: IVec2,
@@ -970,6 +1005,7 @@ fn try_enqueue(
     }
 }
 
+/// Runs the `rebuild_water_work_queue_impl` routine for rebuild water work queue impl in the `generator::chunk::water_builder` module.
 fn rebuild_water_work_queue_impl(
     work: &mut VecDeque<IVec2>,
     chunk_map: &ChunkMap,

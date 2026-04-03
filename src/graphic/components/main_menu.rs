@@ -1,9 +1,11 @@
+/// Runs the `show_main_menu` routine for show main menu in the `graphic::components::main_menu` module.
 fn show_main_menu(mut visibility: Query<&mut Visibility, With<MainMenuRoot>>) {
     if let Ok(mut visible) = visibility.single_mut() {
         *visible = Visibility::Inherited;
     }
 }
 
+/// Runs the `hide_main_menu` routine for hide main menu in the `graphic::components::main_menu` module.
 fn hide_main_menu(
     mut visibility: Query<&mut Visibility, With<MainMenuRoot>>,
     mut ui_interaction: ResMut<UiInteractionState>,
@@ -14,6 +16,7 @@ fn hide_main_menu(
     ui_interaction.menu_open = false;
 }
 
+/// Sets menu cursor for the `graphic::components::main_menu` module.
 fn set_menu_cursor(
     mut ui_interaction: ResMut<UiInteractionState>,
     mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
@@ -25,6 +28,7 @@ fn set_menu_cursor(
     }
 }
 
+/// Handles main menu buttons for the `graphic::components::main_menu` module.
 fn handle_main_menu_buttons(
     mut widgets: Query<(&CssID, &mut UIWidgetState), With<Button>>,
     mut next_state: ResMut<NextState<AppState>>,
@@ -45,6 +49,7 @@ fn handle_main_menu_buttons(
     }
 }
 
+/// Runs the `consume_main_menu_action` routine for consume main menu action in the `graphic::components::main_menu` module.
 fn consume_main_menu_action(
     widgets: &mut Query<(&CssID, &mut UIWidgetState), With<Button>>,
 ) -> Option<MainMenuAction> {

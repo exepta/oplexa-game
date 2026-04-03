@@ -5,9 +5,11 @@ use crate::core::entities::player::block_selection::SelectionState;
 use crate::core::entities::player::inventory::PlayerInventory;
 use bevy::prelude::*;
 
+/// Represents player module used by the `core::entities::player` module.
 pub struct PlayerModule;
 
 impl Plugin for PlayerModule {
+    /// Builds this component for the `core::entities::player` module.
     fn build(&self, app: &mut App) {
         app.init_resource::<SelectionState>()
             .init_resource::<PlayerInventory>()
@@ -56,6 +58,7 @@ pub struct FlightState {
     pub flying: bool,
 }
 
+/// Defines the possible game mode variants in the `core::entities::player` module.
 #[derive(Default, PartialEq, Eq)]
 pub enum GameMode {
     Survival,
@@ -64,5 +67,6 @@ pub enum GameMode {
     Spectator,
 }
 
+/// Represents game mode state used by the `core::entities::player` module.
 #[derive(Resource, Default)]
 pub struct GameModeState(pub GameMode);

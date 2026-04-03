@@ -1,3 +1,4 @@
+/// Defines the possible multiplayer card field kind variants in the `graphic::components::multiplayer` module.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 enum MultiplayerCardFieldKind {
     Name,
@@ -6,12 +7,14 @@ enum MultiplayerCardFieldKind {
     Players,
 }
 
+/// Represents multiplayer card field used by the `graphic::components::multiplayer` module.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 struct MultiplayerCardField {
     index: usize,
     kind: MultiplayerCardFieldKind,
 }
 
+/// Represents multiplayer card text used by the `graphic::components::multiplayer` module.
 #[derive(Clone, Debug)]
 struct MultiplayerCardText {
     name: String,
@@ -20,6 +23,7 @@ struct MultiplayerCardText {
     players: String,
 }
 
+/// Runs the `enter_multiplayer_screen` routine for enter multiplayer screen in the `graphic::components::multiplayer` module.
 fn enter_multiplayer_screen(
     time: Res<Time>,
     mut commands: Commands,
@@ -62,6 +66,7 @@ fn enter_multiplayer_screen(
     clear_server_form_inputs(&mut form_inputs);
 }
 
+/// Sets multiplayer interaction for the `graphic::components::multiplayer` module.
 fn set_multiplayer_interaction(
     mut ui_interaction: ResMut<UiInteractionState>,
     mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
@@ -73,10 +78,12 @@ fn set_multiplayer_interaction(
     }
 }
 
+/// Handles multiplayer back navigation for the `graphic::components::multiplayer` module.
 fn handle_multiplayer_back_navigation(
     keyboard: Res<ButtonInput<KeyCode>>,
     global_config: Res<GlobalConfig>,
     mut ui_state: ResMut<MultiplayerUiState>,
+    mut connection_state: ResMut<MultiplayerConnectionState>,
     mut disconnect_writer: MessageWriter<DisconnectFromServerRequest>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
@@ -88,6 +95,11 @@ fn handle_multiplayer_back_navigation(
     if ui_state.joining_key.is_some() {
         ui_state.joining_key = None;
         disconnect_writer.write(DisconnectFromServerRequest);
+        return;
+    }
+
+    if connection_state.last_error.is_some() {
+        connection_state.last_error = None;
         return;
     }
 
@@ -104,12 +116,14 @@ fn handle_multiplayer_back_navigation(
     next_state.set(AppState::Screen(BeforeUiState::Menu));
 }
 
+/// Handles multiplayer actions for the `graphic::components::multiplayer` module.
 #[allow(clippy::too_many_arguments)]
 fn handle_multiplayer_actions(
     time: Res<Time>,
     mut commands: Commands,
     ui_entities: Res<UiEntities>,
     mut ui_state: ResMut<MultiplayerUiState>,
+    mut connection_state: ResMut<MultiplayerConnectionState>,
     mut widgets: Query<(&CssID, &mut UIWidgetState), With<Button>>,
     item_entities: Query<Entity, With<MultiplayerListItem>>,
     mut form_inputs: Query<(&CssID, &mut InputField, &mut InputValue)>,
@@ -132,12 +146,16 @@ fn handle_multiplayer_actions(
                     ui_state.pending_delete_key = None;
                 }
             }
+            MultiplayerAction::DismissConnectError => {
+                connection_state.last_error = None;
+            }
             MultiplayerAction::JoinServer => {
                 let selected = ui_state.selected_server().cloned();
                 let Some(server) = selected else {
                     continue;
                 };
 
+                connection_state.last_error = None;
                 ui_state.joining_key = Some(server.key.clone());
                 connect_writer.write(ConnectToServerRequest {
                     session_url: server.session_url.clone(),
@@ -295,6 +313,7 @@ fn handle_multiplayer_actions(
     }
 }
 
+/// Runs the `poll_multiplayer_servers` routine for poll multiplayer servers in the `graphic::components::multiplayer` module.
 fn poll_multiplayer_servers(
     time: Res<Time>,
     mut commands: Commands,
@@ -375,6 +394,7 @@ fn poll_multiplayer_servers(
     }
 }
 
+/// Runs the `rebuild_multiplayer_cards` routine for rebuild multiplayer cards in the `graphic::components::multiplayer` module.
 fn rebuild_multiplayer_cards(
     commands: &mut Commands,
     list_entity: Entity,
@@ -500,8 +520,9 @@ fn rebuild_multiplayer_cards(
         .collect();
 }
 
+/// Synchronizes multiplayer dialogs for the `graphic::components::multiplayer` module.
 fn sync_multiplayer_dialogs(
-    ui_state: Res<MultiplayerUiState>,
+    mut ui_state: ResMut<MultiplayerUiState>,
     connection_state: Res<MultiplayerConnectionState>,
     mut visibilities: ParamSet<(
         Query<&mut Visibility, With<MultiplayerFormDialog>>,
@@ -509,14 +530,21 @@ fn sync_multiplayer_dialogs(
         Query<&mut Visibility, With<MultiplayerFormEditButton>>,
         Query<&mut Visibility, With<MultiplayerDeleteDialog>>,
         Query<&mut Visibility, With<MultiplayerConnectDialog>>,
+        Query<&mut Visibility, With<MultiplayerConnectOkButton>>,
         Query<&mut Visibility, With<MultiplayerRoot>>,
     )>,
-    mut form_title: Query<(&CssID, &mut Paragraph)>,
+    mut texts: Query<(&CssID, &mut Paragraph)>,
 ) {
+    if connection_state.phase != MultiplayerConnectionPhase::Connecting {
+        ui_state.joining_key = None;
+    }
+
+    let show_error = connection_state.last_error.is_some();
     let connecting = ui_state.joining_key.is_some()
         || connection_state.phase == MultiplayerConnectionPhase::Connecting;
+    let show_connect_dialog = connecting || show_error;
 
-    if let Ok(mut visible) = visibilities.p5().single_mut() {
+    if let Ok(mut visible) = visibilities.p6().single_mut() {
         *visible = if connecting {
             Visibility::Hidden
         } else {
@@ -533,7 +561,7 @@ fn sync_multiplayer_dialogs(
     }
 
     if let Some(dialog_state) = ui_state.form_dialog.as_ref() {
-        for (css_id, mut paragraph) in &mut form_title {
+        for (css_id, mut paragraph) in &mut texts {
             if css_id.0 != MULTIPLAYER_FORM_TITLE_ID {
                 continue;
             }
@@ -576,14 +604,34 @@ fn sync_multiplayer_dialogs(
     }
 
     if let Ok(mut visible) = visibilities.p4().single_mut() {
-        *visible = if connecting {
+        *visible = if show_connect_dialog {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
     }
+
+    if let Ok(mut visible) = visibilities.p5().single_mut() {
+        *visible = if show_error {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    let connect_text = if connecting {
+        "Connecting to server ...".to_string()
+    } else {
+        connection_state.last_error.clone().unwrap_or_default()
+    };
+    for (css_id, mut paragraph) in &mut texts {
+        if css_id.0 == MULTIPLAYER_CONNECT_TEXT_ID {
+            paragraph.text = connect_text.clone();
+        }
+    }
 }
 
+/// Synchronizes multiplayer card text for the `graphic::components::multiplayer` module.
 fn sync_multiplayer_card_text(
     ui_state: Res<MultiplayerUiState>,
     connection_state: Res<MultiplayerConnectionState>,
@@ -624,6 +672,7 @@ fn sync_multiplayer_card_text(
     }
 }
 
+/// Synchronizes multiplayer card style for the `graphic::components::multiplayer` module.
 fn sync_multiplayer_card_style(
     ui_state: Res<MultiplayerUiState>,
     connection_state: Res<MultiplayerConnectionState>,
@@ -659,6 +708,7 @@ fn sync_multiplayer_card_style(
     }
 }
 
+/// Runs the `exit_multiplayer_screen` routine for exit multiplayer screen in the `graphic::components::multiplayer` module.
 fn exit_multiplayer_screen(
     mut commands: Commands,
     mut ui_interaction: ResMut<UiInteractionState>,
@@ -681,6 +731,7 @@ fn exit_multiplayer_screen(
     ui_state.joining_key = None;
 }
 
+/// Runs the `collect_multiplayer_actions` routine for collect multiplayer actions in the `graphic::components::multiplayer` module.
 fn collect_multiplayer_actions(
     widgets: &mut Query<(&CssID, &mut UIWidgetState), With<Button>>,
 ) -> Vec<MultiplayerAction> {
@@ -709,10 +760,12 @@ fn collect_multiplayer_actions(
     actions
 }
 
+/// Parses multiplayer action for the `graphic::components::multiplayer` module.
 fn parse_multiplayer_action(id: &str) -> Option<MultiplayerAction> {
     match id {
         MULTIPLAYER_JOIN_ID => Some(MultiplayerAction::JoinServer),
         MULTIPLAYER_REFRESH_ID => Some(MultiplayerAction::RefreshServers),
+        MULTIPLAYER_CONNECT_OK_ID => Some(MultiplayerAction::DismissConnectError),
         MULTIPLAYER_ADD_ID => Some(MultiplayerAction::OpenAddServer),
         MULTIPLAYER_EDIT_ID => Some(MultiplayerAction::OpenEditServer),
         MULTIPLAYER_DELETE_ID => Some(MultiplayerAction::OpenDeleteServer),
@@ -725,10 +778,12 @@ fn parse_multiplayer_action(id: &str) -> Option<MultiplayerAction> {
     }
 }
 
+/// Parses card index for the `graphic::components::multiplayer` module.
 fn parse_card_index(id: &str, prefix: &str) -> Option<usize> {
     id.strip_prefix(prefix)?.parse::<usize>().ok()
 }
 
+/// Runs the `rebuild_display_servers` routine for rebuild display servers in the `graphic::components::multiplayer` module.
 fn rebuild_display_servers(ui_state: &mut MultiplayerUiState, now: f64) -> bool {
     let mut display_servers = ui_state
         .saved_servers
@@ -912,6 +967,7 @@ fn rebuild_display_servers(ui_state: &mut MultiplayerUiState, now: f64) -> bool 
     structure_changed
 }
 
+/// Updates probed server for the `graphic::components::multiplayer` module.
 fn update_probed_server(
     ui_state: &mut MultiplayerUiState,
     server: LanServerInfo,
@@ -951,6 +1007,7 @@ fn update_probed_server(
     is_new
 }
 
+/// Loads saved servers for the `graphic::components::multiplayer` module.
 fn load_saved_servers() -> Vec<SavedServerEntry> {
     let path = PathBuf::from(MULTIPLAYER_SERVER_FILE);
     let Ok(contents) = fs::read_to_string(path) else {
@@ -962,6 +1019,7 @@ fn load_saved_servers() -> Vec<SavedServerEntry> {
         .unwrap_or_default()
 }
 
+/// Saves saved servers for the `graphic::components::multiplayer` module.
 fn save_saved_servers(servers: &[SavedServerEntry]) {
     let config = SavedServerConfig {
         servers: servers.to_vec(),
@@ -987,6 +1045,7 @@ fn save_saved_servers(servers: &[SavedServerEntry]) {
     }
 }
 
+/// Reads server form inputs for the `graphic::components::multiplayer` module.
 fn read_server_form_inputs(
     form_inputs: &mut Query<(&CssID, &mut InputField, &mut InputValue)>,
 ) -> Option<(String, String, u16)> {
@@ -1022,6 +1081,7 @@ fn read_server_form_inputs(
     Some((server_name, host, port))
 }
 
+/// Runs the `populate_server_form_inputs` routine for populate server form inputs in the `graphic::components::multiplayer` module.
 fn populate_server_form_inputs(
     form_inputs: &mut Query<(&CssID, &mut InputField, &mut InputValue)>,
     server_name: &str,
@@ -1044,6 +1104,7 @@ fn populate_server_form_inputs(
     }
 }
 
+/// Clears server form inputs for the `graphic::components::multiplayer` module.
 fn clear_server_form_inputs(form_inputs: &mut Query<(&CssID, &mut InputField, &mut InputValue)>) {
     for (css_id, mut field, mut input_value) in form_inputs.iter_mut() {
         if css_id.0 != MULTIPLAYER_FORM_NAME_INPUT_ID
@@ -1057,6 +1118,7 @@ fn clear_server_form_inputs(form_inputs: &mut Query<(&CssID, &mut InputField, &m
     }
 }
 
+/// Parses server address for the `graphic::components::multiplayer` module.
 fn parse_server_address(input: &str) -> Option<(String, u16)> {
     let mut value = input.trim().trim_matches('/').to_string();
     if value.is_empty() {
@@ -1092,10 +1154,12 @@ fn parse_server_address(input: &str) -> Option<(String, u16)> {
     Some((value.trim_end_matches('/').to_string(), DEFAULT_SERVER_PORT))
 }
 
+/// Runs the `display_server_address` routine for display server address in the `graphic::components::multiplayer` module.
 fn display_server_address(host: &str, port: u16) -> String {
     format!("http://{host}:{port}")
 }
 
+/// Runs the `resolve_probe_addrs` routine for resolve probe addrs in the `graphic::components::multiplayer` module.
 fn resolve_probe_addrs(host: &str, port: u16) -> Vec<SocketAddr> {
     format!("{host}:{port}")
         .to_socket_addrs()
@@ -1103,6 +1167,7 @@ fn resolve_probe_addrs(host: &str, port: u16) -> Vec<SocketAddr> {
         .unwrap_or_default()
 }
 
+/// Runs the `request_multiplayer_server_probe` routine for request multiplayer server probe in the `graphic::components::multiplayer` module.
 fn request_multiplayer_server_probe(
     ui_state: &mut MultiplayerUiState,
     probe_runtime: &mut ServerProbeRuntime,
@@ -1133,18 +1198,22 @@ fn request_multiplayer_server_probe(
     }
 }
 
+/// Runs the `discovery_port_for` routine for discovery port for in the `graphic::components::multiplayer` module.
 fn discovery_port_for(game_port: u16) -> u16 {
     game_port.saturating_add(1)
 }
 
+/// Runs the `server_key` routine for server key in the `graphic::components::multiplayer` module.
 fn server_key(host: &str, port: u16) -> String {
     format!("{}:{}", host.trim().to_ascii_lowercase(), port)
 }
 
+/// Runs the `session_url_to_key` routine for session url to key in the `graphic::components::multiplayer` module.
 fn session_url_to_key(session_url: &str) -> Option<String> {
     parse_session_url(session_url).map(|(host, port)| server_key(host.as_str(), port))
 }
 
+/// Parses session url for the `graphic::components::multiplayer` module.
 fn parse_session_url(session_url: &str) -> Option<(String, u16)> {
     let trimmed = session_url.trim();
     let without_scheme = trimmed
@@ -1157,14 +1226,17 @@ fn parse_session_url(session_url: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
+/// Runs the `waiting_status_message` routine for waiting status message in the `graphic::components::multiplayer` module.
 fn waiting_status_message() -> String {
     "Waiting for server answer...".to_string()
 }
 
+/// Runs the `offline_status_message` routine for offline status message in the `graphic::components::multiplayer` module.
 fn offline_status_message(_game_port: u16) -> String {
     "Server is Offline!".to_string()
 }
 
+/// Runs the `resolve_display_server_name` routine for resolve display server name in the `graphic::components::multiplayer` module.
 fn resolve_display_server_name(
     saved_name: Option<&str>,
     discovered_name: Option<&str>,
@@ -1184,6 +1256,7 @@ fn resolve_display_server_name(
     format!("{host}:{port}")
 }
 
+/// Runs the `trim_card_text` routine for trim card text in the `graphic::components::multiplayer` module.
 fn trim_card_text(value: &str, max_chars: usize) -> String {
     let trimmed = value.trim();
     let char_count = trimmed.chars().count();
@@ -1200,6 +1273,7 @@ fn trim_card_text(value: &str, max_chars: usize) -> String {
     shortened
 }
 
+/// Runs the `compose_multiplayer_card_text` routine for compose multiplayer card text in the `graphic::components::multiplayer` module.
 fn compose_multiplayer_card_text(server: &DisplayServerEntry, connected: bool) -> MultiplayerCardText {
     let name = trim_card_text(server.server_name.as_str(), 42);
 
@@ -1237,6 +1311,7 @@ fn compose_multiplayer_card_text(server: &DisplayServerEntry, connected: bool) -
     }
 }
 
+/// Runs the `format_player_count` routine for format player count in the `graphic::components::multiplayer` module.
 fn format_player_count(server: &DisplayServerEntry, online: bool) -> String {
     if !online {
         return "- / -".to_string();
@@ -1248,6 +1323,7 @@ fn format_player_count(server: &DisplayServerEntry, online: bool) -> String {
     }
 }
 
+/// Checks whether active connected server in the `graphic::components::multiplayer` module.
 fn is_active_connected_server(
     server: &DisplayServerEntry,
     connection_state: &MultiplayerConnectionState,

@@ -1,6 +1,7 @@
 use api::handlers::recipe::resolve_hand_crafted_recipe;
 use bevy::ecs::{query::QueryFilter, system::SystemParam};
 
+/// Defines the possible inventory ui slot target variants in the `graphic::components::inventory` module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InventoryUiSlotTarget {
     Player(usize),
@@ -8,6 +9,7 @@ enum InventoryUiSlotTarget {
     HandCraftedResult,
 }
 
+/// Represents inventory drop deps used by the `graphic::components::inventory` module.
 #[derive(SystemParam)]
 struct InventoryDropDeps<'w, 's> {
     commands: Commands<'w, 's>,
@@ -16,6 +18,7 @@ struct InventoryDropDeps<'w, 's> {
     item_registry: Res<'w, ItemRegistry>,
 }
 
+/// Represents inventory drag drop deps used by the `graphic::components::inventory` module.
 #[derive(SystemParam)]
 struct InventoryDragDropDeps<'w, 's> {
     global_config: Res<'w, GlobalConfig>,
@@ -51,6 +54,7 @@ struct InventoryDragDropDeps<'w, 's> {
     craft_requests: MessageWriter<'w, CraftHandCraftedRequest>,
 }
 
+/// Runs the `toggle_player_inventory_ui` routine for toggle player inventory ui in the `graphic::components::inventory` module.
 fn toggle_player_inventory_ui(
     keyboard: Res<ButtonInput<KeyCode>>,
     global_config: Res<GlobalConfig>,
@@ -124,6 +128,7 @@ fn toggle_player_inventory_ui(
     }
 }
 
+/// Runs the `close_player_inventory_ui` routine for close player inventory ui in the `graphic::components::inventory` module.
 fn close_player_inventory_ui(
     mut ui_interaction: ResMut<UiInteractionState>,
     mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
@@ -152,6 +157,7 @@ fn close_player_inventory_ui(
     }
 }
 
+/// Handles inventory drag and drop for the `graphic::components::inventory` module.
 #[allow(clippy::too_many_arguments)]
 fn handle_inventory_drag_and_drop(
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -423,6 +429,7 @@ fn handle_inventory_drag_and_drop(
     }
 }
 
+/// Synchronizes player inventory ui for the `graphic::components::inventory` module.
 fn sync_player_inventory_ui(
     inventory_ui: Res<PlayerInventoryUiState>,
     inventory: Res<PlayerInventory>,
@@ -649,6 +656,7 @@ fn sync_player_inventory_ui(
     }
 }
 
+/// Synchronizes inventory tooltip ui for the `graphic::components::inventory` module.
 #[allow(clippy::too_many_arguments)]
 fn sync_inventory_tooltip_ui(
     inventory_ui: Res<PlayerInventoryUiState>,
@@ -727,6 +735,7 @@ fn sync_inventory_tooltip_ui(
     *tooltip_visibility = Visibility::Inherited;
 }
 
+/// Synchronizes inventory cursor item ui for the `graphic::components::inventory` module.
 #[allow(clippy::too_many_arguments)]
 fn sync_inventory_cursor_item_ui(
     inventory_ui: Res<PlayerInventoryUiState>,
@@ -810,6 +819,7 @@ fn sync_inventory_cursor_item_ui(
     *root_visibility = Visibility::Inherited;
 }
 
+/// Sets inventory cursor for the `graphic::components::inventory` module.
 fn set_inventory_cursor(
     inventory_open: bool,
     cursor_q: &mut Query<&mut CursorOptions, With<PrimaryWindow>>,
@@ -827,6 +837,7 @@ fn set_inventory_cursor(
     }
 }
 
+/// Synchronizes inventory slot hover border for the `graphic::components::inventory` module.
 fn sync_inventory_slot_hover_border(
     slot_frames: &mut Query<(&CssID, &UIWidgetState, &mut BorderColor)>,
     inventory_open: bool,
@@ -882,6 +893,7 @@ fn sync_inventory_slot_hover_border(
     hovered_slot
 }
 
+/// Runs the `transfer_player_slot_to_hand_crafted` routine for transfer player slot to hand crafted in the `graphic::components::inventory` module.
 fn transfer_player_slot_to_hand_crafted(
     slot_index: usize,
     inventory: &mut PlayerInventory,
@@ -908,6 +920,7 @@ fn transfer_player_slot_to_hand_crafted(
     true
 }
 
+/// Runs the `transfer_hand_crafted_slot_to_inventory` routine for transfer hand crafted slot to inventory in the `graphic::components::inventory` module.
 fn transfer_hand_crafted_slot_to_inventory(
     slot_index: usize,
     hand_crafted: &mut HandCraftedState,
@@ -934,6 +947,7 @@ fn transfer_hand_crafted_slot_to_inventory(
     true
 }
 
+/// Runs the `take_all_from_target_to_cursor` routine for take all from target to cursor in the `graphic::components::inventory` module.
 fn take_all_from_target_to_cursor(
     slot_target: InventoryUiSlotTarget,
     cursor_item: &mut InventoryCursorItemState,
@@ -955,6 +969,7 @@ fn take_all_from_target_to_cursor(
     }
 }
 
+/// Runs the `take_half_from_target_to_cursor` routine for take half from target to cursor in the `graphic::components::inventory` module.
 fn take_half_from_target_to_cursor(
     slot_target: InventoryUiSlotTarget,
     cursor_item: &mut InventoryCursorItemState,
@@ -981,6 +996,7 @@ fn take_half_from_target_to_cursor(
     }
 }
 
+/// Runs the `place_one_from_cursor_on_target` routine for place one from cursor on target in the `graphic::components::inventory` module.
 fn place_one_from_cursor_on_target(
     slot_target: InventoryUiSlotTarget,
     cursor_item: &mut InventoryCursorItemState,
@@ -1005,6 +1021,7 @@ fn place_one_from_cursor_on_target(
     }
 }
 
+/// Runs the `place_all_from_cursor_on_target` routine for place all from cursor on target in the `graphic::components::inventory` module.
 fn place_all_from_cursor_on_target(
     slot_target: InventoryUiSlotTarget,
     cursor_item: &mut InventoryCursorItemState,
@@ -1029,6 +1046,7 @@ fn place_all_from_cursor_on_target(
     }
 }
 
+/// Runs the `take_all_from_slot_to_cursor` routine for take all from slot to cursor in the `graphic::components::inventory` module.
 fn take_all_from_slot_to_cursor(slot: &mut InventorySlot, cursor_slot: &mut InventorySlot) -> bool {
     if slot.is_empty() || !cursor_slot.is_empty() {
         return false;
@@ -1039,6 +1057,7 @@ fn take_all_from_slot_to_cursor(slot: &mut InventorySlot, cursor_slot: &mut Inve
     true
 }
 
+/// Runs the `take_half_from_slot_to_cursor` routine for take half from slot to cursor in the `graphic::components::inventory` module.
 fn take_half_from_slot_to_cursor(
     slot: &mut InventorySlot,
     cursor_slot: &mut InventorySlot,
@@ -1082,6 +1101,7 @@ fn take_half_from_slot_to_cursor(
     true
 }
 
+/// Runs the `place_one_from_cursor` routine for place one from cursor in the `graphic::components::inventory` module.
 fn place_one_from_cursor(
     slot: &mut InventorySlot,
     cursor_slot: &mut InventorySlot,
@@ -1115,6 +1135,7 @@ fn place_one_from_cursor(
     true
 }
 
+/// Runs the `place_all_from_cursor` routine for place all from cursor in the `graphic::components::inventory` module.
 fn place_all_from_cursor(
     slot: &mut InventorySlot,
     cursor_slot: &mut InventorySlot,
@@ -1165,6 +1186,7 @@ fn place_all_from_cursor(
     true
 }
 
+/// Runs the `decrement_slot_count` routine for decrement slot count in the `graphic::components::inventory` module.
 fn decrement_slot_count(slot: &mut InventorySlot) {
     if slot.count <= 1 {
         *slot = InventorySlot::default();
@@ -1173,6 +1195,7 @@ fn decrement_slot_count(slot: &mut InventorySlot) {
     }
 }
 
+/// Parses recipe preview input index for the `graphic::components::inventory` module.
 fn parse_recipe_preview_input_index(css_id: &str) -> Option<usize> {
     css_id
         .strip_prefix(RECIPE_PREVIEW_INPUT_FRAME_PREFIX)
@@ -1181,6 +1204,7 @@ fn parse_recipe_preview_input_index(css_id: &str) -> Option<usize> {
         .filter(|index| *index < HAND_CRAFTED_INPUT_SLOTS)
 }
 
+/// Runs the `hovered_item_id` routine for hovered item id in the `graphic::components::inventory` module.
 fn hovered_item_id(
     slot_states: &Query<(&CssID, &UIWidgetState), With<Button>>,
     inventory: &PlayerInventory,
@@ -1244,6 +1268,7 @@ fn hovered_item_id(
     None
 }
 
+/// Runs the `flush_hand_crafted_inputs_to_inventory` routine for flush hand crafted inputs to inventory in the `graphic::components::inventory` module.
 fn flush_hand_crafted_inputs_to_inventory(
     hand_crafted: &mut HandCraftedState,
     inventory: &mut PlayerInventory,
@@ -1269,6 +1294,7 @@ fn flush_hand_crafted_inputs_to_inventory(
     }
 }
 
+/// Runs the `flush_cursor_item_to_inventory` routine for flush cursor item to inventory in the `graphic::components::inventory` module.
 fn flush_cursor_item_to_inventory(
     cursor_item: &mut InventoryCursorItemState,
     inventory: &mut PlayerInventory,
@@ -1297,6 +1323,7 @@ fn flush_cursor_item_to_inventory(
     }
 }
 
+/// Runs the `fill_hand_crafted_from_recipe_preview` routine for fill hand crafted from recipe preview in the `graphic::components::inventory` module.
 fn fill_hand_crafted_from_recipe_preview(
     recipe_preview: &RecipePreviewDialogState,
     inventory: &mut PlayerInventory,
@@ -1338,6 +1365,7 @@ fn fill_hand_crafted_from_recipe_preview(
     }
 }
 
+/// Runs the `take_items_from_inventory` routine for take items from inventory in the `graphic::components::inventory` module.
 fn take_items_from_inventory(
     inventory: &mut PlayerInventory,
     item_id: ItemId,
@@ -1368,6 +1396,7 @@ fn take_items_from_inventory(
     moved
 }
 
+/// Synchronizes badge for the `graphic::components::inventory` module.
 fn sync_badge(
     paragraph: &mut Paragraph,
     visibility: &mut Mut<'_, Visibility>,
@@ -1389,6 +1418,7 @@ fn sync_badge(
     **visibility = Visibility::Inherited;
 }
 
+/// Checks whether button hovered in the `graphic::components::inventory` module.
 fn is_button_hovered(
     button_states: &Query<(&CssID, &UIWidgetState), With<Button>>,
     css_id_target: &str,
@@ -1398,6 +1428,7 @@ fn is_button_hovered(
         .any(|(css_id, state)| css_id.0 == css_id_target && state.hovered)
 }
 
+/// Checks whether cursor inside panel in the `graphic::components::inventory` module.
 fn is_cursor_inside_panel<F: QueryFilter>(
     window_q: &Query<&Window, With<PrimaryWindow>>,
     panel_q: &Query<(&ComputedNode, &UiGlobalTransform), F>,

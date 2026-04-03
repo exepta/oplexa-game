@@ -22,6 +22,7 @@ pub struct GlobalConfig {
 }
 
 impl Default for GlobalConfig {
+    /// Runs the `default` routine for default in the `core::config` module.
     fn default() -> Self {
         Self {
             graphics: GraphicsConfig::default(),
@@ -32,12 +33,14 @@ impl Default for GlobalConfig {
 }
 
 impl GlobalConfig {
+    /// Runs the `ensure_config_files_exist` routine for ensure config files exist in the `core::config` module.
     pub fn ensure_config_files_exist() {
         Self::ensure_default_config_file("config/graphics.toml", &GraphicsConfig::default());
         Self::ensure_default_config_file("config/gameplay.toml", &GameplayConfig::default());
         Self::ensure_default_config_file("config/input.toml", &InputConfig::default());
     }
 
+    /// Runs the `ensure_default_config_file` routine for ensure default config file in the `core::config` module.
     fn ensure_default_config_file<T: Serialize>(path: &str, default: &T) {
         let config_path = Path::new(path);
 
@@ -82,11 +85,13 @@ impl GlobalConfig {
         }
     }
 
+    /// Saves the requested data for the `core::config` module.
     fn save<T: Serialize>(data: &T, path: &str) {
         let toml_string = toml::to_string_pretty(data).expect("Failed to serialize to TOML");
         fs::write(Path::new(path), toml_string).expect("Failed to write config file");
     }
 
+    /// Saves all for the `core::config` module.
     pub fn save_all(&self) {
         Self::ensure_config_files_exist();
         Self::save(&self.graphics, "config/graphics.toml");
@@ -128,6 +133,7 @@ pub struct GraphicsConfig {
 }
 
 impl Default for GraphicsConfig {
+    /// Runs the `default` routine for default in the `core::config` module.
     fn default() -> Self {
         Self {
             window_width: 1270,
@@ -144,6 +150,7 @@ impl Default for GraphicsConfig {
 //                         Gameplay
 // =======================================================
 
+/// Represents gameplay config used by the `core::config` module.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct GameplayConfig {
     /// Vertical sensitivity multiplier for look input.
@@ -154,6 +161,7 @@ pub struct GameplayConfig {
 }
 
 impl Default for GameplayConfig {
+    /// Runs the `default` routine for default in the `core::config` module.
     fn default() -> Self {
         Self {
             mouse_sensitivity_vertical: 1.0,
@@ -233,6 +241,7 @@ pub struct InputConfig {
 }
 
 impl Default for InputConfig {
+    /// Runs the `default` routine for default in the `core::config` module.
     fn default() -> Self {
         Self {
             move_up: String::from("W"),
@@ -258,10 +267,12 @@ impl Default for InputConfig {
     }
 }
 
+/// Runs the `default_drop_item_key` routine for default drop item key in the `core::config` module.
 fn default_drop_item_key() -> String {
     String::from("Q")
 }
 
+/// Runs the `default_inventory_recipe_open_key` routine for default inventory recipe open key in the `core::config` module.
 fn default_inventory_recipe_open_key() -> String {
     String::from("R")
 }
@@ -270,6 +281,7 @@ fn default_inventory_recipe_open_key() -> String {
 //                         Crosshair
 // =======================================================
 
+/// Represents crosshair config used by the `core::config` module.
 #[derive(Resource)]
 pub struct CrosshairConfig {
     pub radius: f32,
@@ -280,6 +292,7 @@ pub struct CrosshairConfig {
 }
 
 impl Default for CrosshairConfig {
+    /// Runs the `default` routine for default in the `core::config` module.
     fn default() -> Self {
         Self {
             radius: 8.0,
@@ -295,12 +308,14 @@ impl Default for CrosshairConfig {
 //                         WorldGen
 // =======================================================
 
+/// Represents world gen config used by the `core::config` module.
 #[derive(Resource, Clone)]
 pub struct WorldGenConfig {
     pub seed: i32,
 }
 
 impl Default for WorldGenConfig {
+    /// Runs the `default` routine for default in the `core::config` module.
     fn default() -> Self {
         Self { seed: 1337 }
     }

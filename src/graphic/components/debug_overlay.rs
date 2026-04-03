@@ -1,8 +1,10 @@
+/// Runs the `prime_sys_stats` routine for prime sys stats in the `graphic::components::debug_overlay` module.
 fn prime_sys_stats(mut stats: ResMut<SysStats>) {
     stats.sys.refresh_cpu_all();
     stats.sys.refresh_processes(ProcessesToUpdate::All, true);
 }
 
+/// Runs the `toggle_system_last_ui` routine for toggle system last ui in the `graphic::components::debug_overlay` module.
 fn toggle_system_last_ui(
     keyboard: Res<ButtonInput<KeyCode>>,
     global_config: Res<GlobalConfig>,
@@ -26,6 +28,7 @@ fn toggle_system_last_ui(
     }
 }
 
+/// Runs the `close_system_last_ui` routine for close system last ui in the `graphic::components::debug_overlay` module.
 fn close_system_last_ui(
     mut root: Query<&mut Visibility, With<DebugOverlayRoot>>,
     mut overlay: ResMut<DebugOverlayState>,
@@ -36,6 +39,7 @@ fn close_system_last_ui(
     }
 }
 
+/// Refreshes sys stats for the `graphic::components::debug_overlay` module.
 fn refresh_sys_stats(
     time: Res<Time>,
     mut stats: ResMut<SysStats>,
@@ -66,6 +70,7 @@ fn refresh_sys_stats(
     vram_state.scope = vram.map(|value| value.scope);
 }
 
+/// Synchronizes system last ui for the `graphic::components::debug_overlay` module.
 #[allow(clippy::too_many_arguments)]
 fn sync_system_last_ui(
     build: Res<BuildInfo>,
@@ -146,4 +151,3 @@ fn sync_system_last_ui(
         };
     }
 }
-

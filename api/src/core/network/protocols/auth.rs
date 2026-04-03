@@ -1,18 +1,23 @@
 use serde::{Deserialize, Serialize};
 
+/// Represents auth used by the `core::network::protocols::auth` module.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Auth {
     pub username: String,
+    pub client_uuid: String,
 }
 
 impl Auth {
-    pub fn new(username: impl Into<String>) -> Self {
+    /// Creates a new instance for the `core::network::protocols::auth` module.
+    pub fn new(username: impl Into<String>, client_uuid: impl Into<String>) -> Self {
         Self {
             username: username.into(),
+            client_uuid: client_uuid.into(),
         }
     }
 }
 
+/// Represents server welcome used by the `core::network::protocols::auth` module.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerWelcome {
     pub player_id: u64,
@@ -25,6 +30,7 @@ pub struct ServerWelcome {
 }
 
 impl ServerWelcome {
+    /// Creates a new instance for the `core::network::protocols::auth` module.
     pub fn new(
         player_id: u64,
         server_name: impl Into<String>,
@@ -42,6 +48,21 @@ impl ServerWelcome {
             world_seed,
             spawn_translation,
             block_palette,
+        }
+    }
+}
+
+/// Represents server auth rejected used by the `core::network::protocols::auth` module.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerAuthRejected {
+    pub reason: String,
+}
+
+impl ServerAuthRejected {
+    /// Creates a new instance for the `core::network::protocols::auth` module.
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
         }
     }
 }

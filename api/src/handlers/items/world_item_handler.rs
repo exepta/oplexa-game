@@ -16,6 +16,7 @@ use bevy::prelude::*;
 pub struct WorldItemHandlerPlugin;
 
 impl Plugin for WorldItemHandlerPlugin {
+    /// Builds this component for the `handlers::items::world_item_handler` module.
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
@@ -25,6 +26,7 @@ impl Plugin for WorldItemHandlerPlugin {
     }
 }
 
+/// Runs the `simulate_world_items` routine for simulate world items in the `handlers::items::world_item_handler` module.
 fn simulate_world_items(
     time: Res<Time>,
     chunk_map: Res<ChunkMap>,
@@ -125,6 +127,7 @@ fn simulate_world_items(
     }
 }
 
+/// Picks up world items for the `handlers::items::world_item_handler` module.
 fn pick_up_world_items(
     mut commands: Commands,
     time: Res<Time>,

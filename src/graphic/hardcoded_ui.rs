@@ -98,6 +98,8 @@ const MULTIPLAYER_FORM_ABORT_ID: &str = "multi-player-form-abort";
 const MULTIPLAYER_DELETE_TEXT_ID: &str = "multi-player-delete-text";
 const MULTIPLAYER_DELETE_CONFIRM_ID: &str = "multi-player-delete-confirm";
 const MULTIPLAYER_DELETE_ABORT_ID: &str = "multi-player-delete-abort";
+const MULTIPLAYER_CONNECT_TEXT_ID: &str = "multi-player-connect-text";
+const MULTIPLAYER_CONNECT_OK_ID: &str = "multi-player-connect-ok";
 
 const PAUSE_PLAY_ID: &str = "pause-menu-play";
 const PAUSE_CONNECT_ID: &str = "pause-menu-connect";
@@ -145,73 +147,110 @@ const ID_GRID: &str = "debug-grid";
 const ID_INSPECTOR: &str = "debug-world-inspector";
 const ID_OVERLAY: &str = "debug-overlay";
 
+/// Represents hardcoded ui plugin used by the `graphic::hardcoded_ui` module.
 pub struct HardcodedUiPlugin;
 
+/// Represents main menu root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct MainMenuRoot;
+/// Represents single player root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct SinglePlayerRoot;
+/// Represents create world root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct CreateWorldRoot;
+/// Represents single player world list used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct SinglePlayerWorldList;
+/// Represents list div scroll ready used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct ListDivScrollReady;
+/// Represents single player list item used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct SinglePlayerListItem;
+/// Represents single player delete dialog used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct SinglePlayerDeleteDialog;
+/// Represents single player delete text used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct SinglePlayerDeleteText;
+/// Represents multiplayer root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct MultiplayerRoot;
+/// Represents multiplayer server list used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct MultiplayerServerList;
+/// Represents multiplayer list item used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct MultiplayerListItem;
+/// Represents multiplayer form dialog used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct MultiplayerFormDialog;
+/// Represents multiplayer form add button used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct MultiplayerFormAddButton;
+/// Represents multiplayer form edit button used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct MultiplayerFormEditButton;
+/// Represents multiplayer delete dialog used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct MultiplayerDeleteDialog;
+/// Represents multiplayer delete text used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct MultiplayerDeleteText;
+/// Represents multiplayer connect dialog used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct MultiplayerConnectDialog;
+/// Represents multiplayer connect ok button used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct MultiplayerConnectOkButton;
+/// Represents pause menu root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct PauseMenuRoot;
+/// Represents world gen root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct WorldGenRoot;
+/// Represents world unload root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct WorldUnloadRoot;
+/// Represents hud root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct HudRoot;
+/// Represents player inventory root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct PlayerInventoryRoot;
+/// Represents inventory main panel used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct InventoryMainPanel;
+/// Represents inventory drop zone panel used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct InventoryDropZonePanel;
+/// Represents inventory tooltip root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct InventoryTooltipRoot;
+/// Represents inventory cursor item root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct InventoryCursorItemRoot;
+/// Represents inventory cursor item icon used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct InventoryCursorItemIcon;
+/// Represents inventory cursor item badge used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct InventoryCursorItemBadge;
+/// Represents recipe preview dialog root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct RecipePreviewDialogRoot;
+/// Represents recipe preview dialog panel used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct RecipePreviewDialogPanel;
+/// Represents creative panel grid root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct CreativePanelGridRoot;
+/// Represents debug overlay root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct DebugOverlayRoot;
 
+/// Defines the possible ui button kind variants in the `graphic::hardcoded_ui` module.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 enum UiButtonKind {
     Action,
@@ -221,12 +260,14 @@ enum UiButtonKind {
     InventoryResultSlot,
 }
 
+/// Defines the possible ui button tone variants in the `graphic::hardcoded_ui` module.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 enum UiButtonTone {
     Normal,
     Accent,
 }
 
+/// Defines the possible ui text tone variants in the `graphic::hardcoded_ui` module.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 enum UiTextTone {
     Heading,
@@ -238,29 +279,35 @@ enum UiTextTone {
     TooltipKey,
 }
 
+/// Represents ui button layout applied used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct UiButtonLayoutApplied;
 
+/// Represents ui input layout applied used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct UiInputLayoutApplied;
 
+/// Represents ui entities used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Debug, Clone, Copy)]
 struct UiEntities {
     single_player_world_list: Entity,
     multiplayer_server_list: Entity,
 }
 
+/// Represents world gen ui animation used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Debug, Clone)]
 struct WorldGenUiAnimation {
     displayed_pct: f32,
 }
 
 impl Default for WorldGenUiAnimation {
+    /// Runs the `default` routine for default in the `graphic::hardcoded_ui` module.
     fn default() -> Self {
         Self { displayed_pct: 0.0 }
     }
 }
 
+/// Represents world unload ui state used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Debug, Clone)]
 struct WorldUnloadUiState {
     active: bool,
@@ -268,6 +315,7 @@ struct WorldUnloadUiState {
 }
 
 impl Default for WorldUnloadUiState {
+    /// Runs the `default` routine for default in the `graphic::hardcoded_ui` module.
     fn default() -> Self {
         Self {
             active: false,
@@ -276,21 +324,25 @@ impl Default for WorldUnloadUiState {
     }
 }
 
+/// Represents pause menu state used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct PauseMenuState {
     open: bool,
 }
 
+/// Represents player inventory ui state used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Debug, Default)]
 struct PlayerInventoryUiState {
     open: bool,
 }
 
+/// Represents inventory cursor item state used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct InventoryCursorItemState {
     slot: InventorySlot,
 }
 
+/// Represents recipe preview dialog state used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Debug, Clone, Copy)]
 struct RecipePreviewDialogState {
     open: bool,
@@ -299,6 +351,7 @@ struct RecipePreviewDialogState {
 }
 
 impl Default for RecipePreviewDialogState {
+    /// Runs the `default` routine for default in the `graphic::hardcoded_ui` module.
     fn default() -> Self {
         Self {
             open: false,
@@ -308,11 +361,13 @@ impl Default for RecipePreviewDialogState {
     }
 }
 
+/// Represents creative panel ui state used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct CreativePanelUiState {
     synced_once: bool,
 }
 
+/// Represents debug vram state used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct DebugVramState {
     bytes: Option<u64>,
@@ -320,6 +375,7 @@ struct DebugVramState {
     scope: Option<&'static str>,
 }
 
+/// Represents saved world entry used by the `graphic::hardcoded_ui` module.
 #[derive(Clone, Debug)]
 struct SavedWorldEntry {
     folder_name: String,
@@ -327,6 +383,7 @@ struct SavedWorldEntry {
     path: PathBuf,
 }
 
+/// Defines the possible single player page variants in the `graphic::hardcoded_ui` module.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum SinglePlayerPage {
     #[default]
@@ -334,6 +391,7 @@ enum SinglePlayerPage {
     CreateWorld,
 }
 
+/// Represents single player ui state used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Default)]
 struct SinglePlayerUiState {
     page: SinglePlayerPage,
@@ -344,11 +402,13 @@ struct SinglePlayerUiState {
     closing_for_world_load: bool,
 }
 
+/// Represents world meta used by the `graphic::hardcoded_ui` module.
 #[derive(Serialize, Deserialize)]
 struct WorldMeta {
     seed: i32,
 }
 
+/// Defines the possible single player action variants in the `graphic::hardcoded_ui` module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SinglePlayerAction {
     SelectWorld(usize),
@@ -361,6 +421,7 @@ enum SinglePlayerAction {
     CreateWorldAbort,
 }
 
+/// Represents saved server entry used by the `graphic::hardcoded_ui` module.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct SavedServerEntry {
     server_name: String,
@@ -368,12 +429,14 @@ struct SavedServerEntry {
     port: u16,
 }
 
+/// Represents saved server config used by the `graphic::hardcoded_ui` module.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct SavedServerConfig {
     #[serde(default)]
     servers: Vec<SavedServerEntry>,
 }
 
+/// Represents probed server status used by the `graphic::hardcoded_ui` module.
 #[derive(Clone, Debug)]
 struct ProbedServerStatus {
     session_url: String,
@@ -387,6 +450,7 @@ struct ProbedServerStatus {
     last_seen_at: f64,
 }
 
+/// Represents display server entry used by the `graphic::hardcoded_ui` module.
 #[derive(Clone, Debug)]
 struct DisplayServerEntry {
     key: String,
@@ -403,18 +467,21 @@ struct DisplayServerEntry {
     session_url: String,
 }
 
+/// Defines the possible server form mode variants in the `graphic::hardcoded_ui` module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ServerFormMode {
     Add,
     Edit,
 }
 
+/// Represents server form dialog state used by the `graphic::hardcoded_ui` module.
 #[derive(Clone, Debug)]
 struct ServerFormDialogState {
     mode: ServerFormMode,
     editing_saved_index: Option<usize>,
 }
 
+/// Represents multiplayer ui state used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Default)]
 struct MultiplayerUiState {
     saved_servers: Vec<SavedServerEntry>,
@@ -430,12 +497,14 @@ struct MultiplayerUiState {
 }
 
 impl MultiplayerUiState {
+    /// Runs the `selected_server` routine for selected server in the `graphic::hardcoded_ui` module.
     fn selected_server(&self) -> Option<&DisplayServerEntry> {
         let key = self.selected_key.as_ref()?;
         self.display_servers.iter().find(|entry| &entry.key == key)
     }
 }
 
+/// Represents server probe runtime used by the `graphic::hardcoded_ui` module.
 #[derive(Default)]
 struct ServerProbeRuntime {
     client: Option<LanDiscoveryClient>,
@@ -445,6 +514,7 @@ struct ServerProbeRuntime {
 }
 
 impl ServerProbeRuntime {
+    /// Runs the `configure` routine for configure in the `graphic::hardcoded_ui` module.
     fn configure(&mut self) {
         let settings = NetworkSettings::load_or_create("config/network.toml");
         self.client = if settings.client.lan_discovery {
@@ -458,11 +528,13 @@ impl ServerProbeRuntime {
     }
 }
 
+/// Defines the possible multiplayer action variants in the `graphic::hardcoded_ui` module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MultiplayerAction {
     SelectServer(usize),
     JoinServer,
     RefreshServers,
+    DismissConnectError,
     OpenAddServer,
     OpenEditServer,
     OpenDeleteServer,
@@ -473,6 +545,7 @@ enum MultiplayerAction {
     AbortForm,
 }
 
+/// Defines the possible pause menu action variants in the `graphic::hardcoded_ui` module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseMenuAction {
     BackToGame,
@@ -481,6 +554,7 @@ enum PauseMenuAction {
     ExitToMenu,
 }
 
+/// Defines the possible main menu action variants in the `graphic::hardcoded_ui` module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MainMenuAction {
     SinglePlayer,
@@ -489,6 +563,7 @@ enum MainMenuAction {
     QuitGame,
 }
 
+/// Defines the possible in game inventory ui set variants in the `graphic::hardcoded_ui` module.
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum InGameInventoryUiSet {
     Input,
@@ -496,6 +571,7 @@ enum InGameInventoryUiSet {
 }
 
 impl Plugin for HardcodedUiPlugin {
+    /// Builds this component for the `graphic::hardcoded_ui` module.
     fn build(&self, app: &mut App) {
         app.init_resource::<LoadingProgress>()
             .init_resource::<WorldGenUiAnimation>()
@@ -730,21 +806,25 @@ include!("components/inventory_creative.rs");
 include!("components/ui_interaction_sync.rs");
 include!("components/debug_overlay.rs");
 
+/// Runs the `bytes_to_mib` routine for bytes to mib in the `graphic::hardcoded_ui` module.
 #[inline]
 fn bytes_to_mib(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0)
 }
 
+/// Runs the `bool_label` routine for bool label in the `graphic::hardcoded_ui` module.
 #[inline]
 fn bool_label(value: bool) -> &'static str {
     if value { "ON" } else { "OFF" }
 }
 
 impl SavedServerEntry {
+    /// Runs the `key` routine for key in the `graphic::hardcoded_ui` module.
     fn key(&self) -> String {
         server_key(self.host.as_str(), self.port)
     }
 
+    /// Runs the `session_url` routine for session url in the `graphic::hardcoded_ui` module.
     fn session_url(&self) -> String {
         format!("http://{}:{}", self.host, self.port)
     }

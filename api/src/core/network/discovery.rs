@@ -4,6 +4,7 @@ use std::net::{SocketAddr, UdpSocket};
 
 const DISCOVERY_QUERY: &[u8] = b"OPLEXA_DISCOVERY_V1";
 
+/// Represents lan server info used by the `core::network::discovery` module.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LanServerInfo {
     pub server_name: String,
@@ -17,12 +18,14 @@ pub struct LanServerInfo {
     pub observed_addr: Option<String>,
 }
 
+/// Represents lan discovery client used by the `core::network::discovery` module.
 pub struct LanDiscoveryClient {
     socket: UdpSocket,
     port: u16,
 }
 
 impl LanDiscoveryClient {
+    /// Runs the `bind` routine for bind in the `core::network::discovery` module.
     pub fn bind(port: u16) -> io::Result<Self> {
         let socket = UdpSocket::bind("0.0.0.0:0")?;
         socket.set_broadcast(true)?;
@@ -31,6 +34,7 @@ impl LanDiscoveryClient {
         Ok(Self { socket, port })
     }
 
+    /// Runs the `broadcast_query` routine for broadcast query in the `core::network::discovery` module.
     pub fn broadcast_query(&self) -> io::Result<()> {
         self.socket.send_to(
             DISCOVERY_QUERY,
@@ -39,11 +43,13 @@ impl LanDiscoveryClient {
         Ok(())
     }
 
+    /// Runs the `query_addr` routine for query addr in the `core::network::discovery` module.
     pub fn query_addr(&self, addr: SocketAddr) -> io::Result<()> {
         self.socket.send_to(DISCOVERY_QUERY, addr)?;
         Ok(())
     }
 
+    /// Runs the `poll` routine for poll in the `core::network::discovery` module.
     pub fn poll(&self) -> io::Result<Vec<LanServerInfo>> {
         let mut buffer = [0_u8; 1024];
         let mut servers = Vec::new();
@@ -65,6 +71,7 @@ impl LanDiscoveryClient {
     }
 }
 
+/// Represents lan discovery server used by the `core::network::discovery` module.
 pub struct LanDiscoveryServer {
     socket: UdpSocket,
     info: LanServerInfo,
@@ -72,6 +79,7 @@ pub struct LanDiscoveryServer {
 }
 
 impl LanDiscoveryServer {
+    /// Runs the `bind` routine for bind in the `core::network::discovery` module.
     pub fn bind(port: u16, info: LanServerInfo) -> io::Result<Self> {
         let socket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], port)))?;
         socket.set_nonblocking(true)?;
@@ -85,6 +93,7 @@ impl LanDiscoveryServer {
         })
     }
 
+    /// Updates player counts for the `core::network::discovery` module.
     pub fn update_player_counts(
         &mut self,
         current_players: usize,
@@ -101,6 +110,7 @@ impl LanDiscoveryServer {
         Ok(())
     }
 
+    /// Runs the `poll` routine for poll in the `core::network::discovery` module.
     pub fn poll(&self) -> io::Result<()> {
         let mut buffer = [0_u8; 128];
 

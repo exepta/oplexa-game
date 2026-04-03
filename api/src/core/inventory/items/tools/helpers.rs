@@ -8,6 +8,7 @@ const CORRECT_TOOL_PER_LEVEL_MULTIPLIER: f32 = 0.25;
 const NON_REQUIRED_TOOL_BASE_MULTIPLIER: f32 = 1.0;
 const NON_REQUIRED_TOOL_PER_LEVEL_MULTIPLIER: f32 = 0.08;
 
+/// Runs the `infer_tool_from_item_key` routine for infer tool from item key in the `core::inventory::items::tools::helpers` module.
 #[inline]
 pub fn infer_tool_from_item_key(item_key: &str) -> Option<ToolDef> {
     let key = item_key.trim().to_ascii_lowercase();
@@ -36,12 +37,14 @@ pub fn infer_tool_from_item_key(item_key: &str) -> Option<ToolDef> {
     None
 }
 
+/// Runs the `block_requirement_for_name` routine for block requirement for name in the `core::inventory::items::tools::helpers` module.
 #[inline]
 pub fn block_requirement_for_name(block_name: &str) -> Option<ToolRequirement> {
     infer_required_tool_type(block_name)
         .map(|tool_type| ToolRequirement::new(tool_type, ToolLevel::L1))
 }
 
+/// Runs the `infer_required_tool_type` routine for infer required tool type in the `core::inventory::items::tools::helpers` module.
 #[inline]
 fn infer_required_tool_type(block_name: &str) -> Option<ToolType> {
     let name = block_name.trim().to_ascii_lowercase();
@@ -56,6 +59,7 @@ fn infer_required_tool_type(block_name: &str) -> Option<ToolType> {
     }
 }
 
+/// Runs the `block_requirement_for_id` routine for block requirement for id in the `core::inventory::items::tools::helpers` module.
 #[inline]
 pub fn block_requirement_for_id(
     block_id: BlockId,
@@ -74,6 +78,7 @@ pub fn block_requirement_for_id(
     Some(ToolRequirement::new(tool_type, min_level))
 }
 
+/// Checks whether drop from block in the `core::inventory::items::tools::helpers` module.
 #[inline]
 pub fn can_drop_from_block(
     requirement: Option<ToolRequirement>,
@@ -85,6 +90,7 @@ pub fn can_drop_from_block(
     }
 }
 
+/// Runs the `mining_speed_multiplier` routine for mining speed multiplier in the `core::inventory::items::tools::helpers` module.
 #[inline]
 pub fn mining_speed_multiplier(
     requirement: Option<ToolRequirement>,

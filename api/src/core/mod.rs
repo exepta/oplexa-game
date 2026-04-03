@@ -20,9 +20,11 @@ use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::*;
 use bevy::prelude::*;
 
+/// Represents core module used by the `core` module.
 pub struct CoreModule;
 
 impl Plugin for CoreModule {
+    /// Builds this component for the `core` module.
     fn build(&self, app: &mut App) {
         app.init_resource::<WorldGenConfig>();
         app.init_resource::<CrosshairConfig>();

@@ -22,8 +22,10 @@ pub const MAX_BREAK_TIME: f32 = 60.0;
 
 /* ---------------- types ---------------- */
 
+/// Type alias for block id used by the `core::world::block` module.
 pub type BlockId = u16;
 
+/// Defines the possible face variants in the `core::world::block` module.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Face {
     Top,
@@ -34,6 +36,7 @@ pub enum Face {
     West,
 }
 
+/// Represents uv rect used by the `core::world::block` module.
 #[derive(Clone, Copy)]
 pub struct UvRect {
     pub u0: f32,
@@ -42,6 +45,7 @@ pub struct UvRect {
     pub v1: f32,
 }
 
+/// Represents block def used by the `core::world::block` module.
 #[derive(Clone)]
 pub struct BlockDef {
     pub name: String,
@@ -56,6 +60,7 @@ pub struct BlockDef {
     pub material: Handle<StandardMaterial>,
 }
 
+/// Represents block stats used by the `core::world::block` module.
 #[derive(Deserialize, Clone, Default)]
 #[allow(dead_code)]
 pub struct BlockStats {
@@ -73,6 +78,7 @@ pub struct BlockStats {
     pub emissive: f32,
 }
 
+/// Represents selected block used by the `core::world::block` module.
 #[derive(Resource, Clone, Debug)]
 pub struct SelectedBlock {
     pub id: u16,
@@ -80,6 +86,7 @@ pub struct SelectedBlock {
 }
 
 impl Default for SelectedBlock {
+    /// Runs the `default` routine for default in the `core::world::block` module.
     fn default() -> Self {
         Self {
             id: 0,
@@ -90,6 +97,7 @@ impl Default for SelectedBlock {
 
 /* ---------------- registry ---------------- */
 
+/// Represents block registry used by the `core::world::block` module.
 #[derive(Resource, Clone)]
 pub struct BlockRegistry {
     pub defs: Vec<BlockDef>,
@@ -97,70 +105,85 @@ pub struct BlockRegistry {
 }
 
 impl BlockRegistry {
+    /// Runs the `def` routine for def in the `core::world::block` module.
     #[inline]
     pub fn def(&self, id: BlockId) -> &BlockDef {
         &self.defs[id as usize]
     }
+    /// Runs the `name` routine for name in the `core::world::block` module.
     #[inline]
     pub fn name(&self, id: BlockId) -> &str {
         self.def(id).name.as_str()
     }
 
+    /// Runs the `name_opt` routine for name opt in the `core::world::block` module.
     #[inline]
     pub fn name_opt(&self, id: BlockId) -> Option<&str> {
         self.defs.get(id as usize).map(|d| d.name.as_str())
     }
 
+    /// Runs the `id_opt` routine for id opt in the `core::world::block` module.
     #[inline]
     pub fn id_opt(&self, name: &str) -> Option<BlockId> {
         self.name_to_id.get(name).copied()
     }
 
+    /// Runs the `id` routine for id in the `core::world::block` module.
     #[inline]
     pub fn id(&self, name: &str) -> BlockId {
         *self.name_to_id.get(name).expect("unknown block name")
     }
 
+    /// Runs the `id_or_air` routine for id or air in the `core::world::block` module.
     #[inline]
     pub fn id_or_air(&self, name: &str) -> BlockId {
         self.id_opt(name).unwrap_or(0)
     }
 
+    /// Runs the `material` routine for material in the `core::world::block` module.
     #[inline]
     pub fn material(&self, id: BlockId) -> Handle<StandardMaterial> {
         self.def(id).material.clone()
     }
 
+    /// Runs the `stats` routine for stats in the `core::world::block` module.
     #[inline]
     pub fn stats(&self, id: BlockId) -> &BlockStats {
         &self.def(id).stats
     }
+    /// Checks whether air in the `core::world::block` module.
     #[inline]
     pub fn is_air(&self, id: BlockId) -> bool {
         id == 0
     }
+    /// Checks whether opaque in the `core::world::block` module.
     #[inline]
     pub fn is_opaque(&self, id: BlockId) -> bool {
         self.stats(id).opaque
     }
+    /// Checks whether fluid in the `core::world::block` module.
     #[inline]
     pub fn is_fluid(&self, id: BlockId) -> bool {
         self.stats(id).fluid
     }
+    /// Runs the `emissive` routine for emissive in the `core::world::block` module.
     #[inline]
     pub fn emissive(&self, id: BlockId) -> f32 {
         self.stats(id).emissive
     }
+    /// Runs the `hardness` routine for hardness in the `core::world::block` module.
     #[inline]
     pub fn hardness(&self, id: BlockId) -> f32 {
         self.stats(id).hardness.max(0.0)
     }
 
+    /// Runs the `level` routine for level in the `core::world::block` module.
     #[inline]
     pub fn level(&self, id: BlockId) -> u8 {
         self.stats(id).level.min(6)
     }
 
+    /// Runs the `uv` routine for uv in the `core::world::block` module.
     #[inline]
     pub fn uv(&self, id: BlockId, face: Face) -> UvRect {
         let d = self.def(id);
@@ -174,6 +197,7 @@ impl BlockRegistry {
         }
     }
 
+    /// Runs the `face_uvs` routine for face uvs in the `core::world::block` module.
     #[inline]
     pub fn face_uvs(&self, id: BlockId) -> (UvRect, UvRect, UvRect, UvRect, UvRect, UvRect) {
         let d = self.def(id);
@@ -187,6 +211,7 @@ impl BlockRegistry {
         )
     }
 
+    /// Loads all for the `core::world::block` module.
     pub fn load_all(
         asset_server: &AssetServer,
         materials: &mut Assets<StandardMaterial>,
@@ -287,6 +312,7 @@ impl BlockRegistry {
         Self { defs, name_to_id }
     }
 
+    /// Loads headless for the `core::world::block` module.
     pub fn load_headless(blocks_dir: &str) -> Self {
         let mut defs: Vec<BlockDef> = Vec::new();
         let mut name_to_id = HashMap::new();
@@ -329,6 +355,7 @@ impl BlockRegistry {
 
 /* ---------------- optional enum helpers ---------------- */
 
+/// Defines the possible blocks variants in the `core::world::block` module.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Blocks {
     Dirt,
@@ -346,6 +373,7 @@ pub enum Blocks {
     Snow,
 }
 impl Blocks {
+    /// Runs the `localized_name` routine for localized name in the `core::world::block` module.
     pub const fn localized_name(self) -> &'static str {
         match self {
             Blocks::Dirt => "dirt_block",
@@ -365,6 +393,7 @@ impl Blocks {
     }
 }
 impl AsRef<str> for Blocks {
+    /// Runs the `as_ref` routine for as ref in the `core::world::block` module.
     fn as_ref(&self) -> &str {
         self.localized_name()
     }
@@ -372,14 +401,17 @@ impl AsRef<str> for Blocks {
 
 /* ---------------- mining helpers ---------------- */
 
+/// Represents mining overlay root used by the `core::world::block` module.
 #[derive(Resource, Default)]
 pub struct MiningOverlayRoot(pub Option<Entity>);
 
+/// Represents mining state used by the `core::world::block` module.
 #[derive(Resource, Default)]
 pub struct MiningState {
     pub target: Option<MiningTarget>,
 }
 
+/// Represents mining target used by the `core::world::block` module.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MiningTarget {
     pub loc: IVec3,
@@ -408,6 +440,7 @@ pub const DIR6: [IVec3; 6] = [
     IVec3::new(0, 0, -1), // -Z
 ];
 
+/// Runs the `face_offset` routine for face offset in the `core::world::block` module.
 #[inline]
 pub fn face_offset(f: Face) -> IVec3 {
     match f {
@@ -420,6 +453,7 @@ pub fn face_offset(f: Face) -> IVec3 {
     }
 }
 
+/// Runs the `neighbor_world` routine for neighbor world in the `core::world::block` module.
 #[inline]
 pub fn neighbor_world(wp: IVec3, f: Face) -> IVec3 {
     wp + face_offset(f)
@@ -427,15 +461,18 @@ pub fn neighbor_world(wp: IVec3, f: Face) -> IVec3 {
 
 /* ---------------- space conversions ---------------- */
 
+/// Runs the `to_block_space` routine for to block space in the `core::world::block` module.
 #[inline]
 pub fn to_block_space(v: Vec3) -> Vec3 {
     v / VOXEL_SIZE
 }
+/// Runs the `to_world_space` routine for to world space in the `core::world::block` module.
 #[inline]
 pub fn to_world_space(v: Vec3) -> Vec3 {
     v * VOXEL_SIZE
 }
 
+/// Runs the `block_center_world` routine for block center world in the `core::world::block` module.
 #[inline]
 pub fn block_center_world(wp: IVec3) -> Vec3 {
     let s = VOXEL_SIZE;
@@ -446,17 +483,20 @@ pub fn block_center_world(wp: IVec3) -> Vec3 {
     )
 }
 
+/// Runs the `block_origin_world` routine for block origin world in the `core::world::block` module.
 #[inline]
 pub fn block_origin_world(wp: IVec3) -> Vec3 {
     to_world_space(Vec3::new(wp.x as f32, wp.y as f32, wp.z as f32))
 }
 
+/// Represents aabb3 used by the `core::world::block` module.
 #[derive(Clone, Copy, Debug)]
 pub struct Aabb3 {
     pub min: Vec3,
     pub max: Vec3,
 }
 
+/// Runs the `block_aabb_world` routine for block aabb world in the `core::world::block` module.
 #[inline]
 pub fn block_aabb_world(wp: IVec3) -> Aabb3 {
     let o = block_origin_world(wp);
@@ -469,6 +509,7 @@ pub fn block_aabb_world(wp: IVec3) -> Aabb3 {
 
 /* ---------------- chunk lookups ---------------- */
 
+/// Runs the `chunk_and_local_from_world` routine for chunk and local from world in the `core::world::block` module.
 #[inline]
 pub fn chunk_and_local_from_world(wp: IVec3) -> (IVec2, usize, usize, usize) {
     let (cc, l) = world_to_chunk_xz(wp.x, wp.z);
@@ -478,6 +519,7 @@ pub fn chunk_and_local_from_world(wp: IVec3) -> (IVec2, usize, usize, usize) {
     (cc, lx, ly, lz)
 }
 
+/// Runs the `face_visible_against` routine for face visible against in the `core::world::block` module.
 #[inline]
 pub fn face_visible_against(reg: &BlockRegistry, self_id: BlockId, neigh_id: BlockId) -> bool {
     if reg.is_air(self_id) {
@@ -492,6 +534,7 @@ pub fn face_visible_against(reg: &BlockRegistry, self_id: BlockId, neigh_id: Blo
     !reg.is_opaque(neigh_id)
 }
 
+/// Runs the `water_face_visible_against` routine for water face visible against in the `core::world::block` module.
 #[inline]
 pub fn water_face_visible_against(reg: &BlockRegistry, neigh_id: BlockId) -> bool {
     if reg.is_fluid(neigh_id) {
@@ -500,6 +543,7 @@ pub fn water_face_visible_against(reg: &BlockRegistry, neigh_id: BlockId) -> boo
     !reg.is_opaque(neigh_id)
 }
 
+/// Returns block world for the `core::world::block` module.
 #[inline]
 pub fn get_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
     if wp.y < Y_MIN || wp.y > Y_MAX {
@@ -515,11 +559,13 @@ pub fn get_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
     chunk.get(lx, ly, lz)
 }
 
+/// Returns id world for the `core::world::block` module.
 #[inline]
 pub fn get_id_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
     get_block_world(chunk_map, wp)
 }
 
+/// Sets id world for the `core::world::block` module.
 pub fn set_id_world(chunk_map: &mut ChunkMap, wp: IVec3, id: BlockId) -> Option<BlockId> {
     let Some(mut access) = world_access_mut(chunk_map, wp) else {
         return None;
@@ -529,6 +575,7 @@ pub fn set_id_world(chunk_map: &mut ChunkMap, wp: IVec3, id: BlockId) -> Option<
     Some(old)
 }
 
+/// Runs the `place_if_air` routine for place if air in the `core::world::block` module.
 pub fn place_if_air(chunk_map: &mut ChunkMap, wp: IVec3, id: BlockId) -> Result<(), ()> {
     if get_id_world(chunk_map, wp) == 0 {
         set_id_world(chunk_map, wp, id);
@@ -538,6 +585,7 @@ pub fn place_if_air(chunk_map: &mut ChunkMap, wp: IVec3, id: BlockId) -> Result<
     }
 }
 
+/// Runs the `fluid_at_world` routine for fluid at world in the `core::world::block` module.
 #[inline]
 pub fn fluid_at_world(fluids: &FluidMap, wx: i32, wy: i32, wz: i32) -> bool {
     if wy < Y_MIN || wy > Y_MAX {
@@ -555,6 +603,7 @@ pub fn fluid_at_world(fluids: &FluidMap, wx: i32, wy: i32, wz: i32) -> bool {
 
 /* ---------------- misc helpers ---------------- */
 
+/// Runs the `block_name_from_registry` routine for block name from registry in the `core::world::block` module.
 #[inline]
 pub fn block_name_from_registry(reg: &BlockRegistry, id: BlockId) -> String {
     reg.name_to_id
@@ -564,12 +613,14 @@ pub fn block_name_from_registry(reg: &BlockRegistry, id: BlockId) -> String {
         .unwrap_or_else(|| format!("#{id}"))
 }
 
+/// Runs the `break_time_for` routine for break time for in the `core::world::block` module.
 #[inline]
 pub fn break_time_for(id: BlockId, registry: &BlockRegistry) -> f32 {
     let time = registry.hardness(id);
     (BASE_BREAK_TIME + PER_HARDNESS * time).clamp(MIN_BREAK_TIME, MAX_BREAK_TIME)
 }
 
+/// Runs the `mining_progress` routine for mining progress in the `core::world::block` module.
 #[inline]
 pub fn mining_progress(now: f32, target: &MiningTarget) -> f32 {
     ((now - target.started_at) / target.duration).clamp(0.0, 1.0)
@@ -577,6 +628,7 @@ pub fn mining_progress(now: f32, target: &MiningTarget) -> f32 {
 
 /* ---------------- spawning ---------------- */
 
+/// Spawns block by id for the `core::world::block` module.
 pub fn spawn_block_by_id(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -595,6 +647,7 @@ pub fn spawn_block_by_id(
     ));
 }
 
+/// Spawns block by name for the `core::world::block` module.
 pub fn spawn_block_by_name<P: AsRef<str>>(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -607,6 +660,7 @@ pub fn spawn_block_by_name<P: AsRef<str>>(
     spawn_block_by_id(commands, meshes, reg, id, world_pos, size);
 }
 
+/// Runs the `id_any` routine for id any in the `core::world::block` module.
 #[inline]
 pub fn id_any(reg: &BlockRegistry, names: &[&str]) -> BlockId {
     for n in names {
@@ -626,6 +680,7 @@ const Z: UvRect = UvRect {
     v1: 0.0,
 };
 
+/// Runs the `block_json_paths` routine for block json paths in the `core::world::block` module.
 fn block_json_paths(blocks_dir: &str) -> Vec<PathBuf> {
     let dir = Path::new(blocks_dir);
     let mut paths = Vec::new();
@@ -638,6 +693,7 @@ fn block_json_paths(blocks_dir: &str) -> Vec<PathBuf> {
     paths
 }
 
+/// Represents block tileset used by the `core::world::block` module.
 #[derive(Deserialize)]
 struct BlockTileset {
     pub image: String,
@@ -647,6 +703,7 @@ struct BlockTileset {
     pub tiles: HashMap<String, [u32; 2]>,
 }
 
+/// Represents block json used by the `core::world::block` module.
 #[derive(Deserialize)]
 struct BlockJson {
     pub name: String,
@@ -656,6 +713,7 @@ struct BlockJson {
     pub stats: BlockStats,
 }
 
+/// Represents texture faces json used by the `core::world::block` module.
 #[derive(Deserialize)]
 struct TextureFacesJson {
     // direct faces
@@ -686,7 +744,9 @@ struct TextureFacesJson {
 }
 
 impl TextureFacesJson {
+    /// Runs the `resolve` routine for resolve in the `core::world::block` module.
     fn resolve(&self) -> ResolvedFaces<'_> {
+        /// Picks the requested data for the `core::world::block` module.
         #[inline]
         fn pick<'a>(specific: &'a str, group: &'a str, all: &'a str) -> &'a str {
             if !specific.is_empty() {
@@ -715,6 +775,7 @@ impl TextureFacesJson {
     }
 }
 
+/// Represents resolved faces used by the `core::world::block` module.
 struct ResolvedFaces<'a> {
     top: &'a str,
     bottom: &'a str,
@@ -726,14 +787,17 @@ struct ResolvedFaces<'a> {
 
 /* ---------------- defaults + io ---------------- */
 
+/// Runs the `d_true` routine for d true in the `core::world::block` module.
 fn d_true() -> bool {
     true
 }
 
+/// Deserializes block level for the `core::world::block` module.
 fn deserialize_block_level<'de, D>(deserializer: D) -> Result<u8, D::Error>
 where
     D: Deserializer<'de>,
 {
+    /// Defines the possible level repr variants in the `core::world::block` module.
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum LevelRepr {
@@ -758,6 +822,7 @@ where
     Ok(parsed.min(6))
 }
 
+/// Runs the `require_face` routine for require face in the `core::world::block` module.
 #[inline]
 fn require_face<'a>(name: &'a str, face: &str, block_name: &str) -> &'a str {
     if name.is_empty() {
@@ -769,11 +834,13 @@ fn require_face<'a>(name: &'a str, face: &str, block_name: &str) -> &'a str {
     name
 }
 
+/// Reads json for the `core::world::block` module.
 fn read_json<T: for<'de> Deserialize<'de>>(path: &str) -> T {
     let s = fs::read_to_string(path).unwrap_or_else(|_| panic!("missing file: {path}"));
     serde_json::from_str(&s).unwrap_or_else(|e| panic!("invalid JSON '{path}': {e}"))
 }
 
+/// Guesses tex dir from block name for the `core::world::block` module.
 fn guess_tex_dir_from_block_name(block_name: &str) -> String {
     let base = block_name.strip_suffix("_block").unwrap_or(block_name);
     format!("textures/blocks/{}", base)
@@ -781,6 +848,7 @@ fn guess_tex_dir_from_block_name(block_name: &str) -> String {
 
 /* ---------------- uv helpers ---------------- */
 
+/// Runs the `tile_uv` routine for tile uv in the `core::world::block` module.
 fn tile_uv(ts: &BlockTileset, name: &str) -> Result<UvRect, String> {
     let [col, row] = *ts
         .tiles
@@ -810,6 +878,7 @@ fn tile_uv(ts: &BlockTileset, name: &str) -> Result<UvRect, String> {
     Ok(UvRect { u0, v0, u1, v1 })
 }
 
+/// Runs the `atlas_uv` routine for atlas uv in the `core::world::block` module.
 fn atlas_uv(
     tile_x: usize,
     tile_y: usize,
@@ -838,6 +907,7 @@ pub fn cube_mesh_from_faces_tuple(
     faces: (UvRect, UvRect, UvRect, UvRect, UvRect, UvRect),
     size: f32,
 ) -> Mesh {
+    /// Runs the `quad_uv` routine for quad uv in the `core::world::block` module.
     #[inline]
     fn quad_uv(uv: &UvRect, flip_v: bool) -> [[f32; 2]; 4] {
         if !flip_v {
@@ -865,6 +935,7 @@ pub fn cube_mesh_from_faces_tuple(
     let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(24);
     let mut idx: Vec<u32> = Vec::with_capacity(36);
 
+    /// Runs the `append_quad` routine for append quad in the `core::world::block` module.
     #[inline]
     fn append_quad(
         pos: &mut Vec<[f32; 3]>,
@@ -965,11 +1036,13 @@ pub fn build_block_cube_mesh(reg: &BlockRegistry, id: BlockId, size: f32) -> Mes
 
 /* ---------------- small utils ---------------- */
 
+/// Runs the `world_y_to_local` routine for world y to local in the `core::world::block` module.
 #[inline]
 fn world_y_to_local(wy: i32) -> usize {
     (wy - Y_MIN) as usize
 }
 
+/// Runs the `material_policy_from_stats` routine for material policy from stats in the `core::world::block` module.
 #[inline]
 fn material_policy_from_stats(stats: &BlockStats) -> (AlphaMode, Color) {
     if stats.opaque {

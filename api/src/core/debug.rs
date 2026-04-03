@@ -98,6 +98,7 @@ impl Default for SysStats {
     }
 }
 
+/// Represents build info used by the `core::debug` module.
 #[derive(Resource, Clone)]
 pub struct BuildInfo {
     pub app_name: &'static str,

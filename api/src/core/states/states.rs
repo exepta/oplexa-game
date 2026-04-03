@@ -63,6 +63,7 @@ pub enum FetchState {
     FetchingComplete,
 }
 
+/// Defines the possible loading states variants in the `core::states::states` module.
 #[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash)]
 pub enum LoadingStates {
     #[default]

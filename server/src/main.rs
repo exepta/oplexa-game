@@ -7,11 +7,11 @@ mod types;
 use crate::{
     bootstrap::{ServerBootstrapConfig, load_bootstrap, spawn_server},
     services::{
-        flush_chunk_streaming, handle_auth_messages, handle_block_break_messages,
-        handle_block_place_messages, handle_chunk_interest_messages, handle_client_connected,
-        handle_client_disconnected, handle_drop_item_messages, handle_drop_pickup_messages,
-        handle_keepalive_messages, handle_new_client, handle_player_move_messages,
-        poll_lan_discovery, purge_stale_players,
+        cleanup_orphaned_players, flush_chunk_streaming, handle_auth_messages,
+        handle_block_break_messages, handle_block_place_messages, handle_chunk_interest_messages,
+        handle_client_connected, handle_client_disconnected, handle_drop_item_messages,
+        handle_drop_pickup_messages, handle_keepalive_messages, handle_new_client,
+        handle_player_move_messages, poll_lan_discovery, purge_stale_players,
     },
     state::ServerState,
 };
@@ -23,6 +23,7 @@ use lightyear::prelude::server::ServerPlugins;
 use simple_logger::SimpleLogger;
 use std::time::Duration;
 
+/// Runs the `main` routine for main in the `project` module.
 fn main() {
     SimpleLogger::new()
         .with_level(log::LevelFilter::Info)
@@ -67,11 +68,13 @@ fn main() {
                 handle_drop_pickup_messages,
                 flush_chunk_streaming,
                 purge_stale_players,
+                cleanup_orphaned_players,
                 poll_lan_discovery,
             ),
         )
         .run();
 }
 
+/// Represents lan discovery resource used by the `project` module.
 #[derive(Resource)]
 pub struct LanDiscoveryResource(pub Option<LanDiscoveryServer>);

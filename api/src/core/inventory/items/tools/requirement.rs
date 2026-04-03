@@ -1,5 +1,6 @@
 use crate::core::inventory::items::tools::{ToolDef, ToolLevel, ToolType};
 
+/// Represents tool requirement used by the `core::inventory::items::tools::requirement` module.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct ToolRequirement {
     pub tool_type: ToolType,
@@ -7,6 +8,7 @@ pub struct ToolRequirement {
 }
 
 impl ToolRequirement {
+    /// Creates a new instance for the `core::inventory::items::tools::requirement` module.
     #[inline]
     pub const fn new(tool_type: ToolType, min_level: ToolLevel) -> Self {
         Self {
@@ -15,6 +17,7 @@ impl ToolRequirement {
         }
     }
 
+    /// Checks whether met by in the `core::inventory::items::tools::requirement` module.
     #[inline]
     pub fn is_met_by(self, tool: Option<ToolDef>) -> bool {
         match tool {

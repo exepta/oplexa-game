@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use fastnoise_lite::*;
 /* ========================= Generator =================================== */
 
+/// Generates chunk async biome for the `generator::chunk::chunk_gen` module.
 pub(crate) async fn generate_chunk_async_biome(
     coord: IVec2,
     reg: &BlockRegistry,
@@ -52,6 +53,7 @@ pub(crate) async fn generate_chunk_async_biome(
 
     // Small helper: compute total land height (base and optional mountains) for one land site
     // and tell which biome should provide surface materials for this column if that site dominates.
+    /// Runs the `site_total_height` routine for site total height in the `generator::chunk::chunk_gen` module.
     #[inline]
     fn site_total_height<'a>(
         plains_n: &FastNoiseLite,
@@ -426,6 +428,7 @@ pub(crate) async fn generate_chunk_async_biome(
 
 /* ============================= Noises ======================================= */
 
+/// Creates seafloor noise for the `generator::chunk::chunk_gen` module.
 fn make_seafloor_noise(seed: i32, freq: f32) -> FastNoiseLite {
     let mut n = FastNoiseLite::with_seed(seed);
     n.set_noise_type(Some(NoiseType::OpenSimplex2));
@@ -437,6 +440,7 @@ fn make_seafloor_noise(seed: i32, freq: f32) -> FastNoiseLite {
     n
 }
 
+/// Creates plains noise for the `generator::chunk::chunk_gen` module.
 fn make_plains_noise(seed: i32, freq: f32) -> FastNoiseLite {
     const SEED_SALT_PLAINS: i32 = 0x504C_4149;
     let mut n = FastNoiseLite::with_seed(seed ^ SEED_SALT_PLAINS);
@@ -449,6 +453,7 @@ fn make_plains_noise(seed: i32, freq: f32) -> FastNoiseLite {
     n
 }
 
+/// Creates coast noise for the `generator::chunk::chunk_gen` module.
 fn make_coast_noise(seed: i32, freq: f32) -> FastNoiseLite {
     let mut n = FastNoiseLite::with_seed(seed);
     n.set_noise_type(Some(NoiseType::OpenSimplex2));
@@ -462,6 +467,7 @@ fn make_coast_noise(seed: i32, freq: f32) -> FastNoiseLite {
 
 /* ============================= Height Samplers =============================== */
 
+/// Runs the `sample_ocean_height` routine for sample ocean height in the `generator::chunk::chunk_gen` module.
 #[inline]
 fn sample_ocean_height(
     n: &FastNoiseLite,
@@ -479,6 +485,7 @@ fn sample_ocean_height(
     clamp_world_y(base + undulation).min((sea_level - 2) as f32)
 }
 
+/// Runs the `sample_plains_height` routine for sample plains height in the `generator::chunk::chunk_gen` module.
 #[inline]
 fn sample_plains_height(
     n: &FastNoiseLite,
@@ -497,6 +504,7 @@ fn sample_plains_height(
 
 /* ============= Mountains (plains-based delta composer) =================== */
 
+/// Runs the `sample_plains_mountain_delta` routine for sample plains mountain delta in the `generator::chunk::chunk_gen` module.
 #[inline]
 fn sample_plains_mountain_delta(n: &FastNoiseLite, ux: f32, uz: f32, amp_json: f32) -> f32 {
     // Two bands at different scales mixed towards broader shapes

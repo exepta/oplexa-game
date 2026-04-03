@@ -23,6 +23,7 @@ pub struct RiverSystem {
 }
 
 impl RiverSystem {
+    /// Creates a new instance for the `generator::chunk::river_utils` module.
     pub fn new(seed: i32) -> Self {
         // Base noise making long, meandering bands near zero
         let mut river_n = FastNoiseLite::with_seed(seed ^ 0x52495631); // 'RIV1'
@@ -195,6 +196,7 @@ impl RiverSystem {
         max_p >= 0.60
     }
 
+    /// Runs the `potential_with_dir` routine for potential with dir in the `generator::chunk::river_utils` module.
     pub fn potential_with_dir(&self, wxf: f32, wzf: f32, width_blocks: i32) -> (f32, Vec2) {
         if width_blocks <= 0 {
             return (0.0, Vec2::ZERO);
@@ -342,6 +344,7 @@ impl RiverSystem {
 
 /* ===================== small helpers ====================== */
 
+/// Runs the `div_floor` routine for div floor in the `generator::chunk::river_utils` module.
 #[inline]
 fn div_floor(a: i32, b: i32) -> i32 {
     // floor division for negatives
@@ -352,6 +355,7 @@ fn div_floor(a: i32, b: i32) -> i32 {
     }
 }
 
+/// Runs the `hash3` routine for hash3 in the `generator::chunk::river_utils` module.
 #[inline]
 fn hash3(a: i64, b: i64, c: i64) -> u64 {
     // 64-bit mix from 3 inputs
@@ -361,6 +365,7 @@ fn hash3(a: i64, b: i64, c: i64) -> u64 {
     split_mix_64(x)
 }
 
+/// Runs the `split_mix_64` routine for split mix 64 in the `generator::chunk::river_utils` module.
 #[inline]
 fn split_mix_64(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E3779B97F4A7C15);
@@ -370,6 +375,7 @@ fn split_mix_64(mut x: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// Runs the `u64_to_unit01` routine for u64 to unit01 in the `generator::chunk::river_utils` module.
 #[inline]
 fn u64_to_unit01(x: u64) -> f32 {
     // to [0,1)

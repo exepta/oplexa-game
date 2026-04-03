@@ -1,7 +1,9 @@
+/// Runs the `configure_extended_ui` routine for configure extended ui in the `graphic::components::theme` module.
 fn configure_extended_ui(mut config: ResMut<ExtendedUiConfiguration>) {
     config.order = 25;
 }
 
+/// Runs the `full_screen_center_node` routine for full screen center node in the `graphic::components::theme` module.
 fn full_screen_center_node() -> Node {
     Node {
         width: Val::Percent(100.0),
@@ -15,6 +17,7 @@ fn full_screen_center_node() -> Node {
     }
 }
 
+/// Runs the `menu_panel_node` routine for menu panel node in the `graphic::components::theme` module.
 fn menu_panel_node() -> Node {
     Node {
         width: Val::Px(640.0),
@@ -28,6 +31,7 @@ fn menu_panel_node() -> Node {
     }
 }
 
+/// Runs the `dialog_overlay_node` routine for dialog overlay node in the `graphic::components::theme` module.
 fn dialog_overlay_node() -> Node {
     Node {
         width: Val::Percent(100.0),
@@ -41,6 +45,7 @@ fn dialog_overlay_node() -> Node {
     }
 }
 
+/// Runs the `dialog_box_node` routine for dialog box node in the `graphic::components::theme` module.
 fn dialog_box_node() -> Node {
     Node {
         width: Val::Px(420.0),
@@ -53,42 +58,52 @@ fn dialog_box_node() -> Node {
     }
 }
 
+/// Runs the `color_background` routine for color background in the `graphic::components::theme` module.
 fn color_background() -> Color {
     Color::srgb_u8(0x30, 0x34, 0x40)
 }
 
+/// Runs the `color_background_hover` routine for color background hover in the `graphic::components::theme` module.
 fn color_background_hover() -> Color {
     Color::srgb_u8(0x39, 0x3d, 0x4a)
 }
 
+/// Runs the `color_single_player_list_background` routine for color single player list background in the `graphic::components::theme` module.
 fn color_single_player_list_background() -> Color {
     Color::srgb_u8(0x26, 0x2a, 0x35)
 }
 
+/// Runs the `color_accent` routine for color accent in the `graphic::components::theme` module.
 fn color_accent() -> Color {
     Color::srgb_u8(0x40, 0xc2, 0x99)
 }
 
+/// Runs the `color_accent_hover` routine for color accent hover in the `graphic::components::theme` module.
 fn color_accent_hover() -> Color {
     Color::srgb_u8(0x42, 0xd4, 0xa5)
 }
 
+/// Runs the `color_text` routine for color text in the `graphic::components::theme` module.
 fn color_text() -> Color {
     Color::WHITE
 }
 
+/// Runs the `color_text_darker` routine for color text darker in the `graphic::components::theme` module.
 fn color_text_darker() -> Color {
     Color::srgb_u8(0x9f, 0xa1, 0xa0)
 }
 
+/// Runs the `color_server_offline_border` routine for color server offline border in the `graphic::components::theme` module.
 fn color_server_offline_border() -> Color {
     Color::srgb_u8(0xd4, 0x4c, 0x4c)
 }
 
+/// Runs the `color_server_waiting_border` routine for color server waiting border in the `graphic::components::theme` module.
 fn color_server_waiting_border() -> Color {
     Color::srgb_u8(0xe0, 0x98, 0x2d)
 }
 
+/// Applies button layout for the `graphic::components::theme` module.
 fn apply_button_layout(node: &mut Node, kind: UiButtonKind) {
     match kind {
         UiButtonKind::Action => {
@@ -153,6 +168,7 @@ fn apply_button_layout(node: &mut Node, kind: UiButtonKind) {
     }
 }
 
+/// Runs the `layout_buttons_once` routine for layout buttons once in the `graphic::components::theme` module.
 fn layout_buttons_once(
     mut commands: Commands,
     mut buttons: Query<
@@ -166,6 +182,7 @@ fn layout_buttons_once(
     }
 }
 
+/// Runs the `style_buttons` routine for style buttons in the `graphic::components::theme` module.
 fn style_buttons(
     mut buttons: Query<
         (
@@ -206,6 +223,7 @@ fn style_buttons(
     }
 }
 
+/// Runs the `layout_inputs_once` routine for layout inputs once in the `graphic::components::theme` module.
 fn layout_inputs_once(
     mut commands: Commands,
     mut fields: Query<(Entity, &mut Node), (With<InputField>, Without<UiInputLayoutApplied>)>,
@@ -220,6 +238,7 @@ fn layout_inputs_once(
     }
 }
 
+/// Runs the `style_inputs` routine for style inputs in the `graphic::components::theme` module.
 fn style_inputs(
     mut fields: Query<(&UIWidgetState, &mut BackgroundColor, &mut BorderColor), With<InputField>>,
 ) {
@@ -237,6 +256,7 @@ fn style_inputs(
     }
 }
 
+/// Runs the `style_paragraphs` routine for style paragraphs in the `graphic::components::theme` module.
 fn style_paragraphs(
     mut texts: Query<(&mut TextColor, &mut TextFont, Option<&UiTextTone>), With<Node>>,
 ) {
@@ -260,6 +280,7 @@ fn style_paragraphs(
     }
 }
 
+/// Runs the `style_pause_menu_button_texts` routine for style pause menu button texts in the `graphic::components::theme` module.
 fn style_pause_menu_button_texts(
     buttons: Query<(&UIGenID, &CssID), With<Button>>,
     mut texts: Query<(&BindToID, &mut TextFont, &mut TextColor), With<Text>>,
@@ -283,6 +304,7 @@ fn style_pause_menu_button_texts(
     }
 }
 
+/// Runs the `style_images` routine for style images in the `graphic::components::theme` module.
 fn style_images(mut images: Query<(&CssID, &mut Node), With<Img>>) {
     for (_css_id, mut node) in &mut images {
         node.width = Val::Px(32.0);
@@ -292,6 +314,7 @@ fn style_images(mut images: Query<(&CssID, &mut Node), With<Img>>) {
     }
 }
 
+/// Runs the `style_button_icons` routine for style button icons in the `graphic::components::theme` module.
 fn style_button_icons(mut images: Query<(&Name, &mut Node), With<ImageNode>>) {
     /// Inventory and hotbar item icon edge length in pixels.
     const ITEM_ICON_SIZE_PX: f32 = 36.8;
@@ -307,6 +330,7 @@ fn style_button_icons(mut images: Query<(&Name, &mut Node), With<ImageNode>>) {
     }
 }
 
+/// Runs the `style_slot_count_badges` routine for style slot count badges in the `graphic::components::theme` module.
 fn style_slot_count_badges(
     mut badges: Query<(&CssID, &mut Node, &mut TextFont, &mut TextColor), With<Paragraph>>,
 ) {
@@ -336,6 +360,7 @@ fn style_slot_count_badges(
     }
 }
 
+/// Runs the `style_scroll_div_lists` routine for style scroll div lists in the `graphic::components::theme` module.
 fn style_scroll_div_lists(
     mut commands: Commands,
     mut lists: ParamSet<(
@@ -483,6 +508,7 @@ fn style_scroll_div_lists(
     }
 }
 
+/// Runs the `style_div_scrollbars` routine for style div scrollbars in the `graphic::components::theme` module.
 fn style_div_scrollbars(
     mut nodes: Query<(
         &Name,
@@ -577,6 +603,7 @@ fn style_div_scrollbars(
     }
 }
 
+/// Runs the `style_scroll_div_contents` routine for style scroll div contents in the `graphic::components::theme` module.
 fn style_scroll_div_contents(
     mut contents: Query<(&Name, &mut Node), With<ScrollPosition>>,
 ) {
@@ -604,6 +631,7 @@ fn style_scroll_div_contents(
     }
 }
 
+/// Runs the `style_progress_bars` routine for style progress bars in the `graphic::components::theme` module.
 fn style_progress_bars(
     mut bars: Query<(&mut Node, &mut BackgroundColor, &Children), With<ProgressBar>>,
     mut tracks: Query<&mut BackgroundColor, (With<BindToID>, Without<ProgressBar>)>,

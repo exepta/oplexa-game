@@ -6,14 +6,18 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use std::f32::consts::TAU;
 
+/// Represents crosshair used by the `logic::entities::player::cross_hair_service` module.
 #[derive(Component)]
 struct Crosshair;
 
+/// Represents crosshair camera used by the `logic::entities::player::cross_hair_service` module.
 #[derive(Component)]
 struct CrosshairCamera;
 
+/// Represents crosshair handler used by the `logic::entities::player::cross_hair_service` module.
 pub struct CrosshairHandler;
 impl Plugin for CrosshairHandler {
+    /// Builds this component for the `logic::entities::player::cross_hair_service` module.
     fn build(&self, app: &mut App) {
         app.add_systems(
             OnEnter(AppState::InGame(InGameStates::Game)),

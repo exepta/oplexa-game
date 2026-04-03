@@ -25,9 +25,11 @@ pub struct UnorderedUnreliable;
 
 // ── Protocol registration plugin ─────────────────────────────────────────────
 
+/// Represents protocol plugin used by the `core::network::protocols` module.
 pub struct ProtocolPlugin;
 
 impl Plugin for ProtocolPlugin {
+    /// Builds this component for the `core::network::protocols` module.
     fn build(&self, app: &mut App) {
         // Channels
         app.add_channel::<OrderedReliable>(ChannelSettings {
@@ -52,6 +54,8 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<Auth>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<ServerWelcome>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<ServerAuthRejected>()
             .add_direction(NetworkDirection::ServerToClient);
 
         // Messages – players

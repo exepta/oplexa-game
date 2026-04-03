@@ -83,6 +83,9 @@ features = ["clock"]
 [dependencies.dotenvy]
 version = "0.15.7"
 
+[dependencies.ctrlc]
+version = "3.4.5"
+
 [dev-dependencies.serial_test]
 version = "3.2.0"
 

@@ -9,12 +9,15 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
+/// Represents look at service used by the `logic::entities::player::look_at_service` module.
 pub struct LookAtService;
 
+/// Represents selection outline root used by the `logic::entities::player::look_at_service` module.
 #[derive(Component)]
 struct SelectionOutlineRoot;
 
 impl Plugin for LookAtService {
+    /// Builds this component for the `logic::entities::player::look_at_service` module.
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_selection_outline);
 
@@ -41,6 +44,7 @@ impl Plugin for LookAtService {
     }
 }
 
+/// Spawns selection outline for the `logic::entities::player::look_at_service` module.
 fn spawn_selection_outline(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -118,6 +122,7 @@ fn spawn_selection_outline(
         });
 }
 
+/// Updates selection for the `logic::entities::player::look_at_service` module.
 fn update_selection(
     mut sel: ResMut<SelectionState>,
     game_mode: Res<GameModeState>,
@@ -146,6 +151,7 @@ fn update_selection(
     sel.hit = ray_cast_voxels(origin_bs, dir_bs, max_dist_blocks, &chunk_map);
 }
 
+/// Synchronizes selection outline for the `logic::entities::player::look_at_service` module.
 fn sync_selection_outline(
     sel: Res<SelectionState>,
     game_mode: Res<GameModeState>,
@@ -173,6 +179,7 @@ fn sync_selection_outline(
     }
 }
 
+/// Picks block from look for the `logic::entities::player::look_at_service` module.
 fn pick_block_from_look(
     buttons: Res<ButtonInput<MouseButton>>,
     game_mode: Res<GameModeState>,
