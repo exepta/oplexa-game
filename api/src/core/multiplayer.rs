@@ -19,6 +19,7 @@ pub enum WorldDataMode {
 /// Represents multiplayer connection state used by the `core::multiplayer` module.
 #[derive(Resource, Debug, Clone)]
 pub struct MultiplayerConnectionState {
+    pub client_uuid: Option<String>,
     pub connected: bool,
     pub phase: MultiplayerConnectionPhase,
     pub world_data_mode: WorldDataMode,
@@ -34,6 +35,7 @@ impl Default for MultiplayerConnectionState {
     /// Runs the `default` routine for default in the `core::multiplayer` module.
     fn default() -> Self {
         Self {
+            client_uuid: None,
             connected: false,
             phase: MultiplayerConnectionPhase::Idle,
             world_data_mode: WorldDataMode::Local,
@@ -48,6 +50,14 @@ impl Default for MultiplayerConnectionState {
 }
 
 impl MultiplayerConnectionState {
+    /// Builds connection state with client uuid for the `core::multiplayer` module.
+    pub fn with_client_uuid(client_uuid: impl Into<String>) -> Self {
+        Self {
+            client_uuid: Some(client_uuid.into()),
+            ..Self::default()
+        }
+    }
+
     /// Runs the `uses_local_save_data` routine for uses local save data in the `core::multiplayer` module.
     pub fn uses_local_save_data(&self) -> bool {
         self.world_data_mode == WorldDataMode::Local
