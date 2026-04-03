@@ -29,8 +29,9 @@ use api::core::network::{
     protocols::{
         Auth, ClientBlockBreak, ClientBlockPlace, ClientChunkInterest, ClientDropItem,
         ClientDropPickup, ClientKeepAlive, OrderedReliable, PlayerJoined, PlayerLeft, PlayerMove,
-        PlayerSnapshot, ProtocolPlugin, ServerBlockBreak, ServerBlockPlace, ServerChunkData,
-        ServerDropPicked, ServerDropSpawn, ServerWelcome, UnorderedReliable, UnorderedUnreliable,
+        PlayerSnapshot, ProtocolPlugin, ServerAuthRejected, ServerBlockBreak, ServerBlockPlace,
+        ServerChunkData, ServerDropPicked, ServerDropSpawn, ServerWelcome, UnorderedReliable,
+        UnorderedUnreliable,
     },
 };
 use bevy::ecs::event::EntityTrigger;
@@ -53,13 +54,16 @@ use lightyear::prelude::client::{
     NetcodeConfig, WebSocketClientIo, WebSocketScheme,
 };
 use lightyear::prelude::{Authentication, MessageReceiver, MessageSender, PeerAddr};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
+use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tracing_subscriber::Layer;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
@@ -253,6 +257,135 @@ const REMOTE_PLAYER_INTERP_BACK_TIME_SECS: f32 = 0.10;
 const REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS: f32 = 0.08;
 const REMOTE_PLAYER_MAX_SNAPSHOT_POINTS: usize = 24;
 const REMOTE_PLAYER_SMOOTHING_HZ: f32 = 18.0;
+const NETWORK_CONFIG_PATH: &str = "config/network.toml";
+const CTRL_C_GRACEFUL_EXIT_DELAY_SECS: f64 = 0.25;
+const SERVER_TIMEOUT_ERROR_TEXT: &str = "Server time out!";
+
+static TERMINAL_INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Debug)]
+struct ClientIdentity {
+    uuid: String,
+    player_name: String,
+    prod_mode: bool,
+    multi_instance: bool,
+}
+
+fn resolve_client_identity(settings: &mut NetworkSettings) -> ClientIdentity {
+    let multi_instance = is_multi_instance_enabled();
+    let prod_mode = settings.client.prod;
+    let persistent_identity_enabled = prod_mode && !multi_instance;
+    let configured_uuid = settings
+        .client
+        .client_uuid
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    let uuid = if let Some(configured_uuid) = configured_uuid {
+        configured_uuid
+    } else if persistent_identity_enabled {
+        if let Some(existing_uuid) = settings
+            .client
+            .client_uuid
+            .as_deref()
+            .filter(|value| parse_uuid_bytes(value).is_some())
+        {
+            existing_uuid.to_string()
+        } else {
+            let new_uuid = generate_uuid_v4_string();
+            settings.client.client_uuid = Some(new_uuid.clone());
+            if let Err(error) = settings.save(NETWORK_CONFIG_PATH) {
+                warn!(
+                    "Failed to persist client UUID to {}: {}",
+                    NETWORK_CONFIG_PATH, error
+                );
+            }
+            new_uuid
+        }
+    } else {
+        generate_uuid_v4_string()
+    };
+
+    let player_name = resolve_player_name(settings.client.player_name.as_str());
+
+    ClientIdentity {
+        uuid,
+        player_name,
+        prod_mode,
+        multi_instance,
+    }
+}
+
+fn is_multi_instance_enabled() -> bool {
+    env::var_os("multi_instance").is_some() || env::var_os("MULTI_INSTANCE").is_some()
+}
+
+fn generate_uuid_v4_string() -> String {
+    let mut bytes = rand::random::<[u8; 16]>();
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    let mut uuid = String::with_capacity(36);
+    for (index, byte) in bytes.iter().enumerate() {
+        if matches!(index, 4 | 6 | 8 | 10) {
+            uuid.push('-');
+        }
+        let _ = write!(&mut uuid, "{:02x}", byte);
+    }
+
+    uuid
+}
+
+fn parse_uuid_bytes(value: &str) -> Option<[u8; 16]> {
+    if value.len() != 36 {
+        return None;
+    }
+
+    let bytes = value.as_bytes();
+    for &separator_index in &[8usize, 13, 18, 23] {
+        if bytes.get(separator_index) != Some(&b'-') {
+            return None;
+        }
+    }
+
+    let mut compact = String::with_capacity(32);
+    for (index, ch) in value.chars().enumerate() {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            continue;
+        }
+        if !ch.is_ascii_hexdigit() {
+            return None;
+        }
+        compact.push(ch);
+    }
+
+    if compact.len() != 32 {
+        return None;
+    }
+
+    let mut decoded = [0u8; 16];
+    for (index, slot) in decoded.iter_mut().enumerate() {
+        let start = index * 2;
+        *slot = u8::from_str_radix(&compact[start..start + 2], 16).ok()?;
+    }
+
+    Some(decoded)
+}
+
+fn resolve_player_name(configured_name: &str) -> String {
+    let trimmed = configured_name.trim();
+    if trimmed.is_empty() || trimmed == "?" {
+        generate_random_player_name()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn generate_random_player_name() -> String {
+    format!("{:08x}", rand::random::<u32>())
+}
 
 /// Parses a session URL like "http://127.0.0.1:14191" into a SocketAddr.
 fn parse_session_url(url: &str) -> Option<SocketAddr> {
@@ -280,29 +413,44 @@ struct MultiplayerClientRuntime {
     enabled: bool,
     player_name: String,
     session_url: String,
+    client_uuid: String,
     auto_connect_lan: bool,
     connection_entity: Option<Entity>,
     local_player_id: Option<u64>,
     remote_players: HashMap<u64, Entity>,
+    disconnected_remote_players: HashSet<u64>,
     remote_player_smoothing: HashMap<u64, RemotePlayerSmoothing>,
     next_local_drop_seq: u32,
+    disconnect_requested: bool,
     keepalive_timer: Timer,
     send_timer: Timer,
 }
 
+#[derive(Resource, Default)]
+struct TerminalInterruptExitState {
+    started_at: Option<f64>,
+}
+
 impl MultiplayerClientRuntime {
-    fn new(settings: &NetworkSettings) -> Self {
+    fn new(settings: &NetworkSettings, identity: ClientIdentity) -> Self {
         let auto_connect_lan = settings.client.session_url.eq_ignore_ascii_case("lan:auto");
+        info!(
+            "Loaded client identity (prod={}, multi_instance={}): uuid={}, player_name={}",
+            identity.prod_mode, identity.multi_instance, identity.uuid, identity.player_name
+        );
         Self {
             enabled: settings.client.enabled,
-            player_name: settings.client.player_name.clone(),
+            player_name: identity.player_name,
             session_url: settings.client.session_url.clone(),
+            client_uuid: identity.uuid,
             auto_connect_lan,
             connection_entity: None,
             local_player_id: None,
             remote_players: HashMap::new(),
+            disconnected_remote_players: HashSet::new(),
             remote_player_smoothing: HashMap::new(),
             next_local_drop_seq: 1,
+            disconnect_requested: false,
             keepalive_timer: Timer::from_seconds(2.0, TimerMode::Repeating),
             send_timer: Timer::from_seconds(
                 Duration::from_millis(settings.client.transform_send_interval_ms).as_secs_f32(),
@@ -326,10 +474,11 @@ fn do_connect(
         return;
     };
 
-    let client_id = rand::random::<u64>();
+    // Keep netcode client IDs ephemeral so duplicate UUID handling happens in
+    // our auth layer (with explicit error dialog) instead of netcode timeout.
     let auth = Authentication::Manual {
         server_addr,
-        client_id,
+        client_id: rand::random::<u64>().max(1),
         private_key: [0u8; 32],
         protocol_id: 0,
     };
@@ -355,21 +504,26 @@ fn do_connect(
 
     commands.trigger_with(Connect { entity }, EntityTrigger);
 
-    info!("Connecting to multiplayer server at {}", session_url);
+    info!(
+        "Connecting to multiplayer server at {} with player_name={} and client UUID {}",
+        session_url, runtime.player_name, runtime.client_uuid
+    );
 
     runtime.connection_entity = Some(entity);
     runtime.session_url = session_url;
     runtime.local_player_id = None;
     runtime.remote_players.clear();
+    runtime.disconnected_remote_players.clear();
     runtime.remote_player_smoothing.clear();
     runtime.next_local_drop_seq = 1;
+    runtime.disconnect_requested = false;
     runtime.keepalive_timer.reset();
 }
 
 fn do_disconnect(runtime: &mut MultiplayerClientRuntime, commands: &mut Commands) {
     if let Some(entity) = runtime.connection_entity.take() {
+        runtime.disconnect_requested = true;
         commands.trigger_with(Disconnect { entity }, EntityTrigger);
-        commands.entity(entity).despawn();
     }
 }
 
@@ -515,13 +669,37 @@ fn start_streamed_multiplayer_world_load(
 
 pub fn run() {
     GlobalConfig::ensure_config_files_exist();
+    dotenv().ok();
+    install_terminal_interrupt_handler();
     let graphics_config = GlobalConfig::new();
-    let multiplayer_settings = NetworkSettings::load_or_create("config/network.toml");
+    let mut multiplayer_settings = NetworkSettings::load_or_create(NETWORK_CONFIG_PATH);
+    let client_identity = resolve_client_identity(&mut multiplayer_settings);
     let mut app = App::new();
-    init_bevy_app(&mut app, &graphics_config, multiplayer_settings);
+    init_bevy_app(
+        &mut app,
+        &graphics_config,
+        multiplayer_settings,
+        client_identity,
+    );
 }
 
-fn init_bevy_app(app: &mut App, config: &GlobalConfig, multiplayer_settings: NetworkSettings) {
+fn install_terminal_interrupt_handler() {
+    static INSTALL_ONCE: Once = Once::new();
+    INSTALL_ONCE.call_once(|| {
+        if let Err(error) = ctrlc::set_handler(|| {
+            TERMINAL_INTERRUPT_REQUESTED.store(true, Ordering::SeqCst);
+        }) {
+            warn!("Failed to install terminal interrupt handler: {}", error);
+        }
+    });
+}
+
+fn init_bevy_app(
+    app: &mut App,
+    config: &GlobalConfig,
+    multiplayer_settings: NetworkSettings,
+    client_identity: ClientIdentity,
+) {
     let build = BuildInfo {
         app_name: "Game Version",
         app_version: env!("CARGO_PKG_VERSION"),
@@ -585,21 +763,23 @@ fn init_bevy_app(app: &mut App, config: &GlobalConfig, multiplayer_settings: Net
     })
     .add_plugins(ProtocolPlugin);
 
-    app.insert_resource(MultiplayerClientRuntime::new(&multiplayer_settings))
-        .insert_non_send_resource(LanDiscoveryRuntime::new(&multiplayer_settings))
-        .insert_non_send_resource(LocalLanHost::default())
-        .init_resource::<RemoteChunkStreamState>()
-        .init_state::<AppState>()
-        .add_plugins(EguiPlugin::default())
-        .add_plugins(WorldInspectorPlugin::default().run_if(check_world_inspector_state))
-        .add_plugins(ManagerPlugin)
-        .add_plugins(MultiplayerClientPlugin)
-        .add_systems(
-            Update,
-            init_app_finish
-                .run_if(in_state(AppState::AppInit).and(resource_exists::<GlobalConfig>)),
-        )
-        .run();
+    app.insert_resource(MultiplayerClientRuntime::new(
+        &multiplayer_settings,
+        client_identity,
+    ))
+    .insert_non_send_resource(LanDiscoveryRuntime::new(&multiplayer_settings))
+    .insert_non_send_resource(LocalLanHost::default())
+    .init_resource::<RemoteChunkStreamState>()
+    .init_state::<AppState>()
+    .add_plugins(EguiPlugin::default())
+    .add_plugins(WorldInspectorPlugin::default().run_if(check_world_inspector_state))
+    .add_plugins(ManagerPlugin)
+    .add_plugins(MultiplayerClientPlugin)
+    .add_systems(
+        Update,
+        init_app_finish.run_if(in_state(AppState::AppInit).and(resource_exists::<GlobalConfig>)),
+    )
+    .run();
 }
 
 fn register_world_inspector_types(app: &mut App) {
@@ -896,9 +1076,11 @@ impl Plugin for MultiplayerClientPlugin {
         app.init_resource::<MultiplayerDropIndex>()
             .init_resource::<RemoteChunkStreamState>()
             .init_resource::<BlockIdRemap>()
+            .init_resource::<TerminalInterruptExitState>()
             .add_systems(Startup, setup_remote_player_visuals)
             .add_observer(on_server_connected)
             .add_observer(on_server_disconnected)
+            .add_systems(Update, handle_terminal_interrupt_exit)
             .add_systems(
                 Update,
                 (
@@ -923,6 +1105,40 @@ impl Plugin for MultiplayerClientPlugin {
                 ),
             )
             .add_systems(Update, smooth_remote_players);
+    }
+}
+
+fn handle_terminal_interrupt_exit(
+    time: Res<Time>,
+    mut interrupt_state: ResMut<TerminalInterruptExitState>,
+    mut runtime: ResMut<MultiplayerClientRuntime>,
+    mut block_remap: ResMut<BlockIdRemap>,
+    mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
+    mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut commands: Commands,
+    mut app_exit: MessageWriter<AppExit>,
+) {
+    if TERMINAL_INTERRUPT_REQUESTED.load(Ordering::SeqCst) && interrupt_state.started_at.is_none() {
+        info!("Ctrl+C detected. Sending disconnect before shutdown...");
+        do_disconnect(&mut runtime, &mut commands);
+        runtime.local_player_id = None;
+        runtime.remote_players.clear();
+        runtime.disconnected_remote_players.clear();
+        runtime.remote_player_smoothing.clear();
+        block_remap.reset();
+        chunk_stream.last_requested_center = None;
+        chunk_stream.last_requested_radius = None;
+        multiplayer_connection.clear_session();
+        interrupt_state.started_at = Some(time.elapsed_secs_f64());
+        return;
+    }
+
+    let Some(started_at) = interrupt_state.started_at else {
+        return;
+    };
+
+    if time.elapsed_secs_f64() - started_at >= CTRL_C_GRACEFUL_EXIT_DELAY_SECS {
+        app_exit.write(AppExit::Success);
     }
 }
 
@@ -956,10 +1172,13 @@ fn on_server_connected(
     multiplayer_connection.last_error = None;
 
     if let Ok(mut sender) = q_auth.get_mut(trigger.entity) {
-        sender.send::<UnorderedReliable>(Auth::new(runtime.player_name.clone()));
+        sender.send::<UnorderedReliable>(Auth::new(
+            runtime.player_name.clone(),
+            runtime.client_uuid.clone(),
+        ));
         info!(
-            "Connected to server, sent Auth as '{}'",
-            runtime.player_name
+            "Connected to server, sent Auth as '{}' with UUID {}",
+            runtime.player_name, runtime.client_uuid
         );
     }
 }
@@ -997,6 +1216,7 @@ fn on_server_disconnected(
     runtime.remote_player_smoothing.clear();
     clear_multiplayer_drops(&mut commands, &mut drops);
     runtime.local_player_id = None;
+    runtime.disconnected_remote_players.clear();
     block_remap.reset();
     chunk_stream.last_requested_center = None;
     chunk_stream.last_requested_radius = None;
@@ -1013,10 +1233,16 @@ fn on_server_disconnected(
         _ => {}
     }
 
+    let existing_error = multiplayer_connection.last_error.clone();
+    let disconnected_by_request = runtime.disconnect_requested;
+    runtime.disconnect_requested = false;
     multiplayer_connection.clear_session();
-    multiplayer_connection.last_error = Some("Disconnected from multiplayer server.".to_string());
+    multiplayer_connection.last_error = if disconnected_by_request {
+        existing_error
+    } else {
+        existing_error.or_else(|| Some(SERVER_TIMEOUT_ERROR_TEXT.to_string()))
+    };
 
-    commands.entity(trigger.entity).despawn();
     runtime.connection_entity = None;
 }
 
@@ -1098,8 +1324,8 @@ fn connect_to_server_requested(
         if q_active.get(entity).is_ok() {
             return;
         }
-        // Existing disconnected entity – clean it up first
-        commands.entity(entity).despawn();
+        // Existing disconnected entity – drop the runtime handle. Lightyear may
+        // still have deferred cleanup commands for this entity.
         runtime.connection_entity = None;
     }
 
@@ -1108,6 +1334,7 @@ fn connect_to_server_requested(
     runtime.auto_connect_lan = false;
     multiplayer_connection.connected = false;
     multiplayer_connection.phase = MultiplayerConnectionPhase::Connecting;
+    multiplayer_connection.set_world_data_mode_remote();
     multiplayer_connection.active_session_url = Some(session_url.to_string());
     multiplayer_connection.server_name = if request.server_name.trim().is_empty() {
         None
@@ -1215,6 +1442,7 @@ fn finish_open_to_lan_connect(
     do_connect(&mut runtime, session_url.clone(), &mut commands);
     multiplayer_connection.connected = false;
     multiplayer_connection.phase = MultiplayerConnectionPhase::Connecting;
+    multiplayer_connection.set_world_data_mode_remote();
     multiplayer_connection.active_session_url = Some(session_url);
     multiplayer_connection.server_name = None;
     multiplayer_connection.world_name = None;
@@ -1258,11 +1486,12 @@ fn update_connection_state(
     };
 }
 
-/// Handles ServerWelcome, PlayerJoined, PlayerLeft, PlayerSnapshot messages.
+/// Handles ServerWelcome / ServerAuthRejected and player sync messages.
 #[allow(clippy::too_many_arguments)]
 fn receive_player_messages(
     mut commands: Commands,
     time: Res<Time>,
+    app_state: Res<State<AppState>>,
     visuals: Res<RemotePlayerVisuals>,
     registry: Option<Res<BlockRegistry>>,
     mut region_cache: ResMut<RegionCache>,
@@ -1276,6 +1505,7 @@ fn receive_player_messages(
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut q: Query<(
         &mut MessageReceiver<ServerWelcome>,
+        &mut MessageReceiver<ServerAuthRejected>,
         &mut MessageReceiver<PlayerJoined>,
         &mut MessageReceiver<PlayerLeft>,
         &mut MessageReceiver<PlayerSnapshot>,
@@ -1285,16 +1515,57 @@ fn receive_player_messages(
         return;
     };
 
-    let Ok((mut recv_welcome, mut recv_joined, mut recv_left, mut recv_snapshot)) =
-        q.get_mut(entity)
+    let Ok((
+        mut recv_welcome,
+        mut recv_auth_rejected,
+        mut recv_joined,
+        mut recv_left,
+        mut recv_snapshot,
+    )) = q.get_mut(entity)
     else {
         return;
     };
 
     let now = time.elapsed_secs();
 
+    for message in recv_auth_rejected.receive() {
+        let reason = if message.reason.trim().is_empty() {
+            "Disconnected from multiplayer server.".to_string()
+        } else {
+            message.reason.clone()
+        };
+        warn!("Server rejected multiplayer auth: {}", reason);
+
+        runtime.local_player_id = None;
+        runtime.disconnected_remote_players.clear();
+        block_remap.reset();
+        chunk_stream.last_requested_center = None;
+        chunk_stream.last_requested_radius = None;
+
+        if matches!(
+            app_state.get(),
+            AppState::Loading(_) | AppState::InGame(_) | AppState::PostLoad
+        ) {
+            chunk_map.chunks.clear();
+        }
+        next_state.set(AppState::Screen(BeforeUiState::MultiPlayer));
+
+        multiplayer_connection.clear_session();
+        multiplayer_connection.last_error = Some(reason);
+
+        if let Some(connection_entity) = runtime.connection_entity {
+            commands.trigger_with(
+                Disconnect {
+                    entity: connection_entity,
+                },
+                EntityTrigger,
+            );
+        }
+    }
+
     for message in recv_welcome.receive() {
         runtime.local_player_id = Some(message.player_id);
+        runtime.disconnected_remote_players.clear();
         if let Some(existing) = runtime.remote_players.remove(&message.player_id) {
             safe_despawn_entity(&mut commands, existing);
         }
@@ -1332,6 +1603,9 @@ fn receive_player_messages(
         if Some(message.player_id) == runtime.local_player_id {
             continue;
         }
+        runtime
+            .disconnected_remote_players
+            .remove(&message.player_id);
 
         let translation = multiplayer_connection
             .spawn_translation
@@ -1354,6 +1628,9 @@ fn receive_player_messages(
     }
 
     for message in recv_left.receive() {
+        runtime
+            .disconnected_remote_players
+            .insert(message.player_id);
         runtime.remote_player_smoothing.remove(&message.player_id);
         if let Some(ent) = runtime.remote_players.remove(&message.player_id) {
             safe_despawn_entity(&mut commands, ent);
@@ -1362,6 +1639,12 @@ fn receive_player_messages(
 
     for message in recv_snapshot.receive() {
         if Some(message.player_id) == runtime.local_player_id {
+            continue;
+        }
+        if runtime
+            .disconnected_remote_players
+            .contains(&message.player_id)
+        {
             continue;
         }
 

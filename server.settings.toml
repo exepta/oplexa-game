@@ -12,3 +12,4 @@ chunk-stream-sends-per-tick-max = 256
 chunk-stream-inflight-per-client = 24
 chunk-flight-timeout-ms = 500
 max-stream-radius = 12
+dead-entity-check-interval-secs = 20

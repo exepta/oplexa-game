@@ -7,11 +7,11 @@ mod types;
 use crate::{
     bootstrap::{ServerBootstrapConfig, load_bootstrap, spawn_server},
     services::{
-        flush_chunk_streaming, handle_auth_messages, handle_block_break_messages,
-        handle_block_place_messages, handle_chunk_interest_messages, handle_client_connected,
-        handle_client_disconnected, handle_drop_item_messages, handle_drop_pickup_messages,
-        handle_keepalive_messages, handle_new_client, handle_player_move_messages,
-        poll_lan_discovery, purge_stale_players,
+        cleanup_orphaned_players, flush_chunk_streaming, handle_auth_messages,
+        handle_block_break_messages, handle_block_place_messages, handle_chunk_interest_messages,
+        handle_client_connected, handle_client_disconnected, handle_drop_item_messages,
+        handle_drop_pickup_messages, handle_keepalive_messages, handle_new_client,
+        handle_player_move_messages, poll_lan_discovery, purge_stale_players,
     },
     state::ServerState,
 };
@@ -67,6 +67,7 @@ fn main() {
                 handle_drop_pickup_messages,
                 flush_chunk_streaming,
                 purge_stale_players,
+                cleanup_orphaned_players,
                 poll_lan_discovery,
             ),
         )

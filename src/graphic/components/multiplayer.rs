@@ -77,6 +77,7 @@ fn handle_multiplayer_back_navigation(
     keyboard: Res<ButtonInput<KeyCode>>,
     global_config: Res<GlobalConfig>,
     mut ui_state: ResMut<MultiplayerUiState>,
+    mut connection_state: ResMut<MultiplayerConnectionState>,
     mut disconnect_writer: MessageWriter<DisconnectFromServerRequest>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
@@ -88,6 +89,11 @@ fn handle_multiplayer_back_navigation(
     if ui_state.joining_key.is_some() {
         ui_state.joining_key = None;
         disconnect_writer.write(DisconnectFromServerRequest);
+        return;
+    }
+
+    if connection_state.last_error.is_some() {
+        connection_state.last_error = None;
         return;
     }
 
@@ -110,6 +116,7 @@ fn handle_multiplayer_actions(
     mut commands: Commands,
     ui_entities: Res<UiEntities>,
     mut ui_state: ResMut<MultiplayerUiState>,
+    mut connection_state: ResMut<MultiplayerConnectionState>,
     mut widgets: Query<(&CssID, &mut UIWidgetState), With<Button>>,
     item_entities: Query<Entity, With<MultiplayerListItem>>,
     mut form_inputs: Query<(&CssID, &mut InputField, &mut InputValue)>,
@@ -132,12 +139,16 @@ fn handle_multiplayer_actions(
                     ui_state.pending_delete_key = None;
                 }
             }
+            MultiplayerAction::DismissConnectError => {
+                connection_state.last_error = None;
+            }
             MultiplayerAction::JoinServer => {
                 let selected = ui_state.selected_server().cloned();
                 let Some(server) = selected else {
                     continue;
                 };
 
+                connection_state.last_error = None;
                 ui_state.joining_key = Some(server.key.clone());
                 connect_writer.write(ConnectToServerRequest {
                     session_url: server.session_url.clone(),
@@ -501,7 +512,7 @@ fn rebuild_multiplayer_cards(
 }
 
 fn sync_multiplayer_dialogs(
-    ui_state: Res<MultiplayerUiState>,
+    mut ui_state: ResMut<MultiplayerUiState>,
     connection_state: Res<MultiplayerConnectionState>,
     mut visibilities: ParamSet<(
         Query<&mut Visibility, With<MultiplayerFormDialog>>,
@@ -509,14 +520,21 @@ fn sync_multiplayer_dialogs(
         Query<&mut Visibility, With<MultiplayerFormEditButton>>,
         Query<&mut Visibility, With<MultiplayerDeleteDialog>>,
         Query<&mut Visibility, With<MultiplayerConnectDialog>>,
+        Query<&mut Visibility, With<MultiplayerConnectOkButton>>,
         Query<&mut Visibility, With<MultiplayerRoot>>,
     )>,
-    mut form_title: Query<(&CssID, &mut Paragraph)>,
+    mut texts: Query<(&CssID, &mut Paragraph)>,
 ) {
+    if connection_state.phase != MultiplayerConnectionPhase::Connecting {
+        ui_state.joining_key = None;
+    }
+
+    let show_error = connection_state.last_error.is_some();
     let connecting = ui_state.joining_key.is_some()
         || connection_state.phase == MultiplayerConnectionPhase::Connecting;
+    let show_connect_dialog = connecting || show_error;
 
-    if let Ok(mut visible) = visibilities.p5().single_mut() {
+    if let Ok(mut visible) = visibilities.p6().single_mut() {
         *visible = if connecting {
             Visibility::Hidden
         } else {
@@ -533,7 +551,7 @@ fn sync_multiplayer_dialogs(
     }
 
     if let Some(dialog_state) = ui_state.form_dialog.as_ref() {
-        for (css_id, mut paragraph) in &mut form_title {
+        for (css_id, mut paragraph) in &mut texts {
             if css_id.0 != MULTIPLAYER_FORM_TITLE_ID {
                 continue;
             }
@@ -576,11 +594,30 @@ fn sync_multiplayer_dialogs(
     }
 
     if let Ok(mut visible) = visibilities.p4().single_mut() {
-        *visible = if connecting {
+        *visible = if show_connect_dialog {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
+    }
+
+    if let Ok(mut visible) = visibilities.p5().single_mut() {
+        *visible = if show_error {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    let connect_text = if connecting {
+        "Connecting to server ...".to_string()
+    } else {
+        connection_state.last_error.clone().unwrap_or_default()
+    };
+    for (css_id, mut paragraph) in &mut texts {
+        if css_id.0 == MULTIPLAYER_CONNECT_TEXT_ID {
+            paragraph.text = connect_text.clone();
+        }
     }
 }
 
@@ -713,6 +750,7 @@ fn parse_multiplayer_action(id: &str) -> Option<MultiplayerAction> {
     match id {
         MULTIPLAYER_JOIN_ID => Some(MultiplayerAction::JoinServer),
         MULTIPLAYER_REFRESH_ID => Some(MultiplayerAction::RefreshServers),
+        MULTIPLAYER_CONNECT_OK_ID => Some(MultiplayerAction::DismissConnectError),
         MULTIPLAYER_ADD_ID => Some(MultiplayerAction::OpenAddServer),
         MULTIPLAYER_EDIT_ID => Some(MultiplayerAction::OpenEditServer),
         MULTIPLAYER_DELETE_ID => Some(MultiplayerAction::OpenDeleteServer),

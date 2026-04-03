@@ -3,6 +3,7 @@ fn enter_single_player_screen(
     mut commands: Commands,
     ui_entities: Res<UiEntities>,
     mut ui_state: ResMut<SinglePlayerUiState>,
+    mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     world_gen_config: Res<WorldGenConfig>,
     item_entities: Query<Entity, With<SinglePlayerListItem>>,
     mut create_inputs: Query<(&CssID, &mut InputField, &mut InputValue)>,
@@ -22,6 +23,7 @@ fn enter_single_player_screen(
     ui_state.pending_delete_index = None;
     ui_state.last_card_click = Some((usize::MAX, time.elapsed_secs_f64()));
     ui_state.closing_for_world_load = false;
+    multiplayer_connection.set_world_data_mode_local();
 
     refresh_single_player_content(&mut ui_state, world_gen_config.seed);
     rebuild_single_player_cards(

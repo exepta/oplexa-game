@@ -4,8 +4,9 @@ use crate::{
     state::{ServerRuntimeConfig, ServerState},
 };
 use api::core::network::protocols::{
-    Auth, OrderedReliable, PlayerJoined, PlayerLeft, PlayerSnapshot, ServerBlockBreak,
-    ServerBlockPlace, ServerDropSpawn, ServerWelcome, UnorderedReliable, UnorderedUnreliable,
+    Auth, OrderedReliable, PlayerJoined, PlayerLeft, PlayerSnapshot, ServerAuthRejected,
+    ServerBlockBreak, ServerBlockPlace, ServerDropSpawn, ServerWelcome, UnorderedReliable,
+    UnorderedUnreliable,
 };
 use bevy::ecs::event::EntityTrigger;
 use bevy::prelude::*;
@@ -15,6 +16,9 @@ use lightyear::prelude::*;
 use log::{info, warn};
 use std::collections::HashSet;
 use std::time::Instant;
+
+const DUPLICATE_UUID_REJECT_MESSAGE: &str =
+    "Error 405 Client with the same UUID is already connected!";
 
 // ── Connection lifecycle observers ───────────────────────────────────────────
 
@@ -64,7 +68,10 @@ pub fn handle_client_disconnected(
     state.pending_auth.remove(&entity);
 
     if let Some(player) = state.players.remove(&entity) {
-        info!("{} disconnected", player.username);
+        info!(
+            "{} disconnected (uuid={})",
+            player.username, player.client_uuid
+        );
         let msg = PlayerLeft::new(player.player_id);
         let _ = multi_sender.send::<_, UnorderedReliable>(&msg, *server, &NetworkTarget::All);
     }
@@ -75,6 +82,83 @@ pub fn handle_client_disconnected(
     }
     state.pending_chunk_sends.retain(|(e, _)| *e != entity);
     state.chunk_send_window.remove(&entity);
+}
+
+/// Fallback cleanup: remove players whose connection entity no longer has `ClientOf`.
+/// This covers edge-cases where a disconnect event is missed but the link entity vanished.
+pub fn cleanup_orphaned_players(
+    q_clients: Query<(Entity, Has<Disconnected>), With<ClientOf>>,
+    config: Res<ServerRuntimeConfig>,
+    mut last_scan: Local<Option<Instant>>,
+    mut state: ResMut<ServerState>,
+    mut multi_sender: ServerMultiMessageSender,
+    server: Single<&Server>,
+    mut commands: Commands,
+) {
+    let now = Instant::now();
+    let interval = std::time::Duration::from_secs(config.dead_entity_check_interval_secs.max(1));
+    if let Some(last) = *last_scan
+        && now.duration_since(last) < interval
+    {
+        return;
+    }
+    *last_scan = Some(now);
+
+    let mut link_state = std::collections::HashMap::<Entity, bool>::new();
+    for (entity, disconnected) in q_clients.iter() {
+        link_state.insert(entity, disconnected);
+    }
+
+    let stale: Vec<(Entity, bool)> = state
+        .players
+        .keys()
+        .copied()
+        .filter_map(|entity| match link_state.get(&entity) {
+            None => Some((entity, false)),
+            Some(true) => Some((entity, true)),
+            Some(false) => None,
+        })
+        .collect();
+
+    if stale.is_empty() {
+        return;
+    }
+
+    for (entity, disconnected_link) in stale {
+        if let Some(player) = state.players.remove(&entity) {
+            if disconnected_link {
+                warn!(
+                    "Cleaned up disconnected player link {:?} (username={}, uuid={})",
+                    entity, player.username, player.client_uuid
+                );
+            } else {
+                warn!(
+                    "Cleaned up orphaned player {:?} (username={}, uuid={})",
+                    entity, player.username, player.client_uuid
+                );
+            }
+            let _ = multi_sender.send::<_, UnorderedReliable>(
+                &PlayerLeft::new(player.player_id),
+                *server,
+                &NetworkTarget::All,
+            );
+        }
+
+        state.pending_auth.remove(&entity);
+        for waiters in state.pending_stream_chunk_waiters.values_mut() {
+            waiters.remove(&entity);
+        }
+        state.pending_chunk_sends.retain(|(e, _)| *e != entity);
+        state.chunk_send_window.remove(&entity);
+
+        if disconnected_link {
+            commands.queue(move |world: &mut World| {
+                if let Ok(entity_mut) = world.get_entity_mut(entity) {
+                    entity_mut.despawn();
+                }
+            });
+        }
+    }
 }
 
 // ── Auth message handler ──────────────────────────────────────────────────────
@@ -91,9 +175,20 @@ pub fn handle_auth_messages(
     for (entity, mut receiver) in q.iter_mut() {
         for auth in receiver.receive() {
             let username = auth.username.trim().to_string();
+            let client_uuid = auth.client_uuid.trim().to_ascii_lowercase();
+            info!(
+                "Auth request from {:?}: username='{}', uuid={}",
+                entity, username, client_uuid
+            );
 
             if username.is_empty() {
                 warn!("Empty username from {:?}, disconnecting", entity);
+                commands.trigger_with(Disconnect { entity }, EntityTrigger);
+                continue;
+            }
+
+            if client_uuid.is_empty() {
+                warn!("Empty client UUID from {:?}, disconnecting", entity);
                 commands.trigger_with(Disconnect { entity }, EntityTrigger);
                 continue;
             }
@@ -109,9 +204,28 @@ pub fn handle_auth_messages(
                 continue;
             }
 
+            let duplicate_uuid_online = state.players.values().any(|player| {
+                player
+                    .client_uuid
+                    .eq_ignore_ascii_case(client_uuid.as_str())
+            });
+            if duplicate_uuid_online {
+                warn!(
+                    "Rejected duplicate UUID login for {:?} (uuid={})",
+                    entity, client_uuid
+                );
+                let _ = multi_sender.send::<_, UnorderedReliable>(
+                    &ServerAuthRejected::new(DUPLICATE_UUID_REJECT_MESSAGE),
+                    *server,
+                    &NetworkTarget::Single(entity_to_peer_id(entity, &q_remote_id)),
+                );
+                continue;
+            }
+
             let player = HostedPlayer {
                 player_id: state.next_player_id,
                 username: username.clone(),
+                client_uuid,
                 translation: config.spawn_translation,
                 yaw: 0.0,
                 pitch: 0.0,
@@ -196,9 +310,10 @@ pub fn handle_auth_messages(
 
             let player_id = player.player_id;
             let uname = player.username.clone();
+            let uuid = player.client_uuid.clone();
             state.players.insert(entity, player);
 
-            info!("{} joined as id {}", uname, player_id);
+            info!("{} joined as id {} (uuid={})", uname, player_id, uuid);
 
             // Broadcast join to all (including new player)
             let _ = multi_sender.send::<_, UnorderedReliable>(
@@ -236,7 +351,14 @@ pub fn purge_stale_players(
         .collect();
 
     for entity in stale {
-        info!("Disconnecting stale player {:?}", entity);
+        if let Some(player) = state.players.get(&entity) {
+            info!(
+                "Disconnecting stale player {:?} (username={}, uuid={})",
+                entity, player.username, player.client_uuid
+            );
+        } else {
+            info!("Disconnecting stale player {:?}", entity);
+        }
         commands.trigger_with(Disconnect { entity }, EntityTrigger);
 
         if let Some(player) = state.players.remove(&entity) {

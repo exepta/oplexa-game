@@ -586,8 +586,33 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                                     text: "Connecting to server ...".to_string(),
                                     ..default()
                                 },
+                                CssID(MULTIPLAYER_CONNECT_TEXT_ID.to_string()),
                                 UiTextTone::Heading,
                             ));
+                            box_node
+                                .spawn((
+                                    Node {
+                                        width: Val::Percent(100.0),
+                                        flex_direction: FlexDirection::Row,
+                                        justify_content: JustifyContent::Center,
+                                        margin: UiRect::top(Val::Px(8.0)),
+                                        ..default()
+                                    },
+                                    BackgroundColor::DEFAULT,
+                                ))
+                                .with_children(|actions| {
+                                    actions.spawn((
+                                        Button {
+                                            text: "OK".to_string(),
+                                            ..default()
+                                        },
+                                        CssID(MULTIPLAYER_CONNECT_OK_ID.to_string()),
+                                        MultiplayerConnectOkButton,
+                                        Visibility::Hidden,
+                                        UiButtonKind::ActionRow,
+                                        UiButtonTone::Accent,
+                                    ));
+                                });
                         });
                 });
 

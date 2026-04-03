@@ -53,6 +53,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<ServerWelcome>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<ServerAuthRejected>()
+            .add_direction(NetworkDirection::ServerToClient);
 
         // Messages – players
         app.register_message::<PlayerJoined>()

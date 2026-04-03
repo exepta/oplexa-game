@@ -98,6 +98,8 @@ const MULTIPLAYER_FORM_ABORT_ID: &str = "multi-player-form-abort";
 const MULTIPLAYER_DELETE_TEXT_ID: &str = "multi-player-delete-text";
 const MULTIPLAYER_DELETE_CONFIRM_ID: &str = "multi-player-delete-confirm";
 const MULTIPLAYER_DELETE_ABORT_ID: &str = "multi-player-delete-abort";
+const MULTIPLAYER_CONNECT_TEXT_ID: &str = "multi-player-connect-text";
+const MULTIPLAYER_CONNECT_OK_ID: &str = "multi-player-connect-ok";
 
 const PAUSE_PLAY_ID: &str = "pause-menu-play";
 const PAUSE_CONNECT_ID: &str = "pause-menu-connect";
@@ -181,6 +183,8 @@ struct MultiplayerDeleteDialog;
 struct MultiplayerDeleteText;
 #[derive(Component)]
 struct MultiplayerConnectDialog;
+#[derive(Component)]
+struct MultiplayerConnectOkButton;
 #[derive(Component)]
 struct PauseMenuRoot;
 #[derive(Component)]
@@ -463,6 +467,7 @@ enum MultiplayerAction {
     SelectServer(usize),
     JoinServer,
     RefreshServers,
+    DismissConnectError,
     OpenAddServer,
     OpenEditServer,
     OpenDeleteServer,

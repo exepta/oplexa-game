@@ -3,12 +3,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Auth {
     pub username: String,
+    pub client_uuid: String,
 }
 
 impl Auth {
-    pub fn new(username: impl Into<String>) -> Self {
+    pub fn new(username: impl Into<String>, client_uuid: impl Into<String>) -> Self {
         Self {
             username: username.into(),
+            client_uuid: client_uuid.into(),
         }
     }
 }
@@ -42,6 +44,19 @@ impl ServerWelcome {
             world_seed,
             spawn_translation,
             block_palette,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerAuthRejected {
+    pub reason: String,
+}
+
+impl ServerAuthRejected {
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
         }
     }
 }

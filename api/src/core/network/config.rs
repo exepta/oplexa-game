@@ -51,6 +51,10 @@ pub struct ClientNetworkSettings {
     pub connect_on_startup: bool,
     pub session_url: String,
     pub player_name: String,
+    #[serde(default)]
+    pub prod: bool,
+    #[serde(default)]
+    pub client_uuid: Option<String>,
     pub lan_discovery: bool,
     pub lan_discovery_port: u16,
     pub transform_send_interval_ms: u64,
@@ -63,6 +67,8 @@ impl Default for ClientNetworkSettings {
             connect_on_startup: false,
             session_url: "http://127.0.0.1:14191".to_string(),
             player_name: "Player".to_string(),
+            prod: false,
+            client_uuid: None,
             lan_discovery: true,
             lan_discovery_port: 14192,
             transform_send_interval_ms: 50,
@@ -95,6 +101,8 @@ pub struct DedicatedServerSettings {
     pub chunk_flight_timeout_ms: u64,
     #[serde(default = "default_max_stream_radius")]
     pub max_stream_radius: i32,
+    #[serde(default = "default_dead_entity_check_interval_secs")]
+    pub dead_entity_check_interval_secs: u64,
 }
 
 impl Default for DedicatedServerSettings {
@@ -115,6 +123,7 @@ impl Default for DedicatedServerSettings {
             chunk_stream_inflight_per_client: default_chunk_stream_inflight_per_client(),
             chunk_flight_timeout_ms: default_chunk_flight_timeout_ms(),
             max_stream_radius: default_max_stream_radius(),
+            dead_entity_check_interval_secs: default_dead_entity_check_interval_secs(),
         }
     }
 }
@@ -210,6 +219,10 @@ fn default_chunk_flight_timeout_ms() -> u64 {
 
 fn default_max_stream_radius() -> i32 {
     12
+}
+
+fn default_dead_entity_check_interval_secs() -> u64 {
+    20
 }
 
 fn resolve_local_ip() -> Option<IpAddr> {

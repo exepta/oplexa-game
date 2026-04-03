@@ -5,6 +5,7 @@ use std::time::Instant;
 pub struct HostedPlayer {
     pub player_id: u64,
     pub username: String,
+    pub client_uuid: String,
     pub translation: [f32; 3],
     pub yaw: f32,
     pub pitch: f32,

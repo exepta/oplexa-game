@@ -244,8 +244,7 @@ fn release_cursor_on_escape(
     keys: Res<ButtonInput<KeyCode>>,
     game_config: Res<GlobalConfig>,
 ) {
-    let unlock = convert(game_config.input.ui_close_back.as_str())
-        .expect("Invalid close/back key");
+    let unlock = convert(game_config.input.ui_close_back.as_str()).expect("Invalid close/back key");
     if !keys.just_pressed(unlock) {
         return;
     }

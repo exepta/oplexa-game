@@ -7,10 +7,18 @@ pub enum MultiplayerConnectionPhase {
     Connecting,
 }
 
-#[derive(Resource, Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum WorldDataMode {
+    #[default]
+    Local,
+    Remote,
+}
+
+#[derive(Resource, Debug, Clone)]
 pub struct MultiplayerConnectionState {
     pub connected: bool,
     pub phase: MultiplayerConnectionPhase,
+    pub world_data_mode: WorldDataMode,
     pub active_session_url: Option<String>,
     pub server_name: Option<String>,
     pub world_name: Option<String>,
@@ -19,9 +27,33 @@ pub struct MultiplayerConnectionState {
     pub last_error: Option<String>,
 }
 
+impl Default for MultiplayerConnectionState {
+    fn default() -> Self {
+        Self {
+            connected: false,
+            phase: MultiplayerConnectionPhase::Idle,
+            world_data_mode: WorldDataMode::Local,
+            active_session_url: None,
+            server_name: None,
+            world_name: None,
+            world_seed: None,
+            spawn_translation: None,
+            last_error: None,
+        }
+    }
+}
+
 impl MultiplayerConnectionState {
     pub fn uses_local_save_data(&self) -> bool {
-        self.active_session_url.is_none()
+        self.world_data_mode == WorldDataMode::Local
+    }
+
+    pub fn set_world_data_mode_remote(&mut self) {
+        self.world_data_mode = WorldDataMode::Remote;
+    }
+
+    pub fn set_world_data_mode_local(&mut self) {
+        self.world_data_mode = WorldDataMode::Local;
     }
 
     pub fn clear_session(&mut self) {
