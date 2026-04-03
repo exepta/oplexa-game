@@ -34,7 +34,7 @@ jobs:
             archive_ext: tar.gz
             binary_ext: ""
           - id: macos-intel
-            os: macos-13
+            os: macos-15-intel
             target: x86_64-apple-darwin
             archive_ext: tar.gz
             binary_ext: ""
