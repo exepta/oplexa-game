@@ -2,6 +2,7 @@ use crate::core::entities::player::inventory::PlayerInventory;
 use crate::core::entities::player::{GameMode, GameModeState};
 use crate::core::inventory::items::{ItemId, ItemRegistry};
 
+/// Defines the possible creative panel click result variants in the `handlers::inventory` module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CreativePanelClickResult {
     Ignored,
@@ -12,6 +13,7 @@ pub enum CreativePanelClickResult {
     },
 }
 
+/// Applies creative panel click for the `handlers::inventory` module.
 pub fn apply_creative_panel_click(
     game_mode: &GameModeState,
     clicked_item_id: ItemId,

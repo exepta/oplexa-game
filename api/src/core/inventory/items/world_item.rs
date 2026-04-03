@@ -231,17 +231,20 @@ pub fn spawn_world_item_with_motion(
     ));
 }
 
+/// Runs the `player_drop_throw_direction` routine for player drop throw direction in the `core::inventory::items::world_item` module.
 fn player_drop_throw_direction(player_forward: Vec3) -> Vec3 {
     let horizontal_forward = Vec3::new(player_forward.x, 0.0, player_forward.z);
     horizontal_forward.try_normalize().unwrap_or(Vec3::Z)
 }
 
+/// Runs the `player_drop_spawn_center` routine for player drop spawn center in the `core::inventory::items::world_item` module.
 fn player_drop_spawn_center(player_translation: Vec3, player_forward: Vec3) -> Vec3 {
     player_translation
         + player_drop_throw_direction(player_forward) * PLAYER_DROP_THROW_DISTANCE
         + Vec3::Y * PLAYER_DROP_THROW_HEIGHT
 }
 
+/// Computes drop pop velocity for the `core::inventory::items::world_item` module.
 fn compute_drop_pop_velocity(world_loc: IVec3, now: f32) -> Vec3 {
     let seed_base = hash01(
         world_loc.x.wrapping_mul(31) ^ world_loc.y.wrapping_mul(47) ^ world_loc.z.wrapping_mul(73),
@@ -262,6 +265,7 @@ fn compute_drop_pop_velocity(world_loc: IVec3, now: f32) -> Vec3 {
     )
 }
 
+/// Computes drop angular velocity for the `core::inventory::items::world_item` module.
 fn compute_drop_angular_velocity(world_loc: IVec3, now: f32) -> Vec3 {
     let seed_base = hash01(
         world_loc.x.wrapping_mul(13) ^ world_loc.y.wrapping_mul(29) ^ world_loc.z.wrapping_mul(61),
@@ -278,6 +282,7 @@ fn compute_drop_angular_velocity(world_loc: IVec3, now: f32) -> Vec3 {
     )
 }
 
+/// Computes drop initial rotation for the `core::inventory::items::world_item` module.
 fn compute_drop_initial_rotation(world_loc: IVec3, now: f32) -> Quat {
     let rx = hash01(world_loc.x ^ world_loc.y ^ 0x71, now * 0.47) * std::f32::consts::TAU;
     let ry = hash01(world_loc.y ^ world_loc.z ^ 0x82, now * 0.63) * std::f32::consts::TAU;
@@ -285,11 +290,13 @@ fn compute_drop_initial_rotation(world_loc: IVec3, now: f32) -> Quat {
     Quat::from_euler(EulerRot::XYZ, rx, ry, rz)
 }
 
+/// Runs the `hash01` routine for hash01 in the `core::inventory::items::world_item` module.
 fn hash01(input: i32, time_factor: f32) -> f32 {
     let x = input as f32 * 12.9898 + time_factor * 78.233;
     (x.sin() * 43_758.547).fract().abs()
 }
 
+/// Runs the `center_mesh_vertices` routine for center mesh vertices in the `core::inventory::items::world_item` module.
 fn center_mesh_vertices(mesh: &mut Mesh, half_extent: f32) {
     let Some(VertexAttributeValues::Float32x3(positions)) =
         mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)

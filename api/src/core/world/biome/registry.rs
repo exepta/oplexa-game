@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+/// Represents biome registry used by the `core::world::biome::registry` module.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct BiomeRegistry {
     pub by_name: HashMap<String, Biome>,
@@ -15,6 +16,7 @@ pub struct BiomeRegistry {
 }
 
 impl BiomeRegistry {
+    /// Loads from folder for the `core::world::biome::registry` module.
     pub fn load_from_folder(dir: impl AsRef<Path>) -> Self {
         let dir = dir.as_ref();
         let mut registry = Self::default();
@@ -57,16 +59,19 @@ impl BiomeRegistry {
         registry
     }
 
+    /// Registers the requested data for the `core::world::biome::registry` module.
     pub fn register(&mut self, biome: Biome) {
         let key = biome.name.clone();
         self.by_name.insert(key, biome);
         self.rebuild_cache();
     }
 
+    /// Returns the requested data for the `core::world::biome::registry` module.
     pub fn get(&self, name: &str) -> Option<&Biome> {
         self.by_name.get(name)
     }
 
+    /// Runs the `iter` routine for iter in the `core::world::biome::registry` module.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Biome)> {
         self.by_name.iter().map(|(k, v)| (k.as_str(), v))
     }
@@ -76,10 +81,12 @@ impl BiomeRegistry {
         self.by_name.len()
     }
 
+    /// Checks whether empty in the `core::world::biome::registry` module.
     pub fn is_empty(&self) -> bool {
         self.by_name.is_empty()
     }
 
+    /// Runs the `random_by_rarity` routine for random by rarity in the `core::world::biome::registry` module.
     pub fn random_by_rarity(&self) -> Option<&Biome> {
         if self.ordered_names.is_empty() {
             return None;
@@ -95,6 +102,7 @@ impl BiomeRegistry {
         self.by_name.get(name)
     }
 
+    /// Runs the `rebuild_cache` routine for rebuild cache in the `core::world::biome::registry` module.
     fn rebuild_cache(&mut self) {
         let mut names: Vec<_> = self.by_name.keys().cloned().collect();
         names.sort(); // deterministic order for reproducibility

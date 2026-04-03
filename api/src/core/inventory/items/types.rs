@@ -18,6 +18,7 @@ pub struct ItemWorldDropConfig {
 }
 
 impl Default for ItemWorldDropConfig {
+    /// Runs the `default` routine for default in the `core::inventory::items::types` module.
     fn default() -> Self {
         Self { pickupable: true }
     }

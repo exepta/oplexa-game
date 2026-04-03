@@ -2,6 +2,7 @@ use crate::core::inventory::items::ItemId;
 use serde_json::Value;
 use std::fmt;
 
+/// Represents namespaced key used by the `core::inventory::recipe::types` module.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct NamespacedKey {
     pub provider: String,
@@ -9,6 +10,7 @@ pub struct NamespacedKey {
 }
 
 impl NamespacedKey {
+    /// Parses the requested data for the `core::inventory::recipe::types` module.
     pub fn parse(raw: &str) -> Option<Self> {
         let trimmed = raw.trim();
         let (provider, key) = trimmed.split_once(':')?;
@@ -20,6 +22,7 @@ impl NamespacedKey {
         Some(Self { provider, key })
     }
 
+    /// Runs the `localized_name` routine for localized name in the `core::inventory::recipe::types` module.
     #[inline]
     pub fn localized_name(&self) -> String {
         format!("{}:{}", self.provider, self.key)
@@ -27,17 +30,20 @@ impl NamespacedKey {
 }
 
 impl fmt::Display for NamespacedKey {
+    /// Runs the `fmt` routine for fmt in the `core::inventory::recipe::types` module.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.provider, self.key)
     }
 }
 
+/// Represents recipe crafting entry used by the `core::inventory::recipe::types` module.
 #[derive(Clone, Debug)]
 pub struct RecipeCraftingEntry {
     pub recipe_type: NamespacedKey,
     pub data: Value,
 }
 
+/// Represents recipe result def used by the `core::inventory::recipe::types` module.
 #[derive(Clone, Debug)]
 pub struct RecipeResultDef {
     pub item_id: ItemId,
@@ -45,6 +51,7 @@ pub struct RecipeResultDef {
     pub count: u16,
 }
 
+/// Represents recipe definition used by the `core::inventory::recipe::types` module.
 #[derive(Clone, Debug)]
 pub struct RecipeDefinition {
     pub source_path: String,
@@ -53,6 +60,7 @@ pub struct RecipeDefinition {
     pub result: RecipeResultDef,
 }
 
+/// Represents recipe input requirement used by the `core::inventory::recipe::types` module.
 #[derive(Clone, Copy, Debug)]
 pub struct RecipeInputRequirement {
     pub slot_index: usize,
@@ -60,6 +68,7 @@ pub struct RecipeInputRequirement {
     pub count: u16,
 }
 
+/// Represents resolved recipe used by the `core::inventory::recipe::types` module.
 #[derive(Clone, Debug)]
 pub struct ResolvedRecipe {
     pub source_path: String,

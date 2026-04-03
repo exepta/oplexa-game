@@ -1,11 +1,13 @@
 use api::handlers::inventory::apply_creative_panel_click;
 
+/// Represents recipe preview hand crafted data json used by the `graphic::components::inventory_creative` module.
 #[derive(Deserialize)]
 struct RecipePreviewHandCraftedDataJson {
     #[serde(default)]
     craft: std::collections::HashMap<String, RecipePreviewHandCraftedEntryJson>,
 }
 
+/// Represents recipe preview hand crafted entry json used by the `graphic::components::inventory_creative` module.
 #[derive(Deserialize)]
 struct RecipePreviewHandCraftedEntryJson {
     item: String,
@@ -13,11 +15,13 @@ struct RecipePreviewHandCraftedEntryJson {
     count: u16,
 }
 
+/// Runs the `recipe_preview_default_required_count` routine for recipe preview default required count in the `graphic::components::inventory_creative` module.
 #[inline]
 fn recipe_preview_default_required_count() -> u16 {
     1
 }
 
+/// Synchronizes creative panel state from registry for the `graphic::components::inventory_creative` module.
 fn sync_creative_panel_state_from_registry(
     item_registry: Res<ItemRegistry>,
     mut creative_ui: ResMut<CreativePanelUiState>,
@@ -36,6 +40,7 @@ fn sync_creative_panel_state_from_registry(
     creative_panel.clamp_page();
 }
 
+/// Handles creative panel navigation for the `graphic::components::inventory_creative` module.
 fn handle_creative_panel_navigation(
     mouse: Res<ButtonInput<MouseButton>>,
     inventory_ui: Res<PlayerInventoryUiState>,
@@ -67,6 +72,7 @@ fn handle_creative_panel_navigation(
     }
 }
 
+/// Handles creative panel clicks for the `graphic::components::inventory_creative` module.
 fn handle_creative_panel_clicks(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -127,6 +133,7 @@ fn handle_creative_panel_clicks(
     }
 }
 
+/// Synchronizes creative panel ui for the `graphic::components::inventory_creative` module.
 #[allow(clippy::too_many_arguments)]
 fn sync_creative_panel_ui(
     creative_panel: Res<CreativePanelState>,
@@ -190,6 +197,7 @@ fn sync_creative_panel_ui(
 
 }
 
+/// Runs the `open_recipe_preview_dialog_for_item` routine for open recipe preview dialog for item in the `graphic::components::inventory_creative` module.
 fn open_recipe_preview_dialog_for_item(
     item_id: ItemId,
     recipe_registry: &RecipeRegistry,
@@ -261,6 +269,7 @@ fn open_recipe_preview_dialog_for_item(
 }
 
 
+/// Parses creative slot index for the `graphic::components::inventory_creative` module.
 fn parse_creative_slot_index(css_id: &str) -> Option<usize> {
     css_id
         .strip_prefix(CREATIVE_PANEL_SLOT_PREFIX)
@@ -269,6 +278,7 @@ fn parse_creative_slot_index(css_id: &str) -> Option<usize> {
         .filter(|index| *index < CREATIVE_PANEL_PAGE_SIZE)
 }
 
+/// Synchronizes creative slot hover border for the `graphic::components::inventory_creative` module.
 fn sync_creative_slot_hover_border(
     slot_frames: &mut Query<(&CssID, &UIWidgetState, &mut BorderColor), With<Button>>,
     inventory_open: bool,

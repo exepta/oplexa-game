@@ -3,8 +3,10 @@ use crate::core::states::states::{AppState, LoadingStates};
 use crate::core::world::block::{BlockRegistry, Face, VOXEL_SIZE, id_any};
 use bevy::prelude::*;
 
+/// Represents water gfx plugin used by the `generator::shader::water_shader` module.
 pub struct WaterGfxPlugin;
 impl Plugin for WaterGfxPlugin {
+    /// Builds this component for the `generator::shader::water_shader` module.
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_systems(Update, tick_water_time);
@@ -16,6 +18,7 @@ impl Plugin for WaterGfxPlugin {
     }
 }
 
+/// Runs the `setup_water_mat` routine for setup water mat in the `generator::shader::water_shader` module.
 pub fn setup_water_mat(
     reg: Res<BlockRegistry>,
     mut water_mats: ResMut<Assets<WaterMaterial>>,
@@ -26,6 +29,7 @@ pub fn setup_water_mat(
     cmds.insert_resource(WaterMatHandle(handle));
 }
 
+/// Runs the `tick_water_time` routine for tick water time in the `generator::shader::water_shader` module.
 pub fn tick_water_time(time: Res<Time>, mut mats: ResMut<Assets<WaterMaterial>>) {
     let dt = time.delta_secs();
     for (_, m) in mats.iter_mut() {
@@ -33,6 +37,7 @@ pub fn tick_water_time(time: Res<Time>, mut mats: ResMut<Assets<WaterMaterial>>)
     }
 }
 
+/// Creates water material for atlas tile for the `generator::shader::water_shader` module.
 fn make_water_material_for_atlas_tile(
     reg: &BlockRegistry,
     water_id: u16,

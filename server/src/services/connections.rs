@@ -163,6 +163,7 @@ pub fn cleanup_orphaned_players(
 
 // ── Auth message handler ──────────────────────────────────────────────────────
 
+/// Handles auth messages for the `services::connections` module.
 pub fn handle_auth_messages(
     mut q: Query<(Entity, &mut MessageReceiver<Auth>), With<ClientOf>>,
     q_remote_id: Query<&RemoteId>,
@@ -332,6 +333,7 @@ pub fn handle_auth_messages(
 
 // ── Stale player cleanup ──────────────────────────────────────────────────────
 
+/// Runs the `purge_stale_players` routine for purge stale players in the `services::connections` module.
 pub fn purge_stale_players(
     mut state: ResMut<ServerState>,
     config: Res<ServerRuntimeConfig>,
@@ -374,6 +376,7 @@ pub fn purge_stale_players(
 
 // ── LAN discovery poll ────────────────────────────────────────────────────────
 
+/// Runs the `poll_lan_discovery` routine for poll lan discovery in the `services::connections` module.
 pub fn poll_lan_discovery(
     mut discovery: ResMut<LanDiscoveryResource>,
     state: Res<ServerState>,

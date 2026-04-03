@@ -488,6 +488,7 @@ pub fn save_water_chunk_sync(
     let _ = cache.write_chunk_replace(ws, coord, &merged);
 }
 
+/// Saves water chunk at root sync for the `generator::chunk::water_utils` module.
 pub fn save_water_chunk_at_root_sync(ws_root: std::path::PathBuf, coord: IVec2, w: &FluidChunk) {
     let _guard = world_save_io_guard();
     let wat = encode_fluid_chunk(w);
@@ -639,6 +640,7 @@ pub(crate) fn despawn_water_mesh(
 /* == Math/Index Utilities =============================================== */
 /* ======================================================================= */
 
+/// Runs the `col_rand_f01` routine for col rand f01 in the `generator::chunk::water_utils` module.
 #[inline]
 fn col_rand_f01(x: i32, z: i32, seed: u32) -> f32 {
     (col_rand_u32(x, z, seed) as f32) / (u32::MAX as f32)
@@ -654,10 +656,12 @@ fn column_top_world_y(chunk: &ChunkData, x: usize, z: usize) -> i32 {
     Y_MIN - 1
 }
 
+/// Runs the `div_floor` routine for div floor in the `generator::chunk::water_utils` module.
 #[inline]
 fn div_floor(a: i32, b: i32) -> i32 {
     (a as f32 / b as f32).floor() as i32
 }
+/// Runs the `mod_floor` routine for mod floor in the `generator::chunk::water_utils` module.
 #[inline]
 fn mod_floor(a: i32, b: i32) -> i32 {
     a - div_floor(a, b) * b

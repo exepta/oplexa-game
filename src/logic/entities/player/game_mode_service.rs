@@ -4,9 +4,11 @@ use crate::core::states::states::{AppState, InGameStates};
 use crate::utils::key_utils::convert;
 use bevy::prelude::*;
 
+/// Represents change game mode handler used by the `logic::entities::player::game_mode_service` module.
 pub struct ChangeGameModeHandler;
 
 impl Plugin for ChangeGameModeHandler {
+    /// Builds this component for the `logic::entities::player::game_mode_service` module.
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
@@ -15,6 +17,7 @@ impl Plugin for ChangeGameModeHandler {
     }
 }
 
+/// Runs the `change_mode` routine for change mode in the `logic::entities::player::game_mode_service` module.
 fn change_mode(
     mut game_mode: ResMut<GameModeState>,
     keys: Res<ButtonInput<KeyCode>>,

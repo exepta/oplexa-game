@@ -4,6 +4,7 @@ pub mod registry;
 use bevy::prelude::*;
 use serde::*;
 
+/// Represents biome used by the `core::world::biome` module.
 #[derive(Debug, Deserialize, PartialEq, Clone)]
 pub struct Biome {
     pub localized_name: String,
@@ -24,6 +25,7 @@ pub struct Biome {
     pub generation: BiomeGeneration,
 }
 
+/// Defines the possible biome size variants in the `core::world::biome` module.
 #[derive(Debug, Deserialize, PartialEq, Clone)]
 pub enum BiomeSize {
     VeryTiny,
@@ -37,6 +39,7 @@ pub enum BiomeSize {
 }
 
 impl BiomeSize {
+    /// Runs the `from_str` routine for from str in the `core::world::biome` module.
     pub fn from_str(s: &str) -> Self {
         match s {
             "very_tiny" => Self::VeryTiny, // Max 4 chunks
@@ -52,6 +55,7 @@ impl BiomeSize {
     }
 }
 
+/// Represents biome surface used by the `core::world::biome` module.
 #[derive(Debug, Deserialize, PartialEq, Clone)]
 pub struct BiomeSurface {
     pub top: Vec<String>,
@@ -62,6 +66,7 @@ pub struct BiomeSurface {
 }
 
 impl Default for BiomeSurface {
+    /// Runs the `default` routine for default in the `core::world::biome` module.
     fn default() -> Self {
         Self {
             top: vec!["grass_block".to_string()],
@@ -73,6 +78,7 @@ impl Default for BiomeSurface {
     }
 }
 
+/// Represents biome settings used by the `core::world::biome` module.
 #[derive(Debug, Deserialize, PartialEq, Clone, Default)]
 pub struct BiomeSettings {
     #[serde(default)]
@@ -97,6 +103,7 @@ pub struct BiomeSettings {
     pub mount_freq: Option<f32>,
 }
 
+/// Represents biome generation used by the `core::world::biome` module.
 #[derive(Debug, Deserialize, PartialEq, Clone, Default)]
 pub struct BiomeGeneration {
     #[serde(default)]
@@ -110,22 +117,27 @@ pub struct BiomeGeneration {
     pub river_size_between: (i32, i32),
 }
 
+/// Runs the `default_true` routine for default true in the `core::world::biome` module.
 fn default_true() -> bool {
     true
 }
 
+/// Runs the `default_rarity` routine for default rarity in the `core::world::biome` module.
 fn default_rarity() -> f32 {
     0.1
 }
 
+/// Runs the `default_river_chance` routine for default river chance in the `core::world::biome` module.
 fn default_river_chance() -> f32 {
     0.1
 }
 
+/// Runs the `default_river_size_between` routine for default river size between in the `core::world::biome` module.
 fn default_river_size_between() -> (i32, i32) {
     (6, 16)
 }
 
+/// Deserializes size between for the `core::world::biome` module.
 fn deserialize_size_between<'de, D>(de: D) -> Result<(i32, i32), D::Error>
 where
     D: Deserializer<'de>,
@@ -142,6 +154,7 @@ where
     Ok(if a <= b { (a, b) } else { (b, a) })
 }
 
+/// Runs the `default_sizes` routine for default sizes in the `core::world::biome` module.
 fn default_sizes() -> Vec<BiomeSize> {
     vec![BiomeSize::Medium]
 }

@@ -10,9 +10,11 @@ use crate::core::events::ui_events::{
 };
 use bevy::prelude::*;
 
+/// Represents event module used by the `core::events` module.
 pub struct EventModule;
 
 impl Plugin for EventModule {
+    /// Builds this component for the `core::events` module.
     fn build(&self, app: &mut App) {
         app.add_plugins(BlockEventsModule)
             .add_message::<ChunkUnloadEvent>()

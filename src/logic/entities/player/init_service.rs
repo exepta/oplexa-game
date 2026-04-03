@@ -20,22 +20,27 @@ const EYE_HEIGHT: f32 = 1.05;
 const RADIUS: f32 = 0.30;
 const HEADROOM: f32 = 0.10;
 
+/// Represents main sun used by the `logic::entities::player::init_service` module.
 #[derive(Component)]
 struct MainSun;
 
+/// Represents double tap space used by the `logic::entities::player::init_service` module.
 #[derive(Component)]
 struct DoubleTapSpace {
     last_press: f32,
 }
 
+/// Represents player kinematics used by the `logic::entities::player::init_service` module.
 #[derive(Component)]
 struct PlayerKinematics {
     vel_y: f32,
 }
 
+/// Represents player initialize used by the `logic::entities::player::init_service` module.
 pub struct PlayerInitialize;
 
 impl Plugin for PlayerInitialize {
+    /// Builds this component for the `logic::entities::player::init_service` module.
     fn build(&self, app: &mut App) {
         app.insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
@@ -64,18 +69,21 @@ impl Plugin for PlayerInitialize {
     }
 }
 
+/// Runs the `enable_physics_pipeline` routine for enable physics pipeline in the `logic::entities::player::init_service` module.
 fn enable_physics_pipeline(mut configs: Query<&mut RapierConfiguration>) {
     for mut config in &mut configs {
         config.physics_pipeline_active = true;
     }
 }
 
+/// Runs the `disable_physics_pipeline` routine for disable physics pipeline in the `logic::entities::player::init_service` module.
 fn disable_physics_pipeline(mut configs: Query<&mut RapierConfiguration>) {
     for mut config in &mut configs {
         config.physics_pipeline_active = false;
     }
 }
 
+/// Runs the `despawn_player_entities` routine for despawn player entities in the `logic::entities::player::init_service` module.
 fn despawn_player_entities(
     mut commands: Commands,
     existing_players: Query<Entity, With<Player>>,
@@ -89,6 +97,7 @@ fn despawn_player_entities(
     }
 }
 
+/// Spawns scene for the `logic::entities::player::init_service` module.
 fn spawn_scene(mut commands: Commands, existing_sun: Query<Entity, With<MainSun>>) {
     if !existing_sun.is_empty() {
         return;
@@ -111,6 +120,7 @@ fn spawn_scene(mut commands: Commands, existing_sun: Query<Entity, With<MainSun>
     ));
 }
 
+/// Spawns player for the `logic::entities::player::init_service` module.
 fn spawn_player(
     mut commands: Commands,
     game_config: Res<GlobalConfig>,
@@ -213,6 +223,7 @@ fn spawn_player(
     });
 }
 
+/// Runs the `grab_cursor_on_click` routine for grab cursor on click in the `logic::entities::player::init_service` module.
 fn grab_cursor_on_click(
     mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -239,6 +250,7 @@ fn grab_cursor_on_click(
     }
 }
 
+/// Runs the `release_cursor_on_escape` routine for release cursor on escape in the `logic::entities::player::init_service` module.
 fn release_cursor_on_escape(
     mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -254,6 +266,7 @@ fn release_cursor_on_escape(
     }
 }
 
+/// Runs the `mouse_look` routine for mouse look in the `logic::entities::player::init_service` module.
 fn mouse_look(
     mut ev_motion: MessageReader<MouseMotion>,
     mut q_player: Query<
@@ -298,6 +311,7 @@ fn mouse_look(
     }
 }
 
+/// Runs the `player_move_simple` routine for player move simple in the `logic::entities::player::init_service` module.
 fn player_move_simple(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -421,6 +435,7 @@ fn player_move_simple(
     }
 }
 
+/// Applies noclip to player for the `logic::entities::player::init_service` module.
 fn apply_noclip_to_player(
     mut commands: Commands,
     game_mode: Res<GameModeState>,

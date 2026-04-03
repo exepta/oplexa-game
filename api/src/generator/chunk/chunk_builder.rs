@@ -21,9 +21,11 @@ const MAX_MESH_APPLY_PER_FRAME: usize = MAX_UPDATE_FRAMES / 2;
 const MAX_COLLIDER_APPLY_PER_FRAME: usize = MAX_UPDATE_FRAMES / 4;
 const MAX_INFLIGHT_COLLIDER_BUILD: usize = 20;
 
+/// Represents collider backlog used by the `generator::chunk::chunk_builder` module.
 #[derive(Default, Resource)]
 struct ColliderBacklog(HashMap<(IVec2, u8), ColliderTodo>);
 
+/// Represents collider todo used by the `generator::chunk::chunk_builder` module.
 struct ColliderTodo {
     coord: IVec2,
     sub: u8,
@@ -32,25 +34,31 @@ struct ColliderTodo {
     indices: Vec<u32>,
 }
 
+/// Represents collider build used by the `generator::chunk::chunk_builder` module.
 struct ColliderBuild {
     origin: Vec3,
     collider: Option<Collider>,
 }
 
+/// Represents chunk collider index used by the `generator::chunk::chunk_builder` module.
 #[derive(Resource, Default)]
 struct ChunkColliderIndex(pub HashMap<(IVec2, u8), Entity>);
 
+/// Represents pending collider build used by the `generator::chunk::chunk_builder` module.
 #[derive(Resource, Default)]
 struct PendingColliderBuild(
     pub HashMap<(IVec2, u8), bevy::tasks::Task<((IVec2, u8), ColliderBuild)>>,
 );
 
+/// Represents pending chunk save used by the `generator::chunk::chunk_builder` module.
 #[derive(Resource, Default)]
 struct PendingChunkSave(pub HashMap<IVec2, bevy::tasks::Task<IVec2>>);
 
+/// Represents kick queue used by the `generator::chunk::chunk_builder` module.
 #[derive(Resource, Default)]
 struct KickQueue(Vec<KickItem>);
 
+/// Represents kick item used by the `generator::chunk::chunk_builder` module.
 #[derive(Clone, Copy, Debug)]
 struct KickItem {
     coord: IVec2,
@@ -59,12 +67,15 @@ struct KickItem {
     tries_left: u8,
 }
 
+/// Represents kicked once used by the `generator::chunk::chunk_builder` module.
 #[derive(Resource, Default)]
 struct KickedOnce(HashSet<(IVec2, u8)>);
 
+/// Represents queued once used by the `generator::chunk::chunk_builder` module.
 #[derive(Resource, Default)]
 struct QueuedOnce(HashSet<(IVec2, u8)>);
 
+/// Represents chunk unload state used by the `generator::chunk::chunk_builder` module.
 #[derive(SystemParam)]
 struct ChunkUnloadState<'w, 's> {
     pending_gen: ResMut<'w, PendingGen>,
@@ -76,6 +87,7 @@ struct ChunkUnloadState<'w, 's> {
     _marker: std::marker::PhantomData<&'s ()>,
 }
 
+/// Represents chunk cleanup state used by the `generator::chunk::chunk_builder` module.
 #[derive(SystemParam)]
 struct ChunkCleanupState<'w, 's> {
     pending_gen: ResMut<'w, PendingGen>,
@@ -90,9 +102,11 @@ struct ChunkCleanupState<'w, 's> {
     _marker: std::marker::PhantomData<&'s ()>,
 }
 
+/// Represents chunk builder used by the `generator::chunk::chunk_builder` module.
 pub struct ChunkBuilder;
 
 impl Plugin for ChunkBuilder {
+    /// Builds this component for the `generator::chunk::chunk_builder` module.
     fn build(&self, app: &mut App) {
         app.init_resource::<ChunkMeshIndex>()
             .init_resource::<MeshBacklog>()
@@ -175,6 +189,7 @@ impl Plugin for ChunkBuilder {
 //                    Sub Update
 // ================================================
 
+/// Runs the `enqueue_kick_for_new_subchunks` routine for enqueue kick for new subchunks in the `generator::chunk::chunk_builder` module.
 fn enqueue_kick_for_new_subchunks(
     q_new_meshes: Query<&SubchunkMesh, Added<SubchunkMesh>>,
     mut queue: ResMut<KickQueue>,
@@ -208,6 +223,7 @@ fn enqueue_kick_for_new_subchunks(
     }
 }
 
+/// Processes kick queue for the `generator::chunk::chunk_builder` module.
 fn process_kick_queue(
     mut queue: ResMut<KickQueue>,
     mut kicked: ResMut<KickedOnce>,
@@ -256,6 +272,7 @@ fn process_kick_queue(
 //                    Main
 // ================================================
 
+/// Runs the `check_base_gen_world_ready` routine for check base gen world ready in the `generator::chunk::chunk_builder` module.
 fn check_base_gen_world_ready(
     game_config: Res<GlobalConfig>,
     multiplayer_connection: Res<MultiplayerConnectionState>,
@@ -297,6 +314,7 @@ fn check_base_gen_world_ready(
 }
 
 //System
+/// Runs the `schedule_chunk_generation` routine for schedule chunk generation in the `generator::chunk::chunk_builder` module.
 fn schedule_chunk_generation(
     mut pending: ResMut<PendingGen>,
     chunk_map: Res<ChunkMap>,
@@ -388,6 +406,7 @@ fn schedule_chunk_generation(
 }
 
 //System
+/// Runs the `drain_mesh_backlog` routine for drain mesh backlog in the `generator::chunk::chunk_builder` module.
 fn drain_mesh_backlog(
     mut backlog: ResMut<MeshBacklog>,
     mut pending_mesh: ResMut<PendingMesh>,
@@ -434,6 +453,7 @@ fn drain_mesh_backlog(
 }
 
 //System
+/// Runs the `collect_generated_chunks` routine for collect generated chunks in the `generator::chunk::chunk_builder` module.
 fn collect_generated_chunks(
     mut pending_gen: ResMut<PendingGen>,
     mut pending_mesh: ResMut<PendingMesh>,
@@ -526,6 +546,7 @@ fn collect_generated_chunks(
 }
 
 //System
+/// Runs the `collect_meshed_subchunks` routine for collect meshed subchunks in the `generator::chunk::chunk_builder` module.
 fn collect_meshed_subchunks(
     mut commands: Commands,
     mut pending_mesh: ResMut<PendingMesh>,
@@ -649,6 +670,7 @@ fn collect_meshed_subchunks(
     }
 }
 
+/// Runs the `schedule_collider_build_tasks` routine for schedule collider build tasks in the `generator::chunk::chunk_builder` module.
 fn schedule_collider_build_tasks(
     mut backlog: ResMut<ColliderBacklog>,
     mut pending: ResMut<PendingColliderBuild>,
@@ -688,6 +710,7 @@ fn schedule_collider_build_tasks(
     }
 }
 
+/// Runs the `collect_finished_collider_builds` routine for collect finished collider builds in the `generator::chunk::chunk_builder` module.
 fn collect_finished_collider_builds(
     mut commands: Commands,
     mut pending: ResMut<PendingColliderBuild>,
@@ -754,6 +777,7 @@ fn collect_finished_collider_builds(
 }
 
 //System
+/// Runs the `schedule_remesh_tasks_from_events` routine for schedule remesh tasks from events in the `generator::chunk::chunk_builder` module.
 fn schedule_remesh_tasks_from_events(
     mut pending_mesh: ResMut<PendingMesh>,
     chunk_map: Res<ChunkMap>,
@@ -810,6 +834,7 @@ fn schedule_remesh_tasks_from_events(
 }
 
 //System
+/// Runs the `unload_far_chunks` routine for unload far chunks in the `generator::chunk::chunk_builder` module.
 fn unload_far_chunks(
     mut commands: Commands,
     mut chunk_map: ResMut<ChunkMap>,
@@ -902,6 +927,7 @@ fn unload_far_chunks(
     }
 }
 
+/// Runs the `cleanup_chunk_runtime_on_exit` routine for cleanup chunk runtime on exit in the `generator::chunk::chunk_builder` module.
 fn cleanup_chunk_runtime_on_exit(
     mut commands: Commands,
     mut chunk_map: ResMut<ChunkMap>,
@@ -948,6 +974,7 @@ fn cleanup_chunk_runtime_on_exit(
     commands.remove_resource::<LoadCenter>();
 }
 
+/// Runs the `cleanup_kick_flags_on_unload` routine for cleanup kick flags on unload in the `generator::chunk::chunk_builder` module.
 fn cleanup_kick_flags_on_unload(
     mut ev_unload: MessageReader<ChunkUnloadEvent>,
     mut kicked: ResMut<KickedOnce>,
@@ -962,6 +989,7 @@ fn cleanup_kick_flags_on_unload(
     }
 }
 
+/// Runs the `collect_chunk_save_tasks` routine for collect chunk save tasks in the `generator::chunk::chunk_builder` module.
 fn collect_chunk_save_tasks(mut pending: ResMut<PendingChunkSave>) {
     let mut done = Vec::new();
     for (coord, task) in pending.0.iter_mut() {
@@ -974,6 +1002,7 @@ fn collect_chunk_save_tasks(mut pending: ResMut<PendingChunkSave>) {
     }
 }
 
+/// Builds trimesh collider for the `generator::chunk::chunk_builder` module.
 fn build_trimesh_collider(
     positions: Vec<[f32; 3]>,
     indices: Vec<u32>,
@@ -995,6 +1024,7 @@ fn build_trimesh_collider(
     Collider::trimesh_with_flags(verts, tris, flags).ok()
 }
 
+/// Runs the `estimate_surface_sub_fast` routine for estimate surface sub fast in the `generator::chunk::chunk_builder` module.
 #[inline]
 fn estimate_surface_sub_fast(chunk: &ChunkData) -> usize {
     let mut max_wy = Y_MIN - 1;
@@ -1015,6 +1045,7 @@ fn estimate_surface_sub_fast(chunk: &ChunkData) -> usize {
     (ly / SEC_H).clamp(0, SEC_COUNT.saturating_sub(1))
 }
 
+/// Runs the `sub_priority_order` routine for sub priority order in the `generator::chunk::chunk_builder` module.
 fn sub_priority_order(chunk: &ChunkData) -> Vec<usize> {
     let mut out = Vec::with_capacity(SEC_COUNT);
     let mut used = vec![false; SEC_COUNT];

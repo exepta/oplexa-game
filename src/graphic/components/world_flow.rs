@@ -1,15 +1,18 @@
+/// Runs the `show_world_gen_ui` routine for show world gen ui in the `graphic::components::world_flow` module.
 fn show_world_gen_ui(mut visibility: Query<&mut Visibility, With<WorldGenRoot>>) {
     if let Ok(mut visible) = visibility.single_mut() {
         *visible = Visibility::Inherited;
     }
 }
 
+/// Runs the `hide_world_gen_ui` routine for hide world gen ui in the `graphic::components::world_flow` module.
 fn hide_world_gen_ui(mut visibility: Query<&mut Visibility, With<WorldGenRoot>>) {
     if let Ok(mut visible) = visibility.single_mut() {
         *visible = Visibility::Hidden;
     }
 }
 
+/// Synchronizes world gen progress for the `graphic::components::world_flow` module.
 fn sync_world_gen_progress(
     time: Res<Time>,
     app_state: Res<State<AppState>>,
@@ -40,6 +43,7 @@ fn sync_world_gen_progress(
     }
 }
 
+/// Checks whether loading state in the `graphic::components::world_flow` module.
 fn is_loading_state(app_state: Res<State<AppState>>) -> bool {
     matches!(
         app_state.get(),
@@ -49,10 +53,12 @@ fn is_loading_state(app_state: Res<State<AppState>>) -> bool {
     )
 }
 
+/// Runs the `reset_world_gen_ui_animation` routine for reset world gen ui animation in the `graphic::components::world_flow` module.
 fn reset_world_gen_ui_animation(mut animation: ResMut<WorldGenUiAnimation>) {
     animation.displayed_pct = 0.0;
 }
 
+/// Runs the `smooth_progress` routine for smooth progress in the `graphic::components::world_flow` module.
 fn smooth_progress(current: f32, target: f32, delta_secs: f32) -> f32 {
     if current >= target {
         return current;
@@ -62,6 +68,7 @@ fn smooth_progress(current: f32, target: f32, delta_secs: f32) -> f32 {
     (current + step).min(target)
 }
 
+/// Runs the `trigger_world_unload_ui` routine for trigger world unload ui in the `graphic::components::world_flow` module.
 fn trigger_world_unload_ui(
     mut root: Query<&mut Visibility, With<WorldUnloadRoot>>,
     mut state: ResMut<WorldUnloadUiState>,
@@ -73,6 +80,7 @@ fn trigger_world_unload_ui(
     }
 }
 
+/// Runs the `tick_world_unload_ui` routine for tick world unload ui in the `graphic::components::world_flow` module.
 fn tick_world_unload_ui(
     time: Res<Time>,
     app_state: Res<State<AppState>>,
@@ -111,6 +119,7 @@ fn tick_world_unload_ui(
     state.active = false;
 }
 
+/// Runs the `reset_world_unload_ui` routine for reset world unload ui in the `graphic::components::world_flow` module.
 fn reset_world_unload_ui(
     mut root: Query<&mut Visibility, With<WorldUnloadRoot>>,
     mut state: ResMut<WorldUnloadUiState>,
@@ -122,6 +131,7 @@ fn reset_world_unload_ui(
     state.timer.reset();
 }
 
+/// Runs the `world_unload_ui_should_tick` routine for world unload ui should tick in the `graphic::components::world_flow` module.
 fn world_unload_ui_should_tick(state: Res<WorldUnloadUiState>) -> bool {
     state.active
 }
@@ -175,6 +185,7 @@ fn suppress_stale_scrollbars(
     }
 }
 
+/// Runs the `hide_menu_roots_for_ingame` routine for hide menu roots for ingame in the `graphic::components::world_flow` module.
 fn hide_menu_roots_for_ingame(
     mut commands: Commands,
     mut roots: ParamSet<(

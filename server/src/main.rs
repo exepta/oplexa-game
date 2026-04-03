@@ -23,6 +23,7 @@ use lightyear::prelude::server::ServerPlugins;
 use simple_logger::SimpleLogger;
 use std::time::Duration;
 
+/// Runs the `main` routine for main in the `project` module.
 fn main() {
     SimpleLogger::new()
         .with_level(log::LevelFilter::Info)
@@ -74,5 +75,6 @@ fn main() {
         .run();
 }
 
+/// Represents lan discovery resource used by the `project` module.
 #[derive(Resource)]
 pub struct LanDiscoveryResource(pub Option<LanDiscoveryServer>);

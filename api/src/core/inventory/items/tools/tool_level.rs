@@ -1,3 +1,4 @@
+/// Defines the possible tool level variants in the `core::inventory::items::tools::tool_level` module.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum ToolLevel {
     L1 = 1,
@@ -9,17 +10,20 @@ pub enum ToolLevel {
 }
 
 impl Default for ToolLevel {
+    /// Runs the `default` routine for default in the `core::inventory::items::tools::tool_level` module.
     fn default() -> Self {
         Self::L1
     }
 }
 
 impl ToolLevel {
+    /// Runs the `as_u8` routine for as u8 in the `core::inventory::items::tools::tool_level` module.
     #[inline]
     pub const fn as_u8(self) -> u8 {
         self as u8
     }
 
+    /// Runs the `from_u8_clamped` routine for from u8 clamped in the `core::inventory::items::tools::tool_level` module.
     #[inline]
     pub const fn from_u8_clamped(raw: u8) -> Self {
         match raw {

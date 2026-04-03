@@ -15,6 +15,7 @@ pub struct SubChunkNeedRemeshEvent {
     pub sub: usize,
 }
 
+/// Represents chunk unload event used by the `core::events::chunk_events` module.
 #[derive(Message, Clone, Copy, Debug)]
 pub struct ChunkUnloadEvent {
     pub coord: IVec2,

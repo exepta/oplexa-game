@@ -26,6 +26,7 @@ use std::time::Instant;
 
 const STREAM_CHUNK_CACHE_LIMIT: usize = 512;
 
+/// Represents server runtime config used by the `state` module.
 #[derive(Resource)]
 pub struct ServerRuntimeConfig {
     pub server_name: String,
@@ -44,6 +45,7 @@ pub struct ServerRuntimeConfig {
     pub dead_entity_check_interval_secs: u64,
 }
 
+/// Represents server state used by the `state` module.
 #[derive(Resource)]
 pub struct ServerState {
     pub world_root: PathBuf,
@@ -67,6 +69,7 @@ pub struct ServerState {
 }
 
 impl ServerState {
+    /// Creates a new instance for the `state` module.
     pub fn new(world_root: PathBuf, world_seed: i32) -> Self {
         let block_registry = BlockRegistry::load_headless("assets/blocks");
         let biome_registry = BiomeRegistry::load_from_folder("assets/biomes");
@@ -93,6 +96,7 @@ impl ServerState {
         }
     }
 
+    /// Persists block overrides for the `state` module.
     pub fn persist_block_overrides(&self) {
         let path = self.world_root.join("blocks.txt");
         let mut lines = self
@@ -112,6 +116,7 @@ impl ServerState {
         }
     }
 
+    /// Runs the `queue_chunk_for_stream` routine for queue chunk for stream in the `state` module.
     pub fn queue_chunk_for_stream(&mut self, entity: Entity, coord: IVec2) {
         if self.streamed_chunk_cache.contains_key(&coord) {
             self.pending_chunk_sends.push_back((entity, coord));
@@ -147,6 +152,7 @@ impl ServerState {
         self.pending_stream_chunk_tasks.insert(coord, task);
     }
 
+    /// Runs the `collect_ready_stream_chunks` routine for collect ready stream chunks in the `state` module.
     pub fn collect_ready_stream_chunks(&mut self) {
         let mut finished = Vec::new();
         let mut ready_chunks = Vec::new();
@@ -182,12 +188,14 @@ impl ServerState {
         }
     }
 
+    /// Runs the `invalidate_streamed_chunk` routine for invalidate streamed chunk in the `state` module.
     pub fn invalidate_streamed_chunk(&mut self, coord: IVec2) {
         self.streamed_chunk_cache.remove(&coord);
         self.pending_stream_chunk_tasks.remove(&coord);
         self.pending_stream_chunk_waiters.remove(&coord);
     }
 
+    /// Stores stream chunk for the `state` module.
     fn store_stream_chunk(&mut self, coord: IVec2, encoded: Vec<u8>) {
         self.streamed_chunk_cache.insert(coord, encoded);
         self.streamed_chunk_cache_order
@@ -204,6 +212,7 @@ impl ServerState {
     }
 }
 
+/// Applies server caves for the `state` module.
 fn apply_server_caves(
     chunk: &mut ChunkData,
     coord: IVec2,
@@ -232,6 +241,7 @@ fn apply_server_caves(
     }
 }
 
+/// Runs the `flood_ocean_connected_water` routine for flood ocean connected water in the `state` module.
 fn flood_ocean_connected_water(chunk: &mut ChunkData, sea_level: i32, water_id: BlockId) {
     if water_id == 0 {
         return;
@@ -289,6 +299,7 @@ fn flood_ocean_connected_water(chunk: &mut ChunkData, sea_level: i32, water_id: 
     }
 }
 
+/// Runs the `try_push_ocean_seed` routine for try push ocean seed in the `state` module.
 fn try_push_ocean_seed(
     chunk: &mut ChunkData,
     seen: &mut [bool],
@@ -315,6 +326,7 @@ fn try_push_ocean_seed(
     queue.push_back((x, y, z));
 }
 
+/// Runs the `server_cave_params` routine for server cave params in the `state` module.
 fn server_cave_params(seed: i32) -> CaveParams {
     CaveParams {
         seed,
@@ -357,6 +369,7 @@ fn server_cave_params(seed: i32) -> CaveParams {
     }
 }
 
+/// Applies block overrides for the `state` module.
 fn apply_block_overrides(overrides: &HashMap<[i32; 3], u16>, coord: IVec2, chunk: &mut ChunkData) {
     for (location, block_id) in overrides {
         let world_y = location[1];
@@ -376,6 +389,7 @@ fn apply_block_overrides(overrides: &HashMap<[i32; 3], u16>, coord: IVec2, chunk
     }
 }
 
+/// Loads block overrides for the `state` module.
 fn load_block_overrides(path: &Path) -> HashMap<[i32; 3], u16> {
     let Ok(contents) = fs::read_to_string(path) else {
         return HashMap::new();

@@ -1,3 +1,4 @@
+/// Runs the `toggle_pause_menu` routine for toggle pause menu in the `graphic::components::pause_menu` module.
 fn toggle_pause_menu(
     keyboard: Res<ButtonInput<KeyCode>>,
     global_config: Res<GlobalConfig>,
@@ -40,6 +41,7 @@ fn toggle_pause_menu(
     }
 }
 
+/// Runs the `enforce_pause_menu_visibility` routine for enforce pause menu visibility in the `graphic::components::pause_menu` module.
 fn enforce_pause_menu_visibility(
     pause_menu: Res<PauseMenuState>,
     mut ui_interaction: ResMut<UiInteractionState>,
@@ -57,6 +59,7 @@ fn enforce_pause_menu_visibility(
     set_pause_menu_cursor(true, &mut cursor_q);
 }
 
+/// Synchronizes pause menu labels for the `graphic::components::pause_menu` module.
 fn sync_pause_menu_labels(
     multiplayer_connection: Res<MultiplayerConnectionState>,
     mut buttons: Query<(&CssID, &mut Button)>,
@@ -87,6 +90,7 @@ fn sync_pause_menu_labels(
     }
 }
 
+/// Handles pause menu buttons for the `graphic::components::pause_menu` module.
 #[allow(clippy::too_many_arguments)]
 fn handle_pause_menu_buttons(
     multiplayer_connection: Res<MultiplayerConnectionState>,
@@ -158,6 +162,7 @@ fn handle_pause_menu_buttons(
     }
 }
 
+/// Synchronizes pause time for the `graphic::components::pause_menu` module.
 fn sync_pause_time(
     pause_menu: Res<PauseMenuState>,
     multiplayer_connection: Res<MultiplayerConnectionState>,
@@ -175,6 +180,7 @@ fn sync_pause_time(
     }
 }
 
+/// Runs the `close_pause_menu` routine for close pause menu in the `graphic::components::pause_menu` module.
 fn close_pause_menu(
     mut ui_interaction: ResMut<UiInteractionState>,
     mut pause_menu: ResMut<PauseMenuState>,
@@ -193,6 +199,7 @@ fn close_pause_menu(
     set_pause_menu_cursor(false, &mut cursor_q);
 }
 
+/// Sets pause menu cursor for the `graphic::components::pause_menu` module.
 fn set_pause_menu_cursor(
     menu_open: bool,
     cursor_q: &mut Query<&mut CursorOptions, With<PrimaryWindow>>,
@@ -210,6 +217,7 @@ fn set_pause_menu_cursor(
     }
 }
 
+/// Runs the `consume_pause_menu_action` routine for consume pause menu action in the `graphic::components::pause_menu` module.
 fn consume_pause_menu_action(
     widgets: &mut Query<(&CssID, &mut UIWidgetState), With<Button>>,
 ) -> Option<PauseMenuAction> {

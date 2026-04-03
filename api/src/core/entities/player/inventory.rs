@@ -4,6 +4,7 @@ use bevy::prelude::*;
 pub const PLAYER_INVENTORY_SLOTS: usize = 12;
 pub const PLAYER_INVENTORY_STACK_MAX: u16 = DEFAULT_ITEM_STACK_SIZE;
 
+/// Represents inventory slot used by the `core::entities::player::inventory` module.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InventorySlot {
     pub item_id: ItemId,
@@ -11,18 +12,21 @@ pub struct InventorySlot {
 }
 
 impl InventorySlot {
+    /// Checks whether empty in the `core::entities::player::inventory` module.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.item_id == 0 || self.count == 0
     }
 }
 
+/// Represents player inventory used by the `core::entities::player::inventory` module.
 #[derive(Resource, Debug, Clone)]
 pub struct PlayerInventory {
     pub slots: [InventorySlot; PLAYER_INVENTORY_SLOTS],
 }
 
 impl Default for PlayerInventory {
+    /// Runs the `default` routine for default in the `core::entities::player::inventory` module.
     fn default() -> Self {
         Self {
             slots: [InventorySlot::default(); PLAYER_INVENTORY_SLOTS],
@@ -31,6 +35,7 @@ impl Default for PlayerInventory {
 }
 
 impl PlayerInventory {
+    /// Adds item for the `core::entities::player::inventory` module.
     pub fn add_item(&mut self, item_id: ItemId, mut amount: u16, items: &ItemRegistry) -> u16 {
         if item_id == 0 || amount == 0 {
             return amount;
@@ -74,6 +79,7 @@ impl PlayerInventory {
         amount
     }
 
+    /// Runs the `total_items` routine for total items in the `core::entities::player::inventory` module.
     pub fn total_items(&self) -> u32 {
         self.slots.iter().map(|slot| slot.count as u32).sum()
     }

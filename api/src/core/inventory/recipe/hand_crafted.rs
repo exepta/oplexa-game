@@ -9,12 +9,14 @@ use std::collections::HashMap;
 pub const HAND_CRAFTED_TYPE_LOCALIZED: &str = "oplexa:hand_crafted";
 pub const HAND_CRAFTED_INPUT_SLOTS: usize = 2;
 
+/// Represents hand crafted data json used by the `core::inventory::recipe::hand_crafted` module.
 #[derive(Deserialize)]
 struct HandCraftedDataJson {
     #[serde(default)]
     craft: HashMap<String, HandCraftedEntryJson>,
 }
 
+/// Represents hand crafted entry json used by the `core::inventory::recipe::hand_crafted` module.
 #[derive(Deserialize)]
 struct HandCraftedEntryJson {
     item: String,
@@ -22,6 +24,7 @@ struct HandCraftedEntryJson {
     count: u16,
 }
 
+/// Registers hand crafted recipe type for the `core::inventory::recipe::hand_crafted` module.
 pub fn register_hand_crafted_recipe_type(recipe_type_registry: &mut RecipeTypeRegistry) {
     let Some(recipe_type) = NamespacedKey::parse(HAND_CRAFTED_TYPE_LOCALIZED) else {
         return;
@@ -34,6 +37,7 @@ pub fn register_hand_crafted_recipe_type(recipe_type_registry: &mut RecipeTypeRe
     );
 }
 
+/// Runs the `match_hand_crafted_inputs` routine for match hand crafted inputs in the `core::inventory::recipe::hand_crafted` module.
 fn match_hand_crafted_inputs(
     data: &Value,
     input_slots: &[InventorySlot],
@@ -86,6 +90,7 @@ fn match_hand_crafted_inputs(
     Some(required_inputs)
 }
 
+/// Runs the `default_required_count` routine for default required count in the `core::inventory::recipe::hand_crafted` module.
 #[inline]
 fn default_required_count() -> u16 {
     1

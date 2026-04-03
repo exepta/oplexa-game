@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+/// Defines the possible multiplayer connection phase variants in the `core::multiplayer` module.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum MultiplayerConnectionPhase {
     #[default]
@@ -7,6 +8,7 @@ pub enum MultiplayerConnectionPhase {
     Connecting,
 }
 
+/// Defines the possible world data mode variants in the `core::multiplayer` module.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum WorldDataMode {
     #[default]
@@ -14,6 +16,7 @@ pub enum WorldDataMode {
     Remote,
 }
 
+/// Represents multiplayer connection state used by the `core::multiplayer` module.
 #[derive(Resource, Debug, Clone)]
 pub struct MultiplayerConnectionState {
     pub connected: bool,
@@ -28,6 +31,7 @@ pub struct MultiplayerConnectionState {
 }
 
 impl Default for MultiplayerConnectionState {
+    /// Runs the `default` routine for default in the `core::multiplayer` module.
     fn default() -> Self {
         Self {
             connected: false,
@@ -44,18 +48,22 @@ impl Default for MultiplayerConnectionState {
 }
 
 impl MultiplayerConnectionState {
+    /// Runs the `uses_local_save_data` routine for uses local save data in the `core::multiplayer` module.
     pub fn uses_local_save_data(&self) -> bool {
         self.world_data_mode == WorldDataMode::Local
     }
 
+    /// Sets world data mode remote for the `core::multiplayer` module.
     pub fn set_world_data_mode_remote(&mut self) {
         self.world_data_mode = WorldDataMode::Remote;
     }
 
+    /// Sets world data mode local for the `core::multiplayer` module.
     pub fn set_world_data_mode_local(&mut self) {
         self.world_data_mode = WorldDataMode::Local;
     }
 
+    /// Clears session for the `core::multiplayer` module.
     pub fn clear_session(&mut self) {
         self.connected = false;
         self.phase = MultiplayerConnectionPhase::Idle;

@@ -15,6 +15,7 @@ use lightyear::prelude::*;
 use std::collections::{HashSet, VecDeque};
 use std::time::Instant;
 
+/// Handles player move messages for the `services::gameplay` module.
 pub fn handle_player_move_messages(
     mut q: Query<(Entity, &mut MessageReceiver<PlayerMove>), With<ClientOf>>,
     mut state: ResMut<ServerState>,
@@ -44,6 +45,7 @@ pub fn handle_player_move_messages(
     }
 }
 
+/// Handles keepalive messages for the `services::gameplay` module.
 pub fn handle_keepalive_messages(
     mut q: Query<(Entity, &mut MessageReceiver<ClientKeepAlive>), With<ClientOf>>,
     mut state: ResMut<ServerState>,
@@ -57,6 +59,7 @@ pub fn handle_keepalive_messages(
     }
 }
 
+/// Handles chunk interest messages for the `services::gameplay` module.
 pub fn handle_chunk_interest_messages(
     mut q: Query<(Entity, &mut MessageReceiver<ClientChunkInterest>), With<ClientOf>>,
     mut state: ResMut<ServerState>,
@@ -107,6 +110,7 @@ pub fn handle_chunk_interest_messages(
     }
 }
 
+/// Runs the `flush_chunk_streaming` routine for flush chunk streaming in the `services::gameplay` module.
 pub fn flush_chunk_streaming(
     q_clients: Query<Entity, With<ClientOf>>,
     q_remote_id: Query<&RemoteId>,
@@ -197,6 +201,7 @@ pub fn flush_chunk_streaming(
     }
 }
 
+/// Handles block break messages for the `services::gameplay` module.
 pub fn handle_block_break_messages(
     mut q: Query<(Entity, &mut MessageReceiver<ClientBlockBreak>), With<ClientOf>>,
     mut state: ResMut<ServerState>,
@@ -268,6 +273,7 @@ pub fn handle_block_break_messages(
     }
 }
 
+/// Handles block place messages for the `services::gameplay` module.
 pub fn handle_block_place_messages(
     mut q: Query<(Entity, &mut MessageReceiver<ClientBlockPlace>), With<ClientOf>>,
     mut state: ResMut<ServerState>,
@@ -306,6 +312,7 @@ pub fn handle_block_place_messages(
     }
 }
 
+/// Handles drop item messages for the `services::gameplay` module.
 pub fn handle_drop_item_messages(
     mut q: Query<(Entity, &mut MessageReceiver<ClientDropItem>), With<ClientOf>>,
     mut state: ResMut<ServerState>,
@@ -367,6 +374,7 @@ pub fn handle_drop_item_messages(
     }
 }
 
+/// Handles drop pickup messages for the `services::gameplay` module.
 pub fn handle_drop_pickup_messages(
     mut q: Query<(Entity, &mut MessageReceiver<ClientDropPickup>), With<ClientOf>>,
     mut state: ResMut<ServerState>,

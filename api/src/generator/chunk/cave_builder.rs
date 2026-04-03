@@ -16,6 +16,7 @@ pub struct CaveBudget {
     pub chunks_per_frame: usize,
 }
 impl Default for CaveBudget {
+    /// Runs the `default` routine for default in the `generator::chunk::cave_builder` module.
     fn default() -> Self {
         Self {
             chunks_per_frame: 2,
@@ -34,9 +35,11 @@ pub struct CaveJobs {
     pub running: Vec<(IVec2, CaveTask)>,
 }
 
+/// Represents cave builder used by the `generator::chunk::cave_builder` module.
 pub struct CaveBuilder;
 
 impl Plugin for CaveBuilder {
+    /// Builds this component for the `generator::chunk::cave_builder` module.
     fn build(&self, app: &mut App) {
         app.init_resource::<CaveBudget>()
             .init_resource::<CaveTracker>()
@@ -71,6 +74,7 @@ impl Plugin for CaveBuilder {
     }
 }
 
+/// Runs the `uses_local_world_data` routine for uses local world data in the `generator::chunk::cave_builder` module.
 fn uses_local_world_data(multiplayer_connection: Res<MultiplayerConnectionState>) -> bool {
     multiplayer_connection.uses_local_save_data()
 }
@@ -79,6 +83,7 @@ fn uses_local_world_data(multiplayer_connection: Res<MultiplayerConnectionState>
 Queue Management
 ========================= */
 
+/// Runs the `enqueue_pending_impl` routine for enqueue pending impl in the `generator::chunk::cave_builder` module.
 #[inline]
 fn enqueue_pending_impl(tracker: &mut CaveTracker, chunk_map: &ChunkMap) {
     // Iterate keys once; push only if neither done nor already pending.
@@ -90,6 +95,7 @@ fn enqueue_pending_impl(tracker: &mut CaveTracker, chunk_map: &ChunkMap) {
     }
 }
 
+/// Runs the `enqueue_all_loaded_chunks_for_caves` routine for enqueue all loaded chunks for caves in the `generator::chunk::cave_builder` module.
 fn enqueue_all_loaded_chunks_for_caves(mut tracker: ResMut<CaveTracker>, chunk_map: Res<ChunkMap>) {
     // OnEnter: enqueue whatever is already loaded at state start.
     enqueue_pending_impl(&mut tracker, &chunk_map);
@@ -108,6 +114,7 @@ fn clear_cave_queue(mut tracker: ResMut<CaveTracker>) {
     tracker.pending.clear();
 }
 
+/// Clears cave runtime for the `generator::chunk::cave_builder` module.
 fn clear_cave_runtime(mut tracker: ResMut<CaveTracker>, mut jobs: ResMut<CaveJobs>) {
     tracker.pending.clear();
     tracker.done.clear();
@@ -118,6 +125,7 @@ fn clear_cave_runtime(mut tracker: ResMut<CaveTracker>, mut jobs: ResMut<CaveJob
 Main Carving Step (async)
 ========================= */
 
+/// Runs the `carve_caves_step` routine for carve caves step in the `generator::chunk::cave_builder` module.
 fn carve_caves_step(
     budget: Res<CaveBudget>,
     mut tracker: ResMut<CaveTracker>,
@@ -289,6 +297,7 @@ fn carve_caves_step(
 Async compute (off-thread)
 ========================= */
 
+/// Computes cave edits for chunk for the `generator::chunk::cave_builder` module.
 async fn compute_cave_edits_for_chunk(
     params: CaveParams,
     chunk_coord: IVec2,
@@ -301,5 +310,6 @@ async fn compute_cave_edits_for_chunk(
 Legacy helper
 ========================= */
 
+/// Runs the `carve_single_chunk` routine for carve single chunk in the `generator::chunk::cave_builder` module.
 #[allow(dead_code)]
 fn carve_single_chunk(_chunk: &mut ChunkData, _field: &(), _ids: CaveBlockIds) {}

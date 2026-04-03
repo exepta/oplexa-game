@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+/// Represents server drop spawn used by the `core::network::protocols::drops` module.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerDropSpawn {
     pub drop_id: u64,
@@ -11,6 +12,7 @@ pub struct ServerDropSpawn {
 }
 
 impl ServerDropSpawn {
+    /// Creates a new instance for the `core::network::protocols::drops` module.
     pub fn new(
         drop_id: u64,
         location: [i32; 3],
@@ -30,17 +32,20 @@ impl ServerDropSpawn {
     }
 }
 
+/// Represents client drop pickup used by the `core::network::protocols::drops` module.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientDropPickup {
     pub drop_id: u64,
 }
 
 impl ClientDropPickup {
+    /// Creates a new instance for the `core::network::protocols::drops` module.
     pub fn new(drop_id: u64) -> Self {
         Self { drop_id }
     }
 }
 
+/// Represents client drop item used by the `core::network::protocols::drops` module.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientDropItem {
     pub location: [i32; 3],
@@ -51,6 +56,7 @@ pub struct ClientDropItem {
 }
 
 impl ClientDropItem {
+    /// Creates a new instance for the `core::network::protocols::drops` module.
     pub fn new(
         location: [i32; 3],
         block_id: u16,
@@ -68,6 +74,7 @@ impl ClientDropItem {
     }
 }
 
+/// Represents server drop picked used by the `core::network::protocols::drops` module.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerDropPicked {
     pub drop_id: u64,
@@ -76,6 +83,7 @@ pub struct ServerDropPicked {
 }
 
 impl ServerDropPicked {
+    /// Creates a new instance for the `core::network::protocols::drops` module.
     pub fn new(drop_id: u64, player_id: u64, block_id: u16) -> Self {
         Self {
             drop_id,

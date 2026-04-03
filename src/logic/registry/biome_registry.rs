@@ -5,14 +5,17 @@ use bevy::prelude::*;
 use std::fs;
 use std::path::Path;
 
+/// Represents biome internal registry used by the `logic::registry::biome_registry` module.
 pub struct BiomeInternalRegistry;
 
 impl Plugin for BiomeInternalRegistry {
+    /// Builds this component for the `logic::registry::biome_registry` module.
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(AppState::Preload), load_biomes_from_folder);
     }
 }
 
+/// Loads biomes from folder for the `logic::registry::biome_registry` module.
 fn load_biomes_from_folder(mut registry: ResMut<BiomeRegistry>) {
     let dir = Path::new("assets/biomes");
     if !dir.exists() {

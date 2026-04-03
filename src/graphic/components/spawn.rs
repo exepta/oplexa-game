@@ -1,3 +1,4 @@
+/// Spawns hardcoded ui for the `graphic::components::spawn` module.
 fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<WorldGenConfig>>) {
     let default_seed = world_gen_config.as_ref().map(|cfg| cfg.seed).unwrap_or(1337);
     let mut single_player_world_list = Entity::PLACEHOLDER;

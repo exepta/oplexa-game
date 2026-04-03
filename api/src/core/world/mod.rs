@@ -13,6 +13,7 @@ use crate::core::world::chunk::*;
 use crate::core::world::chunk_dimension::*;
 use bevy::prelude::*;
 
+/// Represents world mut access used by the `core::world` module.
 pub struct WorldMutAccess<'a> {
     pub chunk: &'a mut ChunkData,
     pub lx: usize,
@@ -21,10 +22,12 @@ pub struct WorldMutAccess<'a> {
     pub sub: usize,
 }
 impl<'a> WorldMutAccess<'a> {
+    /// Returns the requested data for the `core::world` module.
     #[inline]
     pub fn get(&self) -> BlockId {
         self.chunk.get(self.lx, self.ly, self.lz)
     }
+    /// Sets the requested data for the `core::world` module.
     #[inline]
     pub fn set(&mut self, id: BlockId) {
         self.chunk.set(self.lx, self.ly, self.lz, id);
@@ -32,6 +35,7 @@ impl<'a> WorldMutAccess<'a> {
     }
 }
 
+/// Runs the `world_access_mut` routine for world access mut in the `core::world` module.
 pub fn world_access_mut(chunk_map: &'_ mut ChunkMap, wp: IVec3) -> Option<WorldMutAccess<'_>> {
     if wp.y < Y_MIN || wp.y > Y_MAX {
         return None;
@@ -54,6 +58,7 @@ pub fn world_access_mut(chunk_map: &'_ mut ChunkMap, wp: IVec3) -> Option<WorldM
     })
 }
 
+/// Runs the `mark_dirty_block_and_neighbors` routine for mark dirty block and neighbors in the `core::world` module.
 pub fn mark_dirty_block_and_neighbors(
     chunk_map: &mut ChunkMap,
     wp: IVec3,
@@ -100,6 +105,7 @@ pub fn mark_dirty_block_and_neighbors(
     }
 }
 
+/// Runs the `ray_cast_voxels` routine for ray cast voxels in the `core::world` module.
 pub fn ray_cast_voxels(
     origin: Vec3,
     dir_in: Vec3,

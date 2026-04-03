@@ -140,6 +140,7 @@ pub fn query_vram_bytes_nvml_for_pid(pid: u32) -> Option<u64> {
     best
 }
 
+/// Finds bytes for pid for the `utils::v_ram_utils` module.
 #[cfg(feature = "vram_nvml")]
 fn find_bytes_for_pid(
     list: Vec<nvml_wrapper::struct_wrappers::device::ProcessInfo>,
@@ -157,11 +158,13 @@ fn find_bytes_for_pid(
     None
 }
 
+/// Runs the `query_vram_bytes_linux_drm_amdgpu` routine for query vram bytes linux drm amdgpu in the `utils::v_ram_utils` module.
 #[cfg(target_os = "linux")]
 pub fn query_vram_bytes_linux_drm_amdgpu() -> Option<u64> {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    /// Reads u64 any for the `utils::v_ram_utils` module.
     fn read_u64_any(path: &Path) -> Option<u64> {
         let s = fs::read_to_string(path).ok()?;
         let t = s.trim();
@@ -172,6 +175,7 @@ pub fn query_vram_bytes_linux_drm_amdgpu() -> Option<u64> {
         }
     }
 
+    /// Checks whether amdgpu in the `utils::v_ram_utils` module.
     fn is_amdgpu(dev_dir: &Path) -> bool {
         if let Ok(link) = fs::read_link(dev_dir.join("driver")) {
             if link.file_name().map(|n| n == "amdgpu").unwrap_or(false) {
@@ -208,6 +212,7 @@ pub fn query_vram_bytes_linux_drm_amdgpu() -> Option<u64> {
     best
 }
 
+/// Runs the `query_vram_bytes_linux_amdgpu_per_process` routine for query vram bytes linux amdgpu per process in the `utils::v_ram_utils` module.
 #[cfg(target_os = "linux")]
 pub fn query_vram_bytes_linux_amdgpu_per_process(pid: u32) -> Option<u64> {
     use std::fs;
@@ -240,6 +245,7 @@ pub fn query_vram_bytes_linux_amdgpu_per_process(pid: u32) -> Option<u64> {
     None
 }
 
+/// Parses amdgpu vm info for pid for the `utils::v_ram_utils` module.
 #[cfg(target_os = "linux")]
 fn parse_amdgpu_vm_info_for_pid(path: &std::path::Path, pid: u32) -> Option<u64> {
     use std::fs;
@@ -255,6 +261,7 @@ fn parse_amdgpu_vm_info_for_pid(path: &std::path::Path, pid: u32) -> Option<u64>
     None
 }
 
+/// Parses amdgpu gem info for pid for the `utils::v_ram_utils` module.
 #[cfg(target_os = "linux")]
 fn parse_amdgpu_gem_info_for_pid(path: &std::path::Path, pid: u32) -> Option<u64> {
     use std::fs;
@@ -270,6 +277,7 @@ fn parse_amdgpu_gem_info_for_pid(path: &std::path::Path, pid: u32) -> Option<u64
     None
 }
 
+/// Runs the `extract_vram_bytes_from_text` routine for extract vram bytes from text in the `utils::v_ram_utils` module.
 #[cfg(target_os = "linux")]
 fn extract_vram_bytes_from_text(txt: &str) -> Option<u64> {
     let lower = txt.to_ascii_lowercase();
@@ -293,6 +301,7 @@ fn extract_vram_bytes_from_text(txt: &str) -> Option<u64> {
     None
 }
 
+/// Parses number with unit for the `utils::v_ram_utils` module.
 #[cfg(target_os = "linux")]
 fn parse_number_with_unit(token: &str) -> Option<u64> {
     // "1234", "1234kb", "1234kib", "1234MB", "1234MiB"
@@ -300,6 +309,7 @@ fn parse_number_with_unit(token: &str) -> Option<u64> {
     parse_embedded_number_with_unit(t)
 }
 
+/// Parses embedded number with unit for the `utils::v_ram_utils` module.
 #[cfg(target_os = "linux")]
 fn parse_embedded_number_with_unit(t: &str) -> Option<u64> {
     let mut digits = String::new();
@@ -331,6 +341,7 @@ fn parse_embedded_number_with_unit(t: &str) -> Option<u64> {
     Some(val.saturating_mul(mul))
 }
 
+/// Runs the `query_vram_bytes_linux_drm_amdgpu` routine for query vram bytes linux drm amdgpu in the `utils::v_ram_utils` module.
 #[cfg(not(target_os = "linux"))]
 pub fn query_vram_bytes_linux_drm_amdgpu() -> Option<u64> {
     None

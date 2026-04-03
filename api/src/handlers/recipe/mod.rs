@@ -7,15 +7,18 @@ use crate::core::inventory::recipe::{
 };
 use bevy::prelude::*;
 
+/// Represents recipe handler plugin used by the `handlers::recipe` module.
 pub struct RecipeHandlerPlugin;
 
 impl Plugin for RecipeHandlerPlugin {
+    /// Builds this component for the `handlers::recipe` module.
     fn build(&self, app: &mut App) {
         app.add_message::<CraftHandCraftedRequest>()
             .add_systems(Update, process_hand_crafted_requests);
     }
 }
 
+/// Defines the possible hand crafted execution result variants in the `handlers::recipe` module.
 #[derive(Clone, Debug)]
 pub enum HandCraftedExecutionResult {
     Ignored,
@@ -28,6 +31,7 @@ pub enum HandCraftedExecutionResult {
     },
 }
 
+/// Runs the `resolve_hand_crafted_recipe` routine for resolve hand crafted recipe in the `handlers::recipe` module.
 pub fn resolve_hand_crafted_recipe(
     hand_crafted: &HandCraftedState,
     recipe_registry: &RecipeRegistry,
@@ -45,6 +49,7 @@ pub fn resolve_hand_crafted_recipe(
     Some(resolved)
 }
 
+/// Runs the `execute_hand_crafted_recipe` routine for execute hand crafted recipe in the `handlers::recipe` module.
 pub fn execute_hand_crafted_recipe(
     inventory: &mut PlayerInventory,
     hand_crafted: &mut HandCraftedState,
@@ -108,6 +113,7 @@ pub fn execute_hand_crafted_recipe(
     }
 }
 
+/// Processes hand crafted requests for the `handlers::recipe` module.
 fn process_hand_crafted_requests(
     mut requests: MessageReader<CraftHandCraftedRequest>,
     mut inventory: ResMut<PlayerInventory>,
@@ -144,6 +150,7 @@ fn process_hand_crafted_requests(
     }
 }
 
+/// Checks whether consume all inputs in the `handlers::recipe` module.
 fn can_consume_all_inputs(hand_crafted: &HandCraftedState, resolved: &ResolvedRecipe) -> bool {
     resolved.required_inputs.iter().all(|required| {
         hand_crafted
@@ -153,6 +160,7 @@ fn can_consume_all_inputs(hand_crafted: &HandCraftedState, resolved: &ResolvedRe
     })
 }
 
+/// Runs the `consume_recipe_inputs` routine for consume recipe inputs in the `handlers::recipe` module.
 fn consume_recipe_inputs(hand_crafted: &mut HandCraftedState, resolved: &ResolvedRecipe) {
     for required in &resolved.required_inputs {
         let Some(slot) = hand_crafted.input_slots.get_mut(required.slot_index) else {

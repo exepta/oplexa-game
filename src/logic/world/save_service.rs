@@ -7,17 +7,21 @@ use crate::generator::chunk::chunk_utils::save_chunk_sync;
 use bevy::prelude::*;
 use std::collections::{HashMap, VecDeque};
 
+/// Represents world save service used by the `logic::world::save_service` module.
 pub struct WorldSaveService;
 
+/// Represents save queue used by the `logic::world::save_service` module.
 #[derive(Resource, Default)]
 struct SaveQueue(VecDeque<IVec2>);
 
+/// Represents save debounce used by the `logic::world::save_service` module.
 #[derive(Resource, Default)]
 struct SaveDebounce(HashMap<IVec2, Timer>);
 
 const SAVE_DEBOUNCE_MS: u64 = 250;
 
 impl Plugin for WorldSaveService {
+    /// Builds this component for the `logic::world::save_service` module.
     fn build(&self, app: &mut App) {
         app.init_resource::<RegionCache>()
             .init_resource::<SaveDebounce>()
@@ -35,11 +39,13 @@ impl Plugin for WorldSaveService {
     }
 }
 
+/// Runs the `setup_world_save` routine for setup world save in the `logic::world::save_service` module.
 fn setup_world_save(mut commands: Commands) {
     let world_root = default_saves_root().join("world");
     commands.insert_resource(WorldSave { root: world_root });
 }
 
+/// Runs the `enqueue_save_on_dirty` routine for enqueue save on dirty in the `logic::world::save_service` module.
 fn enqueue_save_on_dirty(
     mut ev_dirty: MessageReader<SubChunkNeedRemeshEvent>,
     mut deb: ResMut<SaveDebounce>,
@@ -64,6 +70,7 @@ fn enqueue_save_on_dirty(
     }
 }
 
+/// Runs the `tick_save_debounce` routine for tick save debounce in the `logic::world::save_service` module.
 fn tick_save_debounce(
     time: Res<Time>,
     mut deb: ResMut<SaveDebounce>,
@@ -85,6 +92,7 @@ fn tick_save_debounce(
     }
 }
 
+/// Runs the `drain_save_queue` routine for drain save queue in the `logic::world::save_service` module.
 fn drain_save_queue(
     ws: Res<WorldSave>,
     mut cache: ResMut<RegionCache>,
@@ -104,6 +112,7 @@ fn drain_save_queue(
     }
 }
 
+/// Runs the `cleanup_world_save_runtime` routine for cleanup world save runtime in the `logic::world::save_service` module.
 fn cleanup_world_save_runtime(
     mut cache: ResMut<RegionCache>,
     mut debounce: ResMut<SaveDebounce>,

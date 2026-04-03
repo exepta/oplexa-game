@@ -4,14 +4,17 @@ use crate::core::states::states::{AppState, BeforeUiState};
 use crate::core::world::block::BlockRegistry;
 use bevy::prelude::*;
 
+/// Represents block internal registry used by the `logic::registry::block_registry` module.
 pub struct BlockInternalRegistry;
 
 impl Plugin for BlockInternalRegistry {
+    /// Builds this component for the `logic::registry::block_registry` module.
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(AppState::Preload), start_block_registry);
     }
 }
 
+/// Starts block registry for the `logic::registry::block_registry` module.
 fn start_block_registry(
     mut commands: Commands,
     asset_server: Res<AssetServer>,

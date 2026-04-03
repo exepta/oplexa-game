@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 const SPAWN_GENERATION_RADIUS: i32 = 2;
 const SPAWN_SEARCH_RADIUS_BLOCKS: i32 = 32;
 
+/// Runs the `ensure_world_spawn_generated` routine for ensure world spawn generated in the `core::world::spawn` module.
 pub fn ensure_world_spawn_generated(world_root: &Path, world_seed: i32) -> [f32; 3] {
     info!(
         "Preparing world spawn area at {:?} (seed={})",
@@ -45,6 +46,7 @@ pub fn ensure_world_spawn_generated(world_root: &Path, world_seed: i32) -> [f32;
     spawn
 }
 
+/// Generates spawn chunks for the `core::world::spawn` module.
 fn generate_spawn_chunks(
     world_root: &Path,
     world_seed: i32,
@@ -101,6 +103,7 @@ fn generate_spawn_chunks(
     chunks
 }
 
+/// Runs the `derive_spawn_translation` routine for derive spawn translation in the `core::world::spawn` module.
 fn derive_spawn_translation(
     chunks: &HashMap<IVec2, ChunkData>,
     block_registry: &BlockRegistry,
@@ -151,6 +154,7 @@ fn derive_spawn_translation(
     }
 }
 
+/// Reads spawn translation for the `core::world::spawn` module.
 fn read_spawn_translation(path: &Path) -> Option<[f32; 3]> {
     let text = fs::read_to_string(path).ok()?;
     let mut parts = text.split_whitespace();
@@ -160,6 +164,7 @@ fn read_spawn_translation(path: &Path) -> Option<[f32; 3]> {
     Some([x, y, z])
 }
 
+/// Writes spawn translation for the `core::world::spawn` module.
 fn write_spawn_translation(path: &Path, spawn_translation: [f32; 3]) -> std::io::Result<()> {
     fs::write(
         path,

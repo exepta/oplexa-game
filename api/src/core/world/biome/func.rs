@@ -120,6 +120,7 @@ pub fn dominant_biome_at_p_chunks(
     let w1 = land_weight_from_score(s1);
     let w_sum = (w0 + w1).max(1e-6);
 
+    /// Runs the `mats_for_site` routine for mats for site in the `core::world::biome::func` module.
     #[inline]
     fn mats_for_site<'a>(
         biomes: &'a BiomeRegistry,
@@ -188,6 +189,7 @@ pub fn dominant_biome_at_p_chunks(
     }
 }
 
+/// Runs the `best_two_land_sites` routine for best two land sites in the `core::world::biome::func` module.
 pub fn best_two_land_sites<'a>(
     biomes: &'a BiomeRegistry,
     p_chunks: Vec2,
@@ -678,11 +680,13 @@ pub fn col_rand_range_u32(x: i32, z: i32, seed: u32, lo: u32, hi: u32) -> u32 {
     lo + (col_rand_u32(x, z, seed) % (hi - lo + 1))
 }
 
+/// Runs the `rand_u32` routine for rand u32 in the `core::world::biome::func` module.
 #[inline]
 pub fn rand_u32(x: i32, z: i32, seed: u32) -> u32 {
     col_rand_u32(x, z, seed)
 }
 
+/// Runs the `rand01` routine for rand01 in the `core::world::biome::func` module.
 #[inline]
 pub fn rand01(x: i32, z: i32, seed: u32) -> f32 {
     let u = rand_u32(x, z, seed) as f64;
@@ -757,6 +761,7 @@ pub fn pick(list: &[String], wx: i32, wz: i32, seed: u32) -> &str {
     &list[idx]
 }
 
+/// Runs the `lerp` routine for lerp in the `core::world::biome::func` module.
 #[inline]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t

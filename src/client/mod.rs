@@ -68,12 +68,14 @@ use std::time::Duration;
 use tracing_subscriber::Layer;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 
+/// Represents remote player avatar used by the `client` module.
 #[derive(Component)]
 struct RemotePlayerAvatar {
     #[allow(dead_code)]
     player_id: u64,
 }
 
+/// Represents remote player snapshot point used by the `client` module.
 #[derive(Clone, Copy, Debug)]
 struct RemotePlayerSnapshotPoint {
     at_secs: f32,
@@ -81,12 +83,14 @@ struct RemotePlayerSnapshotPoint {
     yaw: f32,
 }
 
+/// Represents remote player smoothing used by the `client` module.
 #[derive(Debug, Default)]
 struct RemotePlayerSmoothing {
     snapshots: VecDeque<RemotePlayerSnapshotPoint>,
 }
 
 impl RemotePlayerSmoothing {
+    /// Runs the `with_initial_snapshot` routine for with initial snapshot in the `client` module.
     fn with_initial_snapshot(at_secs: f32, translation: Vec3, yaw: f32) -> Self {
         let mut snapshots = VecDeque::with_capacity(REMOTE_PLAYER_MAX_SNAPSHOT_POINTS);
         snapshots.push_back(RemotePlayerSnapshotPoint {
@@ -97,6 +101,7 @@ impl RemotePlayerSmoothing {
         Self { snapshots }
     }
 
+    /// Runs the `reset_snapshot` routine for reset snapshot in the `client` module.
     fn reset_snapshot(&mut self, at_secs: f32, translation: Vec3, yaw: f32) {
         self.snapshots.clear();
         self.snapshots.push_back(RemotePlayerSnapshotPoint {
@@ -106,6 +111,7 @@ impl RemotePlayerSmoothing {
         });
     }
 
+    /// Runs the `push_snapshot` routine for push snapshot in the `client` module.
     fn push_snapshot(&mut self, at_secs: f32, translation: Vec3, yaw: f32) {
         let next = RemotePlayerSnapshotPoint {
             at_secs,
@@ -136,12 +142,14 @@ impl RemotePlayerSmoothing {
     }
 }
 
+/// Represents remote player visuals used by the `client` module.
 #[derive(Resource)]
 struct RemotePlayerVisuals {
     mesh: Handle<Mesh>,
     material: Handle<StandardMaterial>,
 }
 
+/// Represents multiplayer dropped item used by the `client` module.
 #[derive(Component, Debug)]
 struct MultiplayerDroppedItem {
     drop_id: u64,
@@ -155,17 +163,20 @@ struct MultiplayerDroppedItem {
     spin_speed: f32,
 }
 
+/// Represents multiplayer drop index used by the `client` module.
 #[derive(Resource, Default)]
 struct MultiplayerDropIndex {
     entities: HashMap<u64, Entity>,
 }
 
+/// Represents remote chunk stream state used by the `client` module.
 #[derive(Resource, Default)]
 struct RemoteChunkStreamState {
     last_requested_center: Option<IVec2>,
     last_requested_radius: Option<i32>,
 }
 
+/// Represents block id remap used by the `client` module.
 #[derive(Resource, Default)]
 struct BlockIdRemap {
     server_to_local: Vec<u16>,
@@ -174,12 +185,14 @@ struct BlockIdRemap {
 }
 
 impl BlockIdRemap {
+    /// Runs the `reset` routine for reset in the `client` module.
     fn reset(&mut self) {
         self.server_to_local.clear();
         self.local_to_server.clear();
         self.ready = false;
     }
 
+    /// Runs the `configure_from_server_palette` routine for configure from server palette in the `client` module.
     fn configure_from_server_palette(&mut self, palette: &[String], registry: &BlockRegistry) {
         self.server_to_local = vec![0; palette.len()];
         self.local_to_server = vec![0; registry.defs.len()];
@@ -219,6 +232,7 @@ impl BlockIdRemap {
         self.ready = true;
     }
 
+    /// Runs the `to_local` routine for to local in the `client` module.
     fn to_local(&self, server_id: u16) -> u16 {
         if self.server_to_local.is_empty() {
             return server_id;
@@ -229,6 +243,7 @@ impl BlockIdRemap {
             .unwrap_or(0)
     }
 
+    /// Runs the `to_server` routine for to server in the `client` module.
     fn to_server(&self, local_id: u16) -> u16 {
         if self.local_to_server.is_empty() {
             return local_id;
@@ -239,6 +254,7 @@ impl BlockIdRemap {
             .unwrap_or(0)
     }
 
+    /// Checks whether ready in the `client` module.
     fn is_ready(&self) -> bool {
         self.ready
     }
@@ -263,6 +279,7 @@ const SERVER_TIMEOUT_ERROR_TEXT: &str = "Server time out!";
 
 static TERMINAL_INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// Represents client identity used by the `client` module.
 #[derive(Clone, Debug)]
 struct ClientIdentity {
     uuid: String,
@@ -271,6 +288,7 @@ struct ClientIdentity {
     multi_instance: bool,
 }
 
+/// Runs the `resolve_client_identity` routine for resolve client identity in the `client` module.
 fn resolve_client_identity(settings: &mut NetworkSettings) -> ClientIdentity {
     let multi_instance = is_multi_instance_enabled();
     let prod_mode = settings.client.prod;
@@ -318,10 +336,12 @@ fn resolve_client_identity(settings: &mut NetworkSettings) -> ClientIdentity {
     }
 }
 
+/// Checks whether multi instance enabled in the `client` module.
 fn is_multi_instance_enabled() -> bool {
     env::var_os("multi_instance").is_some() || env::var_os("MULTI_INSTANCE").is_some()
 }
 
+/// Generates uuid v4 string for the `client` module.
 fn generate_uuid_v4_string() -> String {
     let mut bytes = rand::random::<[u8; 16]>();
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
@@ -338,6 +358,7 @@ fn generate_uuid_v4_string() -> String {
     uuid
 }
 
+/// Parses uuid bytes for the `client` module.
 fn parse_uuid_bytes(value: &str) -> Option<[u8; 16]> {
     if value.len() != 36 {
         return None;
@@ -374,6 +395,7 @@ fn parse_uuid_bytes(value: &str) -> Option<[u8; 16]> {
     Some(decoded)
 }
 
+/// Runs the `resolve_player_name` routine for resolve player name in the `client` module.
 fn resolve_player_name(configured_name: &str) -> String {
     let trimmed = configured_name.trim();
     if trimmed.is_empty() || trimmed == "?" {
@@ -383,6 +405,7 @@ fn resolve_player_name(configured_name: &str) -> String {
     }
 }
 
+/// Generates random player name for the `client` module.
 fn generate_random_player_name() -> String {
     format!("{:08x}", rand::random::<u32>())
 }
@@ -395,6 +418,7 @@ fn parse_session_url(url: &str) -> Option<SocketAddr> {
     stripped.parse().ok()
 }
 
+/// Runs the `remap_server_block_id` routine for remap server block id in the `client` module.
 fn remap_server_block_id(
     block_remap: &BlockIdRemap,
     registry: &BlockRegistry,
@@ -408,6 +432,7 @@ fn remap_server_block_id(
     }
 }
 
+/// Represents multiplayer client runtime used by the `client` module.
 #[derive(Resource)]
 struct MultiplayerClientRuntime {
     enabled: bool,
@@ -426,12 +451,14 @@ struct MultiplayerClientRuntime {
     send_timer: Timer,
 }
 
+/// Represents terminal interrupt exit state used by the `client` module.
 #[derive(Resource, Default)]
 struct TerminalInterruptExitState {
     started_at: Option<f64>,
 }
 
 impl MultiplayerClientRuntime {
+    /// Creates a new instance for the `client` module.
     fn new(settings: &NetworkSettings, identity: ClientIdentity) -> Self {
         let auto_connect_lan = settings.client.session_url.eq_ignore_ascii_case("lan:auto");
         info!(
@@ -460,6 +487,7 @@ impl MultiplayerClientRuntime {
     }
 }
 
+/// Runs the `do_connect` routine for do connect in the `client` module.
 fn do_connect(
     runtime: &mut MultiplayerClientRuntime,
     session_url: String,
@@ -520,6 +548,7 @@ fn do_connect(
     runtime.keepalive_timer.reset();
 }
 
+/// Runs the `do_disconnect` routine for do disconnect in the `client` module.
 fn do_disconnect(runtime: &mut MultiplayerClientRuntime, commands: &mut Commands) {
     if let Some(entity) = runtime.connection_entity.take() {
         runtime.disconnect_requested = true;
@@ -527,6 +556,7 @@ fn do_disconnect(runtime: &mut MultiplayerClientRuntime, commands: &mut Commands
     }
 }
 
+/// Represents lan discovery runtime used by the `client` module.
 struct LanDiscoveryRuntime {
     client: Option<LanDiscoveryClient>,
     known_servers: Vec<LanServerInfo>,
@@ -534,6 +564,7 @@ struct LanDiscoveryRuntime {
 }
 
 impl LanDiscoveryRuntime {
+    /// Creates a new instance for the `client` module.
     fn new(settings: &NetworkSettings) -> Self {
         let client = if settings.client.lan_discovery {
             LanDiscoveryClient::bind(settings.client.lan_discovery_port).ok()
@@ -549,6 +580,7 @@ impl LanDiscoveryRuntime {
     }
 }
 
+/// Represents local lan host used by the `client` module.
 struct LocalLanHost {
     child: Option<Child>,
     session_url: Option<String>,
@@ -556,6 +588,7 @@ struct LocalLanHost {
 }
 
 impl Default for LocalLanHost {
+    /// Runs the `default` routine for default in the `client` module.
     fn default() -> Self {
         Self {
             child: None,
@@ -566,6 +599,7 @@ impl Default for LocalLanHost {
 }
 
 impl LocalLanHost {
+    /// Refreshes the requested data for the `client` module.
     fn refresh(&mut self) {
         let Some(child) = self.child.as_mut() else {
             return;
@@ -587,6 +621,7 @@ impl LocalLanHost {
         }
     }
 
+    /// Runs the `stop` routine for stop in the `client` module.
     fn stop(&mut self) {
         self.refresh();
         let Some(mut child) = self.child.take() else {
@@ -604,6 +639,7 @@ impl LocalLanHost {
     }
 }
 
+/// Runs the `lan_server_binary_path` routine for lan server binary path in the `client` module.
 fn lan_server_binary_path() -> Option<PathBuf> {
     let current = env::current_exe().ok()?;
     let exe_name = format!("oplexa-game-server{}", env::consts::EXE_SUFFIX);
@@ -629,6 +665,7 @@ fn lan_server_binary_path() -> Option<PathBuf> {
     None
 }
 
+/// Spawns lan host process for the `client` module.
 fn spawn_lan_host_process() -> std::io::Result<Child> {
     let Some(binary) = lan_server_binary_path() else {
         return Err(std::io::Error::new(
@@ -644,6 +681,7 @@ fn spawn_lan_host_process() -> std::io::Result<Child> {
         .spawn()
 }
 
+/// Starts streamed multiplayer world load for the `client` module.
 fn start_streamed_multiplayer_world_load(
     spawn_translation: [f32; 3],
     region_cache: &mut RegionCache,
@@ -667,6 +705,7 @@ fn start_streamed_multiplayer_world_load(
     next_state.set(AppState::Loading(LoadingStates::BaseGen));
 }
 
+/// Runs the main routine for the `client` module.
 pub fn run() {
     GlobalConfig::ensure_config_files_exist();
     dotenv().ok();
@@ -683,6 +722,7 @@ pub fn run() {
     );
 }
 
+/// Runs the `install_terminal_interrupt_handler` routine for install terminal interrupt handler in the `client` module.
 fn install_terminal_interrupt_handler() {
     static INSTALL_ONCE: Once = Once::new();
     INSTALL_ONCE.call_once(|| {
@@ -694,6 +734,7 @@ fn install_terminal_interrupt_handler() {
     });
 }
 
+/// Initializes bevy app for the `client` module.
 fn init_bevy_app(
     app: &mut App,
     config: &GlobalConfig,
@@ -782,6 +823,7 @@ fn init_bevy_app(
     .run();
 }
 
+/// Registers world inspector types for the `client` module.
 fn register_world_inspector_types(app: &mut App) {
     app.register_type::<GizmoConfigStore>()
         .register_type::<bevy::render::view::ColorGradingSection>()
@@ -792,11 +834,13 @@ fn register_world_inspector_types(app: &mut App) {
         .register_type::<bevy::camera::Camera3dDepthLoadOp>();
 }
 
+/// Initializes app finish for the `client` module.
 fn init_app_finish(mut next_state: ResMut<NextState<AppState>>) {
     info!("Finish initializing app...");
     next_state.set(AppState::Preload);
 }
 
+/// Creates gpu settings for the `client` module.
 fn create_gpu_settings(backend_str: &str) -> WgpuSettings {
     let backend = match backend_str {
         "auto" | "AUTO" | "primary" | "PRIMARY" => Some(Backends::PRIMARY),
@@ -820,10 +864,12 @@ fn create_gpu_settings(backend_str: &str) -> WgpuSettings {
     }
 }
 
+/// Runs the `check_world_inspector_state` routine for check world inspector state in the `client` module.
 fn check_world_inspector_state(world_inspector_state: Res<WorldInspectorState>) -> bool {
     world_inspector_state.0
 }
 
+/// Runs the `log_file_appender` routine for log file appender in the `client` module.
 fn log_file_appender(_app: &mut App) -> Option<BoxedLayer> {
     let log_dir = PathBuf::from("logs");
     if let Err(error) = std::fs::create_dir_all(&log_dir) {
@@ -861,16 +907,19 @@ fn log_file_appender(_app: &mut App) -> Option<BoxedLayer> {
     ))
 }
 
+/// Loads log env filter for the `client` module.
 fn load_log_env_filter() -> String {
     dotenv().ok();
     env::var("LOG_ENV_FILTER").unwrap_or_else(|_| "error".to_string())
 }
 
+/// Represents start log text used by the `client` module.
 struct StartLogText {
     file: std::sync::Arc<std::sync::Mutex<File>>,
 }
 
 impl Drop for StartLogText {
+    /// Runs the `drop` routine for drop in the `client` module.
     fn drop(&mut self) {
         let mut file = self.file.lock().unwrap();
         let _ = writeln!(
@@ -897,9 +946,11 @@ pub(crate) mod manager {
     use bevy::prelude::*;
     use bevy_rapier3d::prelude::*;
 
+    /// Represents manager plugin used by the `client` module.
     pub struct ManagerPlugin;
 
     impl Plugin for ManagerPlugin {
+        /// Builds this component for the `client` module.
         fn build(&self, app: &mut App) {
             app.init_gizmo_group::<ChunkGridGizmos>();
             app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default());
@@ -923,10 +974,12 @@ pub(crate) mod manager {
         }
     }
 
+    /// Runs the `setup_shadow_map` routine for setup shadow map in the `client` module.
     fn setup_shadow_map(mut commands: Commands) {
         commands.insert_resource(DirectionalLightShadowMap { size: 1024 });
     }
 
+    /// Runs the `configure_default_gizmos` routine for configure default gizmos in the `client` module.
     fn configure_default_gizmos(mut gizmo_config_store: ResMut<GizmoConfigStore>) {
         let (config, _) = gizmo_config_store.config_mut::<DefaultGizmoConfigGroup>();
         config.enabled = true;
@@ -935,6 +988,7 @@ pub(crate) mod manager {
         config.render_layers = RenderLayers::from_layers(&[0, 1, 2]);
     }
 
+    /// Runs the `configure_chunk_grid_gizmos` routine for configure chunk grid gizmos in the `client` module.
     fn configure_chunk_grid_gizmos(mut gizmo_config_store: ResMut<GizmoConfigStore>) {
         let (config, _) = gizmo_config_store.config_mut::<ChunkGridGizmos>();
         config.enabled = true;
@@ -943,6 +997,7 @@ pub(crate) mod manager {
         config.render_layers = RenderLayers::from_layers(&[0, 1, 2]);
     }
 
+    /// Runs the `toggle_world_inspector` routine for toggle world inspector in the `client` module.
     fn toggle_world_inspector(
         mut debug_context: ResMut<WorldInspectorState>,
         keyboard: Res<ButtonInput<KeyCode>>,
@@ -956,6 +1011,7 @@ pub(crate) mod manager {
         }
     }
 
+    /// Runs the `toggle_chunk_grid` routine for toggle chunk grid in the `client` module.
     fn toggle_chunk_grid(
         mut debug_grid: ResMut<DebugGridState>,
         keyboard: Res<ButtonInput<KeyCode>>,
@@ -980,6 +1036,7 @@ pub(crate) mod manager {
         }
     }
 
+    /// Draws chunk grid gizmo for the `client` module.
     fn draw_chunk_grid_gizmo(
         debug_grid: Res<DebugGridState>,
         player_query: Query<&Transform, With<Player>>,
@@ -1011,6 +1068,7 @@ pub(crate) mod manager {
         }
     }
 
+    /// Draws chunk outline for the `client` module.
     fn draw_chunk_outline<G: GizmoConfigGroup>(
         gizmos: &mut Gizmos<G>,
         chunk: IVec2,
@@ -1069,9 +1127,11 @@ pub(crate) mod manager {
     }
 }
 
+/// Represents multiplayer client plugin used by the `client` module.
 struct MultiplayerClientPlugin;
 
 impl Plugin for MultiplayerClientPlugin {
+    /// Builds this component for the `client` module.
     fn build(&self, app: &mut App) {
         app.init_resource::<MultiplayerDropIndex>()
             .init_resource::<RemoteChunkStreamState>()
@@ -1108,6 +1168,7 @@ impl Plugin for MultiplayerClientPlugin {
     }
 }
 
+/// Handles terminal interrupt exit for the `client` module.
 fn handle_terminal_interrupt_exit(
     time: Res<Time>,
     mut interrupt_state: ResMut<TerminalInterruptExitState>,
@@ -1142,6 +1203,7 @@ fn handle_terminal_interrupt_exit(
     }
 }
 
+/// Runs the `setup_remote_player_visuals` routine for setup remote player visuals in the `client` module.
 fn setup_remote_player_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -1246,6 +1308,7 @@ fn on_server_disconnected(
     runtime.connection_entity = None;
 }
 
+/// Runs the `poll_lan_servers` routine for poll lan servers in the `client` module.
 fn poll_lan_servers(time: Res<Time>, mut discovery: NonSendMut<LanDiscoveryRuntime>) {
     if discovery.client.is_none() {
         return;
@@ -1288,6 +1351,7 @@ fn poll_lan_servers(time: Res<Time>, mut discovery: NonSendMut<LanDiscoveryRunti
     }
 }
 
+/// Runs the `connect_to_server_requested` routine for connect to server requested in the `client` module.
 fn connect_to_server_requested(
     mut connect_requests: MessageReader<ConnectToServerRequest>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
@@ -1349,6 +1413,7 @@ fn connect_to_server_requested(
     chunk_stream.last_requested_radius = None;
 }
 
+/// Runs the `disconnect_from_server_requested` routine for disconnect from server requested in the `client` module.
 fn disconnect_from_server_requested(
     mut disconnect_requests: MessageReader<DisconnectFromServerRequest>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
@@ -1368,6 +1433,7 @@ fn disconnect_from_server_requested(
     chunk_stream.last_requested_radius = None;
 }
 
+/// Runs the `open_to_lan_requested` routine for open to lan requested in the `client` module.
 fn open_to_lan_requested(
     mut requests: MessageReader<OpenToLanRequest>,
     q_active: Query<
@@ -1414,6 +1480,7 @@ fn open_to_lan_requested(
     runtime.auto_connect_lan = false;
 }
 
+/// Runs the `finish_open_to_lan_connect` routine for finish open to lan connect in the `client` module.
 fn finish_open_to_lan_connect(
     time: Res<Time>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
@@ -1454,6 +1521,7 @@ fn finish_open_to_lan_connect(
     local_host.connect_timer = None;
 }
 
+/// Runs the `stop_lan_host_requested` routine for stop lan host requested in the `client` module.
 fn stop_lan_host_requested(
     mut requests: MessageReader<StopLanHostRequest>,
     mut local_host: NonSendMut<LocalLanHost>,
@@ -1855,6 +1923,7 @@ fn receive_drop_messages(
     }
 }
 
+/// Runs the `send_chunk_interest_updates` routine for send chunk interest updates in the `client` module.
 fn send_chunk_interest_updates(
     game_config: Res<GlobalConfig>,
     q_player: Query<&Transform, With<Player>>,
@@ -1911,6 +1980,7 @@ fn send_chunk_interest_updates(
     }
 }
 
+/// Runs the `smooth_remote_players` routine for smooth remote players in the `client` module.
 fn smooth_remote_players(
     time: Res<Time>,
     mut remote_players: Query<(&RemotePlayerAvatar, &mut Transform)>,
@@ -1970,6 +2040,7 @@ fn smooth_remote_players(
     }
 }
 
+/// Runs the `send_local_block_break_events` routine for send local block break events in the `client` module.
 fn send_local_block_break_events(
     mut break_events: MessageReader<BlockBreakByPlayerEvent>,
     item_registry: Option<Res<ItemRegistry>>,
@@ -2011,6 +2082,7 @@ fn send_local_block_break_events(
     }
 }
 
+/// Runs the `send_local_block_place_events` routine for send local block place events in the `client` module.
 fn send_local_block_place_events(
     mut place_events: MessageReader<BlockPlaceByPlayerEvent>,
     block_remap: Res<BlockIdRemap>,
@@ -2041,6 +2113,7 @@ fn send_local_block_place_events(
     }
 }
 
+/// Runs the `send_local_item_drop_requests` routine for send local item drop requests in the `client` module.
 fn send_local_item_drop_requests(
     mut drop_requests: MessageReader<DropItemRequest>,
     item_registry: Option<Res<ItemRegistry>>,
@@ -2085,6 +2158,7 @@ fn send_local_item_drop_requests(
     }
 }
 
+/// Runs the `simulate_multiplayer_drop_items` routine for simulate multiplayer drop items in the `client` module.
 fn simulate_multiplayer_drop_items(
     time: Res<Time>,
     chunk_map: Res<ChunkMap>,
@@ -2192,6 +2266,7 @@ fn simulate_multiplayer_drop_items(
     }
 }
 
+/// Runs the `send_local_drop_pickup_requests` routine for send local drop pickup requests in the `client` module.
 fn send_local_drop_pickup_requests(
     time: Res<Time>,
     multiplayer_connection: Res<MultiplayerConnectionState>,
@@ -2252,6 +2327,7 @@ fn send_local_drop_pickup_requests(
     }
 }
 
+/// Runs the `send_local_player_pose` routine for send local player pose in the `client` module.
 fn send_local_player_pose(
     time: Res<Time>,
     q_player: Query<(&Transform, &FpsController), With<Player>>,
@@ -2287,6 +2363,7 @@ fn send_local_player_pose(
     ));
 }
 
+/// Runs the `send_client_keepalive` routine for send client keepalive in the `client` module.
 fn send_client_keepalive(
     time: Res<Time>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
@@ -2314,6 +2391,7 @@ fn send_client_keepalive(
     sender.send::<UnorderedReliable>(ClientKeepAlive::new(stamp_ms));
 }
 
+/// Applies remote block break for the `client` module.
 fn apply_remote_block_break(
     location: [i32; 3],
     chunk_map: &mut ChunkMap,
@@ -2349,6 +2427,7 @@ fn apply_remote_block_break(
     }
 }
 
+/// Applies remote block place for the `client` module.
 fn apply_remote_block_place(
     location: [i32; 3],
     block_id: u16,
@@ -2388,6 +2467,7 @@ fn apply_remote_block_place(
     }
 }
 
+/// Spawns multiplayer drop for the `client` module.
 #[allow(clippy::too_many_arguments)]
 fn spawn_multiplayer_drop(
     commands: &mut Commands,
@@ -2470,12 +2550,14 @@ fn spawn_multiplayer_drop(
     drops.entities.insert(drop_id, entity);
 }
 
+/// Clears multiplayer drops for the `client` module.
 fn clear_multiplayer_drops(commands: &mut Commands, drops: &mut MultiplayerDropIndex) {
     for entity in drops.entities.drain().map(|(_, entity)| entity) {
         safe_despawn_entity(commands, entity);
     }
 }
 
+/// Runs the `inventory_can_add_item` routine for inventory can add item in the `client` module.
 fn inventory_can_add_item(
     inventory: &PlayerInventory,
     item_id: u16,
@@ -2492,6 +2574,7 @@ fn inventory_can_add_item(
         .any(|slot| slot.is_empty() || (slot.item_id == item_id && slot.count < stack_limit))
 }
 
+/// Computes multiplayer drop pop velocity for the `client` module.
 fn compute_multiplayer_drop_pop_velocity(world_loc: IVec3, drop_id: u64) -> Vec3 {
     let seed_base = seed_from_world_loc(world_loc) ^ drop_id;
     let angle = hash01_u64(seed_base ^ 0x10) * std::f32::consts::TAU;
@@ -2508,6 +2591,7 @@ fn compute_multiplayer_drop_pop_velocity(world_loc: IVec3, drop_id: u64) -> Vec3
     )
 }
 
+/// Computes multiplayer drop angular velocity for the `client` module.
 fn compute_multiplayer_drop_angular_velocity(world_loc: IVec3, drop_id: u64) -> Vec3 {
     let seed_base = seed_from_world_loc(world_loc) ^ drop_id ^ 0x5EED;
 
@@ -2518,6 +2602,7 @@ fn compute_multiplayer_drop_angular_velocity(world_loc: IVec3, drop_id: u64) -> 
     )
 }
 
+/// Computes multiplayer drop spin axis for the `client` module.
 fn compute_multiplayer_drop_spin_axis(world_loc: IVec3, drop_id: u64) -> Vec3 {
     let seed_base = seed_from_world_loc(world_loc) ^ drop_id ^ 0x7A51_5EED;
     let axis = Vec3::new(
@@ -2533,6 +2618,7 @@ fn compute_multiplayer_drop_spin_axis(world_loc: IVec3, drop_id: u64) -> Vec3 {
     }
 }
 
+/// Computes multiplayer drop spin speed for the `client` module.
 fn compute_multiplayer_drop_spin_speed(world_loc: IVec3, drop_id: u64) -> f32 {
     let seed_base = seed_from_world_loc(world_loc) ^ drop_id ^ 0x8BAD_F00D;
     let magnitude = 18.0 + hash01_u64(seed_base ^ 0x81) * 14.0;
@@ -2544,6 +2630,7 @@ fn compute_multiplayer_drop_spin_speed(world_loc: IVec3, drop_id: u64) -> f32 {
     sign * magnitude
 }
 
+/// Runs the `angle_abs_diff` routine for angle abs diff in the `client` module.
 #[inline]
 fn angle_abs_diff(from: f32, to: f32) -> f32 {
     let wrapped =
@@ -2551,6 +2638,7 @@ fn angle_abs_diff(from: f32, to: f32) -> f32 {
     wrapped.abs()
 }
 
+/// Runs the `lerp_angle_radians` routine for lerp angle radians in the `client` module.
 #[inline]
 fn lerp_angle_radians(from: f32, to: f32, t: f32) -> f32 {
     let wrapped =
@@ -2558,12 +2646,14 @@ fn lerp_angle_radians(from: f32, to: f32, t: f32) -> f32 {
     from + wrapped * t.clamp(0.0, 1.0)
 }
 
+/// Runs the `seed_from_world_loc` routine for seed from world loc in the `client` module.
 fn seed_from_world_loc(world_loc: IVec3) -> u64 {
     (world_loc.x as i64 as u64).wrapping_mul(0x9E37_79B1_85EB_CA87)
         ^ (world_loc.y as i64 as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
         ^ (world_loc.z as i64 as u64).wrapping_mul(0x1656_67B1_9E37_79F9)
 }
 
+/// Runs the `hash01_u64` routine for hash01 u64 in the `client` module.
 fn hash01_u64(mut x: u64) -> f32 {
     x ^= x >> 30;
     x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -2574,6 +2664,7 @@ fn hash01_u64(mut x: u64) -> f32 {
     (x as f64 / u64::MAX as f64) as f32
 }
 
+/// Runs the `ensure_remote_player` routine for ensure remote player in the `client` module.
 fn ensure_remote_player(
     commands: &mut Commands,
     visuals: &RemotePlayerVisuals,

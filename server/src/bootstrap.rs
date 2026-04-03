@@ -14,6 +14,7 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+/// Represents bootstrap result used by the `bootstrap` module.
 pub struct BootstrapResult {
     pub discovery: Option<LanDiscoveryServer>,
     pub runtime_config: ServerRuntimeConfig,
@@ -21,6 +22,7 @@ pub struct BootstrapResult {
     pub bind_addr: SocketAddr,
 }
 
+/// Loads bootstrap for the `bootstrap` module.
 pub fn load_bootstrap() -> BootstrapResult {
     let settings_path = DedicatedServerSettings::settings_path("server.settings.toml");
     let server_settings = DedicatedServerSettings::load_or_create(&settings_path);
@@ -113,6 +115,7 @@ pub struct ServerBootstrapConfig {
 
 // ── World preparation helpers ─────────────────────────────────────────────────
 
+/// Runs the `prepare_server_world` routine for prepare server world in the `bootstrap` module.
 fn prepare_server_world(settings: &DedicatedServerSettings) -> (PathBuf, i32, [f32; 3]) {
     let world_root =
         PathBuf::from("worlds").join(normalize_world_name(settings.world_name.as_str()));
@@ -149,11 +152,13 @@ fn prepare_server_world(settings: &DedicatedServerSettings) -> (PathBuf, i32, [f
     (world_root, world_seed, spawn_translation)
 }
 
+/// Reads world seed for the `bootstrap` module.
 fn read_world_seed(path: &Path) -> Option<i32> {
     let text = fs::read_to_string(path).ok()?;
     text.trim().parse::<i32>().ok()
 }
 
+/// Runs the `normalize_world_name` routine for normalize world name in the `bootstrap` module.
 fn normalize_world_name(raw_name: &str) -> String {
     let normalized = raw_name
         .trim()

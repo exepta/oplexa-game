@@ -23,12 +23,15 @@ use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
+/// Represents mining overlay used by the `logic::events::block_event_handler` module.
 #[derive(Component)]
 struct MiningOverlay;
 
+/// Represents mining overlay face used by the `logic::events::block_event_handler` module.
 #[derive(Component)]
 struct MiningOverlayFace;
 
+/// Defines the possible axis variants in the `logic::events::block_event_handler` module.
 #[derive(Clone, Copy)]
 enum Axis {
     XY,
@@ -36,9 +39,11 @@ enum Axis {
     YZ,
 }
 
+/// Represents block event handler used by the `logic::events::block_event_handler` module.
 pub struct BlockEventHandler;
 
 impl Plugin for BlockEventHandler {
+    /// Builds this component for the `logic::events::block_event_handler` module.
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
@@ -51,6 +56,7 @@ impl Plugin for BlockEventHandler {
     }
 }
 
+/// Runs the `block_break_handler` routine for block break handler in the `logic::events::block_event_handler` module.
 fn block_break_handler(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -224,6 +230,7 @@ fn block_break_handler(
     state.target = None;
 }
 
+/// Runs the `block_place_handler` routine for block place handler in the `logic::events::block_event_handler` module.
 fn block_place_handler(
     buttons: Res<ButtonInput<MouseButton>>,
     sel: Res<SelectionState>,
@@ -314,6 +321,7 @@ fn block_place_handler(
     });
 }
 
+/// Checks whether place from selected slot in the `logic::events::block_event_handler` module.
 fn can_place_from_selected_slot(
     inventory: &PlayerInventory,
     hotbar_selection: Option<&HotbarSelectionState>,
@@ -336,6 +344,7 @@ fn can_place_from_selected_slot(
     })
 }
 
+/// Runs the `consume_from_selected_slot` routine for consume from selected slot in the `logic::events::block_event_handler` module.
 fn consume_from_selected_slot(
     inventory: &mut PlayerInventory,
     hotbar_selection: Option<&HotbarSelectionState>,
@@ -377,6 +386,7 @@ fn consume_from_selected_slot(
     false
 }
 
+/// Runs the `selected_hotbar_tool` routine for selected hotbar tool in the `logic::events::block_event_handler` module.
 fn selected_hotbar_tool(
     inventory: &PlayerInventory,
     hotbar_selection: Option<&HotbarSelectionState>,
@@ -394,6 +404,7 @@ fn selected_hotbar_tool(
     item_registry.tool_for_item(slot.item_id)
 }
 
+/// Synchronizes mining overlay for the `logic::events::block_event_handler` module.
 fn sync_mining_overlay(
     mut commands: Commands,
     mut root: ResMut<MiningOverlayRoot>,
@@ -458,6 +469,7 @@ fn sync_mining_overlay(
     }
 }
 
+/// Spawns overlay at for the `logic::events::block_event_handler` module.
 #[inline]
 fn spawn_overlay_at(
     commands: &mut Commands,
@@ -563,6 +575,7 @@ fn spawn_overlay_at(
     parent_id
 }
 
+/// Runs the `unit_centered_quad` routine for unit centered quad in the `logic::events::block_event_handler` module.
 #[inline]
 fn unit_centered_quad() -> Mesh {
     use bevy::mesh::{Indices, PrimitiveTopology};

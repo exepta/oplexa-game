@@ -1,15 +1,18 @@
+/// Runs the `show_hud_hotbar_ui` routine for show hud hotbar ui in the `graphic::components::hud` module.
 fn show_hud_hotbar_ui(mut root: Query<&mut Visibility, With<HudRoot>>) {
     if let Ok(mut visible) = root.single_mut() {
         *visible = Visibility::Inherited;
     }
 }
 
+/// Runs the `hide_hud_hotbar_ui` routine for hide hud hotbar ui in the `graphic::components::hud` module.
 fn hide_hud_hotbar_ui(mut root: Query<&mut Visibility, With<HudRoot>>) {
     if let Ok(mut visible) = root.single_mut() {
         *visible = Visibility::Hidden;
     }
 }
 
+/// Runs the `cycle_hotbar_with_scroll` routine for cycle hotbar with scroll in the `graphic::components::hud` module.
 fn cycle_hotbar_with_scroll(
     mut wheel_reader: MessageReader<MouseWheel>,
     mut hotbar_state: ResMut<HotbarSelectionState>,
@@ -48,6 +51,7 @@ fn cycle_hotbar_with_scroll(
     }
 }
 
+/// Runs the `drop_selected_hotbar_item` routine for drop selected hotbar item in the `graphic::components::hud` module.
 fn drop_selected_hotbar_item(
     keyboard: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -128,6 +132,7 @@ fn drop_selected_hotbar_item(
     }
 }
 
+/// Synchronizes hotbar selected block for the `graphic::components::hud` module.
 fn sync_hotbar_selected_block(
     hotbar_state: Res<HotbarSelectionState>,
     inventory: Res<PlayerInventory>,
@@ -157,6 +162,7 @@ fn sync_hotbar_selected_block(
     selected.name = registry.name_opt(block_id).unwrap_or("air").to_string();
 }
 
+/// Synchronizes hud hotbar ui for the `graphic::components::hud` module.
 fn sync_hud_hotbar_ui(
     hotbar_state: Res<HotbarSelectionState>,
     inventory: Res<PlayerInventory>,
@@ -241,6 +247,7 @@ fn sync_hud_hotbar_ui(
     }
 }
 
+/// Runs the `resolve_item_icon_path` routine for resolve item icon path in the `graphic::components::hud` module.
 fn resolve_item_icon_path(
     registry: &ItemRegistry,
     block_registry: &BlockRegistry,

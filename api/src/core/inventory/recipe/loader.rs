@@ -9,6 +9,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Represents recipe json used by the `core::inventory::recipe::loader` module.
 #[derive(Deserialize)]
 struct RecipeJson {
     #[serde(default, rename = "type")]
@@ -18,6 +19,7 @@ struct RecipeJson {
     result: RecipeResultJson,
 }
 
+/// Represents recipe crafting entry json used by the `core::inventory::recipe::loader` module.
 #[derive(Deserialize)]
 struct RecipeCraftingEntryJson {
     #[serde(rename = "type")]
@@ -26,6 +28,7 @@ struct RecipeCraftingEntryJson {
     data: Value,
 }
 
+/// Represents recipe result json used by the `core::inventory::recipe::loader` module.
 #[derive(Deserialize)]
 struct RecipeResultJson {
     item: String,
@@ -33,6 +36,7 @@ struct RecipeResultJson {
     count: u16,
 }
 
+/// Loads recipe registry for the `core::inventory::recipe::loader` module.
 pub fn load_recipe_registry(
     recipes_dir: &str,
     item_registry: &ItemRegistry,
@@ -109,12 +113,14 @@ pub fn load_recipe_registry(
     RecipeRegistry { recipes }
 }
 
+/// Runs the `recipe_json_paths_recursively` routine for recipe json paths recursively in the `core::inventory::recipe::loader` module.
 fn recipe_json_paths_recursively(root: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     collect_recipe_json_paths(root, &mut paths);
     paths
 }
 
+/// Runs the `collect_recipe_json_paths` routine for collect recipe json paths in the `core::inventory::recipe::loader` module.
 fn collect_recipe_json_paths(dir: &Path, paths: &mut Vec<PathBuf>) {
     let Ok(read_dir) = fs::read_dir(dir) else {
         return;
@@ -132,6 +138,7 @@ fn collect_recipe_json_paths(dir: &Path, paths: &mut Vec<PathBuf>) {
     }
 }
 
+/// Runs the `default_result_count` routine for default result count in the `core::inventory::recipe::loader` module.
 #[inline]
 fn default_result_count() -> u16 {
     1

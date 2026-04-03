@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+/// Represents block break by player event used by the `core::events::block::block_player_events` module.
 #[derive(Message, Clone, Debug)]
 pub struct BlockBreakByPlayerEvent {
     pub chunk_coord: IVec2,
@@ -13,6 +14,7 @@ pub struct BlockBreakByPlayerEvent {
     pub drops_item: bool,
 }
 
+/// Represents block place by player event used by the `core::events::block::block_player_events` module.
 #[derive(Message, Clone, Debug)]
 pub struct BlockPlaceByPlayerEvent {
     pub location: IVec3,

@@ -8,9 +8,11 @@ use crate::core::world::fluid::FluidMap;
 use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use bevy::prelude::*;
 
+/// Represents underwater fx plugin used by the `logic::entities::player::water_hud_service` module.
 pub struct UnderwaterFxPlugin;
 
 impl Plugin for UnderwaterFxPlugin {
+    /// Builds this component for the `logic::entities::player::water_hud_service` module.
     fn build(&self, app: &mut App) {
         app.init_resource::<UnderwaterFxState>().add_systems(
             Update,
@@ -21,6 +23,7 @@ impl Plugin for UnderwaterFxPlugin {
 
 // --- State & Marker -----------------------------------------------
 
+/// Represents underwater fx state used by the `logic::entities::player::water_hud_service` module.
 #[derive(Resource, Default)]
 struct UnderwaterFxState {
     overlay: Option<Entity>,
@@ -29,11 +32,13 @@ struct UnderwaterFxState {
     base_fog: Option<DistanceFog>,
 }
 
+/// Represents underwater overlay used by the `logic::entities::player::water_hud_service` module.
 #[derive(Component)]
 struct UnderwaterOverlay;
 
 // --- System -------------------------------------------------------
 
+/// Updates underwater fx for the `logic::entities::player::water_hud_service` module.
 fn update_underwater_fx(
     mut commands: Commands,
     mut state: ResMut<UnderwaterFxState>,

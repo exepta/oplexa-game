@@ -19,6 +19,7 @@ static WORLD_SAVE_IO_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(())
 /// Number of addressable slots per region file (`REGION_SIZE^2`).
 const REGION_SLOTS: usize = (REGION_SIZE as usize) * (REGION_SIZE as usize);
 
+/// Runs the `world_save_io_guard` routine for world save io guard in the `core::world::save` module.
 pub fn world_save_io_guard() -> MutexGuard<'static, ()> {
     WORLD_SAVE_IO_LOCK
         .lock()
@@ -154,6 +155,7 @@ impl RegionFile {
         self.flush_header()
     }
 
+    /// Writes slot replace for the `core::world::save` module.
     pub fn write_slot_replace(&mut self, idx: usize, data: &[u8]) -> std::io::Result<()> {
         let s = self.hdr[idx];
         if s.off != 0 && (s.len as usize) >= data.len() {
@@ -293,6 +295,7 @@ impl RegionCache {
         rf.write_chunk(coord, data)
     }
 
+    /// Writes chunk replace for the `core::world::save` module.
     pub fn write_chunk_replace(
         &mut self,
         ws: &WorldSave,
@@ -326,6 +329,7 @@ pub fn region_slot_index(coord: IVec2) -> usize {
     rz * (REGION_SIZE as usize) + rx
 }
 
+/// Runs the `pack_slot_bytes` routine for pack slot bytes in the `core::world::save` module.
 #[inline]
 pub fn pack_slot_bytes(chunk_bytes: Option<&[u8]>, water_bytes: Option<&[u8]>) -> Vec<u8> {
     let cb = chunk_bytes.unwrap_or(&[]);
@@ -339,6 +343,7 @@ pub fn pack_slot_bytes(chunk_bytes: Option<&[u8]>, water_bytes: Option<&[u8]>) -
     out
 }
 
+/// Runs the `unpack_slot_bytes` routine for unpack slot bytes in the `core::world::save` module.
 #[inline]
 pub fn unpack_slot_bytes(buf: &[u8]) -> (Option<&[u8]>, Option<&[u8]>) {
     if buf.len() >= 12 && &buf[0..4] == &GBW_MAGIC {
@@ -363,6 +368,7 @@ pub fn unpack_slot_bytes(buf: &[u8]) -> (Option<&[u8]>, Option<&[u8]>) {
     (Some(buf), None)
 }
 
+/// Runs the `container_find` routine for container find in the `core::world::save` module.
 pub fn container_find(buf: &[u8], tag: u32) -> Option<&[u8]> {
     if !slot_is_container(buf) {
         return None;
@@ -388,7 +394,9 @@ pub fn container_find(buf: &[u8], tag: u32) -> Option<&[u8]> {
     None
 }
 
+/// Runs the `container_upsert` routine for container upsert in the `core::world::save` module.
 pub fn container_upsert(existing: Option<&[u8]>, tag: u32, payload: &[u8]) -> Vec<u8> {
+    /// Runs the `single_record_container` routine for single record container in the `core::world::save` module.
     fn single_record_container(tag: u32, payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(8 + 8 + payload.len());
         out.extend_from_slice(&SLOT_MAGIC.to_le_bytes());
@@ -464,6 +472,7 @@ pub fn container_upsert(existing: Option<&[u8]>, tag: u32, payload: &[u8]) -> Ve
     out
 }
 
+/// Runs the `slot_is_container` routine for slot is container in the `core::world::save` module.
 #[inline]
 pub fn slot_is_container(buf: &[u8]) -> bool {
     buf.len() >= 8 && u32::from_le_bytes(buf[0..4].try_into().unwrap()) == SLOT_MAGIC

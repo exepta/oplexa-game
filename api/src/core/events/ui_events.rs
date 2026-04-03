@@ -1,23 +1,29 @@
 use bevy::prelude::*;
 
+/// Represents connect to server request used by the `core::events::ui_events` module.
 #[derive(Message, Clone, Debug, Default)]
 pub struct ConnectToServerRequest {
     pub session_url: String,
     pub server_name: String,
 }
 
+/// Represents disconnect from server request used by the `core::events::ui_events` module.
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct DisconnectFromServerRequest;
 
+/// Represents open to lan request used by the `core::events::ui_events` module.
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct OpenToLanRequest;
 
+/// Represents stop lan host request used by the `core::events::ui_events` module.
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct StopLanHostRequest;
 
+/// Represents craft hand crafted request used by the `core::events::ui_events` module.
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct CraftHandCraftedRequest;
 
+/// Represents drop item request used by the `core::events::ui_events` module.
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct DropItemRequest {
     pub item_id: u16,
@@ -28,6 +34,7 @@ pub struct DropItemRequest {
 }
 
 impl DropItemRequest {
+    /// Creates a new instance for the `core::events::ui_events` module.
     pub fn new(
         item_id: u16,
         amount: u16,
