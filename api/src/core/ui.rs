@@ -7,13 +7,14 @@ pub const HOTBAR_SLOTS: usize = 6;
 pub struct UiInteractionState {
     pub inventory_open: bool,
     pub menu_open: bool,
+    pub chat_open: bool,
 }
 
 impl UiInteractionState {
     /// Runs the `blocks_game_input` routine for blocks game input in the `core::ui` module.
     #[inline]
     pub fn blocks_game_input(&self) -> bool {
-        self.inventory_open || self.menu_open
+        self.inventory_open || self.menu_open || self.chat_open
     }
 }
 

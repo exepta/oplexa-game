@@ -10,9 +10,7 @@ fn toggle_pause_menu(
     let menu_key = convert(global_config.input.ui_menu.as_str()).unwrap_or(KeyCode::Enter);
     let close_key =
         convert(global_config.input.ui_close_back.as_str()).expect("Invalid close/back key");
-    let toggle_requested = keyboard.just_pressed(menu_key)
-        || keyboard.just_pressed(KeyCode::Enter)
-        || keyboard.just_pressed(KeyCode::NumpadEnter);
+    let toggle_requested = keyboard.just_pressed(menu_key);
     let close_requested = pause_menu.open && keyboard.just_pressed(close_key);
     if !toggle_requested && !close_requested {
         return;

@@ -19,6 +19,12 @@ pub struct OpenToLanRequest;
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct StopLanHostRequest;
 
+/// Represents chat submit request used by the `core::events::ui_events` module.
+#[derive(Message, Clone, Debug, Default)]
+pub struct ChatSubmitRequest {
+    pub text: String,
+}
+
 /// Represents craft hand crafted request used by the `core::events::ui_events` module.
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct CraftHandCraftedRequest;

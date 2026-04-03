@@ -949,6 +949,7 @@ fn rebuild_display_servers(ui_state: &mut MultiplayerUiState, now: f64) -> bool 
             .cmp(&right.saved_index.is_none())
             .then_with(|| left.key.cmp(&right.key))
     });
+    move_best_servers_to_bottom(&mut display_servers);
 
     if ui_state
         .selected_key
@@ -965,6 +966,68 @@ fn rebuild_display_servers(ui_state: &mut MultiplayerUiState, now: f64) -> bool 
     let structure_changed = new_keys != ui_state.rendered_keys;
     ui_state.display_servers = display_servers;
     structure_changed
+}
+
+fn move_best_servers_to_bottom(display_servers: &mut Vec<DisplayServerEntry>) {
+    if display_servers.len() <= 3 {
+        return;
+    }
+
+    let mut ranking = display_servers
+        .iter()
+        .enumerate()
+        .map(|(index, server)| {
+            let online_rank = if server.online { 0_u8 } else { 1_u8 };
+            let ping_rank = server.ping_ms.unwrap_or(u32::MAX);
+            let players_rank = std::cmp::Reverse(server.current_players.unwrap_or(0));
+            (
+                index,
+                online_rank,
+                ping_rank,
+                players_rank,
+                server.server_name.to_ascii_lowercase(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    ranking.sort_by(|left, right| {
+        left.1
+            .cmp(&right.1)
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.3.cmp(&right.3))
+            .then_with(|| left.4.cmp(&right.4))
+    });
+
+    let best_keys = ranking
+        .into_iter()
+        .take(3)
+        .filter_map(|(index, ..)| display_servers.get(index).map(|server| server.key.clone()))
+        .collect::<Vec<_>>();
+    if best_keys.is_empty() {
+        return;
+    }
+
+    let best_set = best_keys.iter().cloned().collect::<HashSet<_>>();
+    let mut regular = Vec::with_capacity(display_servers.len());
+    let mut best = Vec::with_capacity(best_keys.len());
+
+    for server in display_servers.drain(..) {
+        if best_set.contains(server.key.as_str()) {
+            best.push(server);
+        } else {
+            regular.push(server);
+        }
+    }
+
+    best.sort_by_key(|server| {
+        best_keys
+            .iter()
+            .position(|key| key == &server.key)
+            .unwrap_or(usize::MAX)
+    });
+
+    regular.extend(best);
+    *display_servers = regular;
 }
 
 /// Updates probed server for the `graphic::components::multiplayer` module.

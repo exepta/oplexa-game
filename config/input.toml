@@ -16,6 +16,7 @@ ui_inventory = "Tab"
 
 # Ui
 ui_close_back = "Escape"
+open_chat = "C"
 inventory_recipe_open = "R"
 
 # Debug

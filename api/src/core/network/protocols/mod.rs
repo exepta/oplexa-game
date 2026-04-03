@@ -1,5 +1,6 @@
 mod auth;
 mod blocks;
+mod chat;
 mod chunks;
 mod drops;
 pub mod mobs;
@@ -7,6 +8,7 @@ mod players;
 
 pub use auth::*;
 pub use blocks::*;
+pub use chat::*;
 pub use chunks::*;
 pub use drops::*;
 pub use players::*;
@@ -94,6 +96,14 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<ClientDropPickup>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<ServerDropPicked>()
+            .add_direction(NetworkDirection::ServerToClient);
+
+        // Messages - chat + commands
+        app.register_message::<ClientChatMessage>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<ServerChatMessage>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<ServerGameModeChanged>()
             .add_direction(NetworkDirection::ServerToClient);
     }
 }

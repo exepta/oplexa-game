@@ -1,15 +1,20 @@
 use self::manager::ManagerPlugin;
+use crate::core::chat::{ChatLine, ChatLog};
+use crate::core::commands::{
+    CommandSender, EntitySender, GameModeKind, SystemMessageLevel, SystemSender,
+    default_chat_command_registry, parse_chat_command,
+};
 use crate::core::config::GlobalConfig;
 use crate::core::debug::{BuildInfo, WorldInspectorState};
 use crate::core::entities::player::inventory::PlayerInventory;
-use crate::core::entities::player::{FpsController, Player};
+use crate::core::entities::player::{FlightState, FpsController, GameMode, GameModeState, Player};
 use crate::core::events::block::block_player_events::{
     BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
 use crate::core::events::ui_events::{
-    ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest, OpenToLanRequest,
-    StopLanHostRequest,
+    ChatSubmitRequest, ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest,
+    OpenToLanRequest, StopLanHostRequest,
 };
 use crate::core::inventory::items::{ItemRegistry, build_world_item_drop_visual};
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
@@ -27,10 +32,11 @@ use api::core::network::{
     config::{DedicatedServerSettings, NetworkSettings},
     discovery::{LanDiscoveryClient, LanServerInfo},
     protocols::{
-        Auth, ClientBlockBreak, ClientBlockPlace, ClientChunkInterest, ClientDropItem,
-        ClientDropPickup, ClientKeepAlive, OrderedReliable, PlayerJoined, PlayerLeft, PlayerMove,
-        PlayerSnapshot, ProtocolPlugin, ServerAuthRejected, ServerBlockBreak, ServerBlockPlace,
-        ServerChunkData, ServerDropPicked, ServerDropSpawn, ServerWelcome, UnorderedReliable,
+        Auth, ClientBlockBreak, ClientBlockPlace, ClientChatMessage, ClientChunkInterest,
+        ClientDropItem, ClientDropPickup, ClientKeepAlive, OrderedReliable, PlayerJoined,
+        PlayerLeft, PlayerMove, PlayerSnapshot, ProtocolPlugin, ServerAuthRejected,
+        ServerBlockBreak, ServerBlockPlace, ServerChatMessage, ServerChunkData, ServerDropPicked,
+        ServerDropSpawn, ServerGameModeChanged, ServerWelcome, UnorderedReliable,
         UnorderedUnreliable,
     },
 };
@@ -442,6 +448,7 @@ struct MultiplayerClientRuntime {
     auto_connect_lan: bool,
     connection_entity: Option<Entity>,
     local_player_id: Option<u64>,
+    player_names: HashMap<u64, String>,
     remote_players: HashMap<u64, Entity>,
     disconnected_remote_players: HashSet<u64>,
     remote_player_smoothing: HashMap<u64, RemotePlayerSmoothing>,
@@ -473,6 +480,7 @@ impl MultiplayerClientRuntime {
             auto_connect_lan,
             connection_entity: None,
             local_player_id: None,
+            player_names: HashMap::new(),
             remote_players: HashMap::new(),
             disconnected_remote_players: HashSet::new(),
             remote_player_smoothing: HashMap::new(),
@@ -540,6 +548,7 @@ fn do_connect(
     runtime.connection_entity = Some(entity);
     runtime.session_url = session_url;
     runtime.local_player_id = None;
+    runtime.player_names.clear();
     runtime.remote_players.clear();
     runtime.disconnected_remote_players.clear();
     runtime.remote_player_smoothing.clear();
@@ -1152,11 +1161,13 @@ impl Plugin for MultiplayerClientPlugin {
                     open_to_lan_requested,
                     finish_open_to_lan_connect,
                     stop_lan_host_requested,
+                    handle_chat_submit_requests,
                     send_local_block_break_events,
                     send_local_block_place_events,
                     send_local_item_drop_requests,
                     send_client_keepalive,
                     receive_player_messages,
+                    receive_chat_messages,
                     receive_world_messages,
                     receive_drop_messages,
                     update_connection_state,
@@ -1185,6 +1196,7 @@ fn handle_terminal_interrupt_exit(
         info!("Ctrl+C detected. Sending disconnect before shutdown...");
         do_disconnect(&mut runtime, &mut commands);
         runtime.local_player_id = None;
+        runtime.player_names.clear();
         runtime.remote_players.clear();
         runtime.disconnected_remote_players.clear();
         runtime.remote_player_smoothing.clear();
@@ -1256,6 +1268,7 @@ fn on_server_disconnected(
     mut block_remap: ResMut<BlockIdRemap>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chat_log: ResMut<ChatLog>,
     mut drops: ResMut<MultiplayerDropIndex>,
     mut next_state: ResMut<NextState<AppState>>,
     mut chunk_map: ResMut<ChunkMap>,
@@ -1277,9 +1290,11 @@ fn on_server_disconnected(
     for entity in runtime.remote_players.drain().map(|(_, e)| e) {
         safe_despawn_entity(&mut commands, entity);
     }
+    chat_log.clear();
     runtime.remote_player_smoothing.clear();
     clear_multiplayer_drops(&mut commands, &mut drops);
     runtime.local_player_id = None;
+    runtime.player_names.clear();
     runtime.disconnected_remote_players.clear();
     block_remap.reset();
     chunk_stream.last_requested_center = None;
@@ -1410,6 +1425,7 @@ fn connect_to_server_requested(
     multiplayer_connection.world_name = None;
     multiplayer_connection.world_seed = None;
     multiplayer_connection.spawn_translation = None;
+    multiplayer_connection.known_player_names.clear();
     multiplayer_connection.last_error = None;
     chunk_stream.last_requested_center = None;
     chunk_stream.last_requested_radius = None;
@@ -1517,6 +1533,7 @@ fn finish_open_to_lan_connect(
     multiplayer_connection.world_name = None;
     multiplayer_connection.world_seed = None;
     multiplayer_connection.spawn_translation = None;
+    multiplayer_connection.known_player_names.clear();
     multiplayer_connection.last_error = None;
     chunk_stream.last_requested_center = None;
     chunk_stream.last_requested_radius = None;
@@ -1607,6 +1624,7 @@ fn receive_player_messages(
         warn!("Server rejected multiplayer auth: {}", reason);
 
         runtime.local_player_id = None;
+        runtime.player_names.clear();
         runtime.disconnected_remote_players.clear();
         block_remap.reset();
         chunk_stream.last_requested_center = None;
@@ -1635,6 +1653,10 @@ fn receive_player_messages(
 
     for message in recv_welcome.receive() {
         runtime.local_player_id = Some(message.player_id);
+        let local_player_name = runtime.player_name.clone();
+        runtime
+            .player_names
+            .insert(message.player_id, local_player_name);
         runtime.disconnected_remote_players.clear();
         if let Some(existing) = runtime.remote_players.remove(&message.player_id) {
             safe_despawn_entity(&mut commands, existing);
@@ -1670,6 +1692,9 @@ fn receive_player_messages(
     }
 
     for message in recv_joined.receive() {
+        runtime
+            .player_names
+            .insert(message.player_id, message.username.clone());
         if Some(message.player_id) == runtime.local_player_id {
             continue;
         }
@@ -1701,6 +1726,7 @@ fn receive_player_messages(
         runtime
             .disconnected_remote_players
             .insert(message.player_id);
+        runtime.player_names.remove(&message.player_id);
         runtime.remote_player_smoothing.remove(&message.player_id);
         if let Some(ent) = runtime.remote_players.remove(&message.player_id) {
             safe_despawn_entity(&mut commands, ent);
@@ -1736,6 +1762,177 @@ fn receive_player_messages(
             });
         smoothing.push_snapshot(now, translation, message.yaw);
     }
+
+    sync_known_player_names(&runtime, &mut multiplayer_connection);
+}
+
+/// Handles server chat lines and game mode synchronization.
+fn receive_chat_messages(
+    runtime: Res<MultiplayerClientRuntime>,
+    mut chat_log: ResMut<ChatLog>,
+    mut game_mode: ResMut<GameModeState>,
+    mut flight_state: Query<&mut FlightState>,
+    mut q: Query<(
+        &mut MessageReceiver<ServerChatMessage>,
+        &mut MessageReceiver<ServerGameModeChanged>,
+    )>,
+) {
+    let Some(entity) = runtime.connection_entity else {
+        return;
+    };
+
+    let Ok((mut recv_chat, mut recv_game_mode)) = q.get_mut(entity) else {
+        return;
+    };
+
+    for message in recv_chat.receive() {
+        chat_log.push(ChatLine::new(message.sender, message.message));
+    }
+
+    for message in recv_game_mode.receive() {
+        if Some(message.player_id) != runtime.local_player_id {
+            continue;
+        }
+        apply_local_game_mode(message.mode, &mut game_mode, &mut flight_state);
+    }
+}
+
+/// Handles locally submitted chat input and forwards it to multiplayer or local command handling.
+fn handle_chat_submit_requests(
+    mut submit_requests: MessageReader<ChatSubmitRequest>,
+    runtime: Res<MultiplayerClientRuntime>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
+    q_connected: Query<Has<Connected>>,
+    mut q_sender: Query<&mut MessageSender<ClientChatMessage>>,
+    mut chat_log: ResMut<ChatLog>,
+    mut game_mode: ResMut<GameModeState>,
+    mut flight_state: Query<&mut FlightState>,
+) {
+    for request in submit_requests.read() {
+        let text = request.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+
+        let connected = runtime.connection_entity.is_some_and(|entity| {
+            q_connected.get(entity).unwrap_or(false) && multiplayer_connection.connected
+        });
+
+        if connected {
+            if let Some(entity) = runtime.connection_entity
+                && let Ok(mut sender) = q_sender.get_mut(entity)
+            {
+                sender.send::<OrderedReliable>(ClientChatMessage::new(text.to_string()));
+            }
+            continue;
+        }
+
+        if let Some(command) = parse_chat_command(text) {
+            let registry = default_chat_command_registry();
+            let Some(descriptor) = registry.find(command.name.as_str()) else {
+                push_system_chat(
+                    &mut chat_log,
+                    SystemMessageLevel::Warn,
+                    format!("Unknown command '/{}'. Use /help.", command.name),
+                );
+                continue;
+            };
+
+            match descriptor.name.as_str() {
+                "help" => {
+                    let names = registry
+                        .sorted_descriptors()
+                        .into_iter()
+                        .map(|entry| format!("/{}", entry.name))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    push_system_chat(
+                        &mut chat_log,
+                        SystemMessageLevel::Info,
+                        format!("Available commands: {}", names),
+                    );
+                }
+                "gamemode" => {
+                    let Some(raw_mode) = command.args.first() else {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Usage: /gamemode <survival|creative|spectator>".to_string(),
+                        );
+                        continue;
+                    };
+
+                    let Some(mode) = GameModeKind::parse(raw_mode) else {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            format!(
+                                "Unknown game mode '{}'. Use survival, creative, or spectator.",
+                                raw_mode
+                            ),
+                        );
+                        continue;
+                    };
+
+                    apply_local_game_mode(mode, &mut game_mode, &mut flight_state);
+                    push_system_chat(
+                        &mut chat_log,
+                        SystemMessageLevel::Info,
+                        format!("Game mode set to {}.", mode.as_str()),
+                    );
+                }
+                _ => {
+                    push_system_chat(
+                        &mut chat_log,
+                        SystemMessageLevel::Warn,
+                        format!("Command '/{}' is not executable yet.", descriptor.name),
+                    );
+                }
+            }
+            continue;
+        }
+
+        chat_log.push(ChatLine::new(
+            CommandSender::Entity(EntitySender::Player {
+                player_id: runtime.local_player_id.unwrap_or(0),
+                player_name: runtime.player_name.clone(),
+            }),
+            text.to_string(),
+        ));
+    }
+}
+
+fn push_system_chat(chat_log: &mut ChatLog, level: SystemMessageLevel, message: String) {
+    chat_log.push(ChatLine::new(
+        CommandSender::System(SystemSender::Server { level }),
+        message,
+    ));
+}
+
+fn apply_local_game_mode(
+    mode: GameModeKind,
+    game_mode: &mut ResMut<GameModeState>,
+    flight_state: &mut Query<&mut FlightState>,
+) {
+    game_mode.0 = match mode {
+        GameModeKind::Survival => GameMode::Survival,
+        GameModeKind::Creative => GameMode::Creative,
+        GameModeKind::Spectator => GameMode::Spectator,
+    };
+
+    if let Ok(mut state) = flight_state.single_mut() {
+        state.flying = matches!(mode, GameModeKind::Creative | GameModeKind::Spectator);
+    }
+}
+
+fn sync_known_player_names(
+    runtime: &MultiplayerClientRuntime,
+    multiplayer_connection: &mut MultiplayerConnectionState,
+) {
+    let mut names = runtime.player_names.values().cloned().collect::<Vec<_>>();
+    names.sort_by_key(|name| name.to_ascii_lowercase());
+    names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    multiplayer_connection.known_player_names = names;
 }
 
 /// Handles ServerChunkData, ServerBlockBreak, ServerBlockPlace messages.

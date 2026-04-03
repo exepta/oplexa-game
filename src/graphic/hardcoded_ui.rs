@@ -582,6 +582,7 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<RecipePreviewDialogState>()
             .init_resource::<CreativePanelUiState>()
             .init_resource::<CreativePanelState>()
+            .init_resource::<ChatUiState>()
             .init_resource::<DebugVramState>()
             .init_resource::<SinglePlayerUiState>()
             .init_resource::<MultiplayerUiState>()
@@ -745,6 +746,16 @@ impl Plugin for HardcodedUiPlugin {
                     .run_if(in_state(AppState::InGame(InGameStates::Game))),
             )
             .add_systems(
+                Update,
+                update_chat_ui_state
+                    .before(sync_ingame_ui_interaction_state)
+                    .run_if(in_state(AppState::InGame(InGameStates::Game))),
+            )
+            .add_systems(
+                bevy_inspector_egui::bevy_egui::EguiPrimaryContextPass,
+                render_chat_overlay.run_if(in_state(AppState::InGame(InGameStates::Game))),
+            )
+            .add_systems(
                 OnExit(AppState::InGame(InGameStates::Game)),
                 hide_hud_hotbar_ui,
             )
@@ -799,6 +810,7 @@ impl Plugin for HardcodedUiPlugin {
             .add_systems(
                 OnExit(AppState::InGame(InGameStates::Game)),
                 (
+                    close_chat_ui_on_exit,
                     close_player_inventory_ui,
                     persist_inventory_on_world_exit,
                     clear_inventory_after_world_exit,
@@ -828,6 +840,7 @@ include!("components/single_player.rs");
 include!("components/multiplayer.rs");
 include!("components/world_flow.rs");
 include!("components/hud.rs");
+include!("components/chat.rs");
 include!("components/pause_menu.rs");
 include!("components/inventory.rs");
 include!("components/inventory_creative.rs");

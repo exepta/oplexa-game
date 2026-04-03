@@ -15,8 +15,13 @@ fn hide_hud_hotbar_ui(mut root: Query<&mut Visibility, With<HudRoot>>) {
 /// Runs the `cycle_hotbar_with_scroll` routine for cycle hotbar with scroll in the `graphic::components::hud` module.
 fn cycle_hotbar_with_scroll(
     mut wheel_reader: MessageReader<MouseWheel>,
+    ui_interaction: Res<UiInteractionState>,
     mut hotbar_state: ResMut<HotbarSelectionState>,
 ) {
+    if ui_interaction.chat_open {
+        return;
+    }
+
     let mut total_steps = 0_i32;
 
     for wheel in wheel_reader.read() {
@@ -68,7 +73,7 @@ fn drop_selected_hotbar_item(
     block_registry: Res<BlockRegistry>,
     item_registry: Res<ItemRegistry>,
 ) {
-    if ui_interaction.menu_open || ui_interaction.inventory_open {
+    if ui_interaction.blocks_game_input() {
         return;
     }
 

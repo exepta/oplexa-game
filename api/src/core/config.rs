@@ -19,6 +19,9 @@ pub struct GlobalConfig {
 
     /// Settings related to user input mappings and sensitivities.
     pub input: InputConfig,
+
+    /// Settings related to user interface behavior.
+    pub interface: InterfaceConfig,
 }
 
 impl Default for GlobalConfig {
@@ -28,6 +31,7 @@ impl Default for GlobalConfig {
             graphics: GraphicsConfig::default(),
             gameplay: GameplayConfig::default(),
             input: InputConfig::default(),
+            interface: InterfaceConfig::default(),
         }
     }
 }
@@ -38,6 +42,7 @@ impl GlobalConfig {
         Self::ensure_default_config_file("config/graphics.toml", &GraphicsConfig::default());
         Self::ensure_default_config_file("config/gameplay.toml", &GameplayConfig::default());
         Self::ensure_default_config_file("config/input.toml", &InputConfig::default());
+        Self::ensure_default_config_file("config/interface.toml", &InterfaceConfig::default());
     }
 
     /// Runs the `ensure_default_config_file` routine for ensure default config file in the `core::config` module.
@@ -82,6 +87,7 @@ impl GlobalConfig {
             graphics: Self::load("config/graphics.toml"),
             gameplay: Self::load("config/gameplay.toml"),
             input: Self::load("config/input.toml"),
+            interface: Self::load("config/interface.toml"),
         }
     }
 
@@ -97,6 +103,28 @@ impl GlobalConfig {
         Self::save(&self.graphics, "config/graphics.toml");
         Self::save(&self.gameplay, "config/gameplay.toml");
         Self::save(&self.input, "config/input.toml");
+        Self::save(&self.interface, "config/interface.toml");
+    }
+}
+
+// =======================================================
+//                         Interface
+// =======================================================
+
+/// Configuration settings for in-game interface behavior.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct InterfaceConfig {
+    /// Maximum number of chat lines kept in local history.
+    #[serde(default = "default_chat_max_space")]
+    pub chat_max_space: usize,
+}
+
+impl Default for InterfaceConfig {
+    /// Runs the `default` routine for default in the `core::config` module.
+    fn default() -> Self {
+        Self {
+            chat_max_space: default_chat_max_space(),
+        }
     }
 }
 
@@ -225,6 +253,10 @@ pub struct InputConfig {
     /// Key or button mapping to close UI dialogs or go back in menus.
     pub ui_close_back: String,
 
+    /// Key or button mapping to open the in-game chat input.
+    #[serde(default = "default_open_chat_key")]
+    pub open_chat: String,
+
     /// Key to open a recipe dialog for the currently hovered inventory item.
     #[serde(default = "default_inventory_recipe_open_key")]
     pub inventory_recipe_open: String,
@@ -258,6 +290,7 @@ impl Default for InputConfig {
             ui_menu: String::from("Enter"),
             ui_inventory: String::from("Tab"),
             ui_close_back: String::from("Escape"),
+            open_chat: default_open_chat_key(),
             inventory_recipe_open: default_inventory_recipe_open_key(),
 
             debug_overlay: String::from("F3"),
@@ -272,9 +305,19 @@ fn default_drop_item_key() -> String {
     String::from("Q")
 }
 
+/// Runs the `default_open_chat_key` routine for default open chat key in the `core::config` module.
+fn default_open_chat_key() -> String {
+    String::from("C")
+}
+
 /// Runs the `default_inventory_recipe_open_key` routine for default inventory recipe open key in the `core::config` module.
 fn default_inventory_recipe_open_key() -> String {
     String::from("R")
+}
+
+/// Runs the `default_chat_max_space` routine for default chat max space in the `core::config` module.
+fn default_chat_max_space() -> usize {
+    140
 }
 
 // =======================================================
