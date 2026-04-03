@@ -26,6 +26,7 @@ features = [
     "default_font",
     "multi_threaded",
     "x11",
+    "wayland",
     "bevy_gltf",
     "bevy_pbr",
     "bevy_animation",

@@ -1,0 +1,236 @@
+name: Release
+
+on:
+  pull_request:
+    branches:
+      - release
+    types:
+      - closed
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.pull_request.merge_commit_sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ github.event.pull_request.merged == true }}
+    name: Build ${{ matrix.id }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+            binary_ext: .exe
+          - id: linux-x86_64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+            binary_ext: ""
+          - id: macos-intel
+            os: macos-13
+            target: x86_64-apple-darwin
+            archive_ext: tar.gz
+            binary_ext: ""
+          - id: macos-silicon
+            os: macos-14
+            target: aarch64-apple-darwin
+            archive_ext: tar.gz
+            binary_ext: ""
+
+    steps:
+      - name: Checkout merged release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Install Linux build dependencies (X11 + Wayland)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libasound2-dev \
+            libudev-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binaries
+        run: cargo build --locked --release --target ${{ matrix.target }} -p oplexa-game -p oplexa-game-server
+
+      - name: Package release (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          client_dir="dist/oplexa-client-${{ matrix.id }}"
+          server_dir="dist/oplexa-server-${{ matrix.id }}"
+
+          mkdir -p "$client_dir" "$server_dir"
+
+          cp "target/${{ matrix.target }}/release/oplexa-game${{ matrix.binary_ext }}" "$client_dir/"
+          cp "target/${{ matrix.target }}/release/oplexa-game-server${{ matrix.binary_ext }}" "$server_dir/"
+
+          cp -R assets "$client_dir/assets"
+          cp -R assets "$server_dir/assets"
+          cp -R config "$client_dir/config"
+          cp -R config "$server_dir/config"
+          cp README.md "$client_dir/README.md"
+          cp README.md "$server_dir/README.md"
+          cp server.settings.toml "$client_dir/server.settings.toml"
+          cp server.settings.toml "$server_dir/server.settings.toml"
+
+          if [ -f .env ]; then
+            cp .env "$client_dir/.env"
+            cp .env "$server_dir/.env"
+          else
+            printf "# Configure environment variables here\n" > "$client_dir/.env"
+            printf "# Configure environment variables here\n" > "$server_dir/.env"
+          fi
+
+          tar -C dist -czf "dist/oplexa-client-${{ matrix.id }}.tar.gz" "oplexa-client-${{ matrix.id }}"
+          tar -C dist -czf "dist/oplexa-server-${{ matrix.id }}.tar.gz" "oplexa-server-${{ matrix.id }}"
+
+      - name: Package release (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $clientDir = "dist/oplexa-client-${{ matrix.id }}"
+          $serverDir = "dist/oplexa-server-${{ matrix.id }}"
+          New-Item -ItemType Directory -Path $clientDir -Force | Out-Null
+          New-Item -ItemType Directory -Path $serverDir -Force | Out-Null
+
+          Copy-Item "target/${{ matrix.target }}/release/oplexa-game${{ matrix.binary_ext }}" "$clientDir/"
+          Copy-Item "target/${{ matrix.target }}/release/oplexa-game-server${{ matrix.binary_ext }}" "$serverDir/"
+
+          Copy-Item "assets" "$clientDir/assets" -Recurse
+          Copy-Item "assets" "$serverDir/assets" -Recurse
+          Copy-Item "config" "$clientDir/config" -Recurse
+          Copy-Item "config" "$serverDir/config" -Recurse
+          Copy-Item "README.md" "$clientDir/README.md"
+          Copy-Item "README.md" "$serverDir/README.md"
+          Copy-Item "server.settings.toml" "$clientDir/server.settings.toml"
+          Copy-Item "server.settings.toml" "$serverDir/server.settings.toml"
+
+          if (Test-Path ".env") {
+            Copy-Item ".env" "$clientDir/.env"
+            Copy-Item ".env" "$serverDir/.env"
+          } else {
+            Set-Content -Path "$clientDir/.env" -Value "# Configure environment variables here"
+            Set-Content -Path "$serverDir/.env" -Value "# Configure environment variables here"
+          }
+
+          Compress-Archive -Path "$clientDir/*" -DestinationPath "dist/oplexa-client-${{ matrix.id }}.zip" -Force
+          Compress-Archive -Path "$serverDir/*" -DestinationPath "dist/oplexa-server-${{ matrix.id }}.zip" -Force
+
+      - name: Upload client artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oplexa-client-${{ matrix.id }}
+          path: dist/oplexa-client-${{ matrix.id }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oplexa-server-${{ matrix.id }}
+          path: dist/oplexa-server-${{ matrix.id }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release-client:
+    if: ${{ github.event.pull_request.merged == true }}
+    name: Create Client release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download client artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: oplexa-client-*
+          path: release-client-artifacts
+          merge-multiple: true
+
+      - name: Generate client release metadata
+        id: meta
+        shell: bash
+        env:
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          short_sha="${MERGE_SHA:0:7}"
+          timestamp="$(date -u +'%Y%m%d-%H%M%S')"
+          echo "tag=client-release-${timestamp}-${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "name=Client Release ${timestamp} (${short_sha})" >> "$GITHUB_OUTPUT"
+
+      - name: Publish client release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          target_commitish: ${{ github.event.pull_request.merge_commit_sha }}
+          generate_release_notes: true
+          files: |
+            release-client-artifacts/**/*.zip
+            release-client-artifacts/**/*.tar.gz
+
+  release-server:
+    if: ${{ github.event.pull_request.merged == true }}
+    name: Create Server release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download server artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: oplexa-server-*
+          path: release-server-artifacts
+          merge-multiple: true
+
+      - name: Generate server release metadata
+        id: meta
+        shell: bash
+        env:
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          short_sha="${MERGE_SHA:0:7}"
+          timestamp="$(date -u +'%Y%m%d-%H%M%S')"
+          echo "tag=server-release-${timestamp}-${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "name=Server Release ${timestamp} (${short_sha})" >> "$GITHUB_OUTPUT"
+
+      - name: Publish server release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          target_commitish: ${{ github.event.pull_request.merge_commit_sha }}
+          generate_release_notes: true
+          files: |
+            release-server-artifacts/**/*.zip
+            release-server-artifacts/**/*.tar.gz
