@@ -5,7 +5,8 @@ use crate::core::entities::player::{
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
 use crate::core::ui::UiInteractionState;
-use crate::core::world::block::BlockRegistry;
+use crate::core::world::block::{BlockRegistry, VOXEL_SIZE};
+use crate::core::world::chunk_dimension::CX;
 use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use crate::utils::key_utils::convert;
 use bevy::camera::visibility::RenderLayers;
@@ -146,6 +147,23 @@ fn spawn_player(
     const STEP_MAX: f32 = 0.55;
     const STEP_MIN_WIDTH: f32 = 2.0 * RADIUS + 0.04;
     const SNAP: f32 = 0.08;
+    let chunk_world_radius =
+        (game_config.graphics.chunk_range.max(1) as f32) * (CX as f32) * VOXEL_SIZE;
+    let fog_color_arr = game_config.graphics.fog_color;
+    let fog_color = Color::srgb(
+        fog_color_arr[0].clamp(0.0, 1.0),
+        fog_color_arr[1].clamp(0.0, 1.0),
+        fog_color_arr[2].clamp(0.0, 1.0),
+    );
+    let fog_start_factor = game_config.graphics.fog_start_factor.clamp(0.0, 3.0);
+    let fog_end_factor = game_config
+        .graphics
+        .fog_end_factor
+        .max(fog_start_factor + 0.01)
+        .clamp(0.01, 3.0);
+    let fog_start = (chunk_world_radius * fog_start_factor).max(0.1);
+    let fog_end = (chunk_world_radius * fog_end_factor).max(fog_start + 1.0);
+    let far_plane = (fog_end + game_config.graphics.far_clip_extra.max(0.5)).max(1.0);
 
     let player = commands
         .spawn((
@@ -189,7 +207,7 @@ fn spawn_player(
         .id();
 
     commands.entity(player).with_children(|c| {
-        c.spawn((
+        let mut camera = c.spawn((
             PlayerCamera,
             RenderLayers::from_layers(&[0, 1, 2]),
             Camera3d::default(),
@@ -197,25 +215,28 @@ fn spawn_player(
             Projection::Perspective(PerspectiveProjection {
                 fov: fov_deg.to_radians(),
                 near: 0.05,
-                far: (game_config.graphics.chunk_range as f32 * 50.0 + 20.0 - 0.25).max(1.0),
+                far: far_plane,
                 ..default()
             }),
             Camera {
                 order: 1,
-                clear_color: ClearColorConfig::Custom(Color::srgb(0.62, 0.72, 0.85)),
-                ..default()
-            },
-            DistanceFog {
-                color: Color::srgb(0.62, 0.72, 0.85),
-                falloff: FogFalloff::Linear {
-                    start: game_config.graphics.chunk_range as f32 * 50.0,
-                    end: game_config.graphics.chunk_range as f32 * 50.0 + 20.0,
-                },
+                clear_color: ClearColorConfig::Custom(fog_color),
                 ..default()
             },
             Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
             Name::new("PlayerCamera"),
         ));
+
+        if game_config.graphics.fog_enabled {
+            camera.insert(DistanceFog {
+                color: fog_color,
+                falloff: FogFalloff::Linear {
+                    start: fog_start,
+                    end: fog_end,
+                },
+                ..default()
+            });
+        }
     });
 
     commands.entity(player).insert(DoubleTapSpace {

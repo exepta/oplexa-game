@@ -5,6 +5,7 @@ use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::tasks::Task;
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 /// Represents mesh backlog used by the `generator::chunk::chunk_struct` module.
 #[derive(Resource, Default)]
@@ -35,7 +36,7 @@ pub struct RegLiteEntry {
 /// Represents reg lite used by the `generator::chunk::chunk_struct` module.
 #[derive(Clone)]
 pub struct RegLite {
-    pub map: HashMap<BlockId, RegLiteEntry>,
+    pub map: Arc<HashMap<BlockId, RegLiteEntry>>,
 }
 
 impl RegLite {
@@ -60,7 +61,7 @@ impl RegLite {
                 },
             );
         }
-        Self { map }
+        Self { map: Arc::new(map) }
     }
     /// Runs the `uv` routine for uv in the `generator::chunk::chunk_struct` module.
     #[inline]
@@ -92,6 +93,7 @@ pub struct MeshBuild {
     pub pos: Vec<[f32; 3]>,
     pub nrm: Vec<[f32; 3]>,
     pub uv: Vec<[f32; 2]>,
+    pub tile_rect: Vec<[f32; 4]>,
     pub idx: Vec<u32>,
 }
 
@@ -102,15 +104,17 @@ impl MeshBuild {
             pos: vec![],
             nrm: vec![],
             uv: vec![],
+            tile_rect: vec![],
             idx: vec![],
         }
     }
     /// Runs the `quad` routine for quad in the `generator::chunk::chunk_struct` module.
-    pub fn quad(&mut self, q: [[f32; 3]; 4], n: [f32; 3], uv: [[f32; 2]; 4]) {
+    pub fn quad(&mut self, q: [[f32; 3]; 4], n: [f32; 3], uv: [[f32; 2]; 4], tile_rect: [f32; 4]) {
         let base = self.pos.len() as u32;
         self.pos.extend_from_slice(&q);
         self.nrm.extend_from_slice(&[n; 4]);
         self.uv.extend_from_slice(&uv);
+        self.tile_rect.extend_from_slice(&[tile_rect; 4]);
         self.idx
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
@@ -123,6 +127,7 @@ impl MeshBuild {
         m.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.pos);
         m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.nrm);
         m.insert_attribute(Mesh::ATTRIBUTE_UV_0, self.uv);
+        m.insert_attribute(Mesh::ATTRIBUTE_COLOR, self.tile_rect);
 
         // <= 65k Vertices? -> U16-Indices
         if self.idx.len() <= u16::MAX as usize {

@@ -250,7 +250,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                 ));
                 panel.spawn((
                     InputField {
-                        label: "World Name".to_string(),
+                        label: String::new(),
                         placeholder: "My World".to_string(),
                         input_type: InputType::Text,
                         ..default()
@@ -266,7 +266,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                 ));
                 panel.spawn((
                     InputField {
-                        label: "Seed".to_string(),
+                        label: String::new(),
                         placeholder: default_seed.to_string(),
                         input_type: InputType::Number,
                         ..default()
@@ -663,6 +663,14 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         ..default()
                     },
                     CssID(WORLD_GEN_PROGRESS_ID.to_string()),
+                ));
+                panel.spawn((
+                    Paragraph {
+                        text: "Chunks Loaded 0 / 0".to_string(),
+                        ..default()
+                    },
+                    CssID(WORLD_GEN_CHUNKS_ID.to_string()),
+                    UiTextTone::Darker,
                 ));
             });
         })
@@ -1389,7 +1397,13 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                     ID_GLOBAL_CPU,
                     ID_APP_CPU,
                     ID_APP_MEM,
+                    ID_FPS,
+                    ID_TICK_SPEED,
                     ID_PLAYER_POS,
+                    ID_CHUNK_COORD,
+                    ID_CHUNK_LOADING,
+                    ID_CHUNK_STAGE,
+                    ID_CHUNK_LATENCY,
                     ID_GRID,
                     ID_INSPECTOR,
                     ID_OVERLAY,

@@ -16,9 +16,11 @@ fn hide_world_gen_ui(mut visibility: Query<&mut Visibility, With<WorldGenRoot>>)
 fn sync_world_gen_progress(
     time: Res<Time>,
     app_state: Res<State<AppState>>,
+    game_config: Res<GlobalConfig>,
     mut loading_progress: ResMut<LoadingProgress>,
     mut animation: ResMut<WorldGenUiAnimation>,
     mut progress_bars: Query<(&CssID, &mut ProgressBar)>,
+    mut paragraphs: Query<(&CssID, &mut Paragraph)>,
 ) {
     let (phase, target_pct) = match app_state.get() {
         AppState::Loading(LoadingStates::BaseGen) => (LoadingPhase::BaseGen, 34.0),
@@ -41,6 +43,25 @@ fn sync_world_gen_progress(
         progress_bar.max = 100.0;
         progress_bar.value = animation.displayed_pct;
     }
+
+    let initial_radius =
+        loading_preload_radius_for_ui(game_config.graphics.chunk_range).max(0) as usize;
+    let side = initial_radius * 2 + 1;
+    let target = side * side;
+    let pct = (animation.displayed_pct / 100.0).clamp(0.0, 1.0);
+    let current = ((target as f32) * pct).round() as usize;
+
+    for (css_id, mut paragraph) in &mut paragraphs {
+        if css_id.0 != WORLD_GEN_CHUNKS_ID {
+            continue;
+        }
+        paragraph.text = format!("Chunks Loaded {} / {}", current, target);
+    }
+}
+
+#[inline]
+fn loading_preload_radius_for_ui(chunk_range: i32) -> i32 {
+    chunk_range.max(0)
 }
 
 /// Checks whether loading state in the `graphic::components::world_flow` module.

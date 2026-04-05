@@ -22,6 +22,54 @@ pub(crate) const DIR4: [IVec2; 4] = [
     IVec2::new(0, -1),
 ];
 
+#[inline]
+fn greedy_merge_mask<F>(mask: &[BlockId], w: usize, h: usize, mut emit: F)
+where
+    F: FnMut(usize, usize, usize, usize, BlockId),
+{
+    let mut used = vec![false; mask.len()];
+    for v in 0..h {
+        for u in 0..w {
+            let i = v * w + u;
+            if used[i] {
+                continue;
+            }
+            let id = mask[i];
+            if id == 0 {
+                continue;
+            }
+
+            let mut rw = 1usize;
+            while u + rw < w {
+                let ii = v * w + (u + rw);
+                if used[ii] || mask[ii] != id {
+                    break;
+                }
+                rw += 1;
+            }
+
+            let mut rh = 1usize;
+            'grow: while v + rh < h {
+                for du in 0..rw {
+                    let ii = (v + rh) * w + (u + du);
+                    if used[ii] || mask[ii] != id {
+                        break 'grow;
+                    }
+                }
+                rh += 1;
+            }
+
+            for dv in 0..rh {
+                for du in 0..rw {
+                    used[(v + dv) * w + (u + du)] = true;
+                }
+            }
+
+            emit(u, v, rw, rh, id);
+        }
+    }
+}
+
 /// Runs the `mesh_subchunk_async` routine for mesh subchunk async in the `generator::chunk::chunk_utils` module.
 pub async fn mesh_subchunk_async(
     chunk: &ChunkData,
@@ -34,6 +82,7 @@ pub async fn mesh_subchunk_async(
     let s = block_size;
     let y0 = sub * SEC_H;
     let y1 = (y0 + SEC_H).min(CY);
+    let yh = y1 - y0;
 
     let (east, west, south, north, snap_y0, _snap_y1) = if let Some(b) = borders {
         debug_assert_eq!(b.y0, y0, "BorderSnapshot.y0 != sub y0");
@@ -63,11 +112,11 @@ pub async fn mesh_subchunk_async(
             chunk.blocks[((y as usize) * CZ + (z as usize)) * CX + (x as usize)]
         }
     };
-    let uvq = |u0: f32, v0: f32, u1: f32, v1: f32, flip_v: bool| -> [[f32; 2]; 4] {
+    let uvq_tiled = |ur: f32, vr: f32, flip_v: bool| -> [[f32; 2]; 4] {
         if !flip_v {
-            [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]
+            [[0.0, 0.0], [ur, 0.0], [ur, vr], [0.0, vr]]
         } else {
-            [[u0, v1], [u1, v1], [u1, v0], [u0, v0]]
+            [[0.0, vr], [ur, vr], [ur, 0.0], [0.0, 0.0]]
         }
     };
     let face_visible = |self_id: BlockId, neigh_id: BlockId| -> bool {
@@ -88,138 +137,230 @@ pub async fn mesh_subchunk_async(
         !reg.opaque(neigh_id)
     };
 
+    // +Y (Top): greedy in XZ plane for each Y slice.
+    let mut top_mask = vec![0u16; CX * CZ];
     for y in y0..y1 {
+        top_mask.fill(0);
         for z in 0..CZ {
             for x in 0..CX {
                 let id = chunk.get(x, y, z);
                 if id == 0 {
                     continue;
                 }
-
-                let wx = x as f32 * s;
-                let wy = y as f32 * s;
-                let wz = z as f32 * s;
-                let b = by_block.entry(id).or_insert_with(MeshBuild::new);
-
-                // +Y (Top)
                 let n_up = get(x as isize, y as isize + 1, z as isize);
                 if face_visible(id, n_up) {
-                    let u = reg.uv(id, Face::Top);
-                    b.quad(
-                        [
-                            [wx, wy + s, wz + s],
-                            [wx + s, wy + s, wz + s],
-                            [wx + s, wy + s, wz],
-                            [wx, wy + s, wz],
-                        ],
-                        [0.0, 1.0, 0.0],
-                        uvq(u.u0, u.v0, u.u1, u.v1, false),
-                    );
+                    top_mask[z * CX + x] = id;
                 }
-                // -Y (Bottom)
+            }
+        }
+        greedy_merge_mask(&top_mask, CX, CZ, |x, z, rw, rh, id| {
+            let u = reg.uv(id, Face::Top);
+            let b = by_block.entry(id).or_insert_with(MeshBuild::new);
+            let x0 = x as f32 * s;
+            let x1 = (x + rw) as f32 * s;
+            let z0 = z as f32 * s;
+            let z1 = (z + rh) as f32 * s;
+            let yp = (y + 1) as f32 * s;
+            b.quad(
+                [[x0, yp, z1], [x1, yp, z1], [x1, yp, z0], [x0, yp, z0]],
+                [0.0, 1.0, 0.0],
+                uvq_tiled(rw as f32, rh as f32, false),
+                [u.u0, u.v0, u.u1, u.v1],
+            );
+        });
+    }
+
+    // -Y (Bottom): greedy in XZ plane for each Y slice.
+    let mut bot_mask = vec![0u16; CX * CZ];
+    for y in y0..y1 {
+        bot_mask.fill(0);
+        for z in 0..CZ {
+            for x in 0..CX {
+                let id = chunk.get(x, y, z);
+                if id == 0 {
+                    continue;
+                }
                 let n_down = get(x as isize, y as isize - 1, z as isize);
                 if face_visible(id, n_down) {
-                    let u = reg.uv(id, Face::Bottom);
-                    b.quad(
-                        [
-                            [wx, wy, wz],
-                            [wx + s, wy, wz],
-                            [wx + s, wy, wz + s],
-                            [wx, wy, wz + s],
-                        ],
-                        [0.0, -1.0, 0.0],
-                        uvq(u.u0, u.v0, u.u1, u.v1, false),
-                    );
+                    bot_mask[z * CX + x] = id;
                 }
-                // +X (East)
+            }
+        }
+        greedy_merge_mask(&bot_mask, CX, CZ, |x, z, rw, rh, id| {
+            let u = reg.uv(id, Face::Bottom);
+            let b = by_block.entry(id).or_insert_with(MeshBuild::new);
+            let x0 = x as f32 * s;
+            let x1 = (x + rw) as f32 * s;
+            let z0 = z as f32 * s;
+            let z1 = (z + rh) as f32 * s;
+            let yp = y as f32 * s;
+            b.quad(
+                [[x0, yp, z0], [x1, yp, z0], [x1, yp, z1], [x0, yp, z1]],
+                [0.0, -1.0, 0.0],
+                uvq_tiled(rw as f32, rh as f32, false),
+                [u.u0, u.v0, u.u1, u.v1],
+            );
+        });
+    }
+
+    // +X (East): greedy in ZY plane for each X slice.
+    let mut east_mask = vec![0u16; CZ * yh];
+    for x in 0..CX {
+        east_mask.fill(0);
+        for y in y0..y1 {
+            let yr = y - y0;
+            for z in 0..CZ {
+                let id = chunk.get(x, y, z);
+                if id == 0 {
+                    continue;
+                }
                 let n_east = if x + 1 < CX {
-                    Some(get(x as isize + 1, y as isize, z as isize))
+                    Some(chunk.get(x + 1, y, z))
                 } else {
                     east_at_opt(y, z)
                 };
                 if let Some(nei) = n_east {
                     if face_visible(id, nei) {
-                        let u = reg.uv(id, Face::East);
-                        b.quad(
-                            [
-                                [wx + s, wy, wz + s],
-                                [wx + s, wy, wz],
-                                [wx + s, wy + s, wz],
-                                [wx + s, wy + s, wz + s],
-                            ],
-                            [1.0, 0.0, 0.0],
-                            uvq(u.u0, u.v0, u.u1, u.v1, true),
-                        );
+                        east_mask[yr * CZ + z] = id;
                     }
                 }
+            }
+        }
+        greedy_merge_mask(&east_mask, CZ, yh, |z, yr, rz, ry, id| {
+            let u = reg.uv(id, Face::East);
+            let b = by_block.entry(id).or_insert_with(MeshBuild::new);
+            let z0 = z as f32 * s;
+            let z1 = (z + rz) as f32 * s;
+            let y0p = (y0 + yr) as f32 * s;
+            let y1p = (y0 + yr + ry) as f32 * s;
+            let xp = (x + 1) as f32 * s;
+            b.quad(
+                [[xp, y0p, z1], [xp, y0p, z0], [xp, y1p, z0], [xp, y1p, z1]],
+                [1.0, 0.0, 0.0],
+                uvq_tiled(rz as f32, ry as f32, true),
+                [u.u0, u.v0, u.u1, u.v1],
+            );
+        });
+    }
 
-                // -X (West)
+    // -X (West): greedy in ZY plane for each X slice.
+    let mut west_mask = vec![0u16; CZ * yh];
+    for x in 0..CX {
+        west_mask.fill(0);
+        for y in y0..y1 {
+            let yr = y - y0;
+            for z in 0..CZ {
+                let id = chunk.get(x, y, z);
+                if id == 0 {
+                    continue;
+                }
                 let n_west = if x > 0 {
-                    Some(get(x as isize - 1, y as isize, z as isize))
+                    Some(chunk.get(x - 1, y, z))
                 } else {
                     west_at_opt(y, z)
                 };
                 if let Some(nei) = n_west {
                     if face_visible(id, nei) {
-                        let u = reg.uv(id, Face::West);
-                        b.quad(
-                            [
-                                [wx, wy, wz],
-                                [wx, wy, wz + s],
-                                [wx, wy + s, wz + s],
-                                [wx, wy + s, wz],
-                            ],
-                            [-1.0, 0.0, 0.0],
-                            uvq(u.u0, u.v0, u.u1, u.v1, true),
-                        );
+                        west_mask[yr * CZ + z] = id;
                     }
                 }
+            }
+        }
+        greedy_merge_mask(&west_mask, CZ, yh, |z, yr, rz, ry, id| {
+            let u = reg.uv(id, Face::West);
+            let b = by_block.entry(id).or_insert_with(MeshBuild::new);
+            let z0 = z as f32 * s;
+            let z1 = (z + rz) as f32 * s;
+            let y0p = (y0 + yr) as f32 * s;
+            let y1p = (y0 + yr + ry) as f32 * s;
+            let xp = x as f32 * s;
+            b.quad(
+                [[xp, y0p, z0], [xp, y0p, z1], [xp, y1p, z1], [xp, y1p, z0]],
+                [-1.0, 0.0, 0.0],
+                uvq_tiled(rz as f32, ry as f32, true),
+                [u.u0, u.v0, u.u1, u.v1],
+            );
+        });
+    }
 
-                // +Z (South)
+    // +Z (South): greedy in XY plane for each Z slice.
+    let mut south_mask = vec![0u16; CX * yh];
+    for z in 0..CZ {
+        south_mask.fill(0);
+        for y in y0..y1 {
+            let yr = y - y0;
+            for x in 0..CX {
+                let id = chunk.get(x, y, z);
+                if id == 0 {
+                    continue;
+                }
                 let n_south = if z + 1 < CZ {
-                    Some(get(x as isize, y as isize, z as isize + 1))
+                    Some(chunk.get(x, y, z + 1))
                 } else {
                     south_at_opt(y, x)
                 };
                 if let Some(nei) = n_south {
                     if face_visible(id, nei) {
-                        let u = reg.uv(id, Face::South);
-                        b.quad(
-                            [
-                                [wx, wy, wz + s],
-                                [wx + s, wy, wz + s],
-                                [wx + s, wy + s, wz + s],
-                                [wx, wy + s, wz + s],
-                            ],
-                            [0.0, 0.0, 1.0],
-                            uvq(u.u0, u.v0, u.u1, u.v1, true),
-                        );
+                        south_mask[yr * CX + x] = id;
                     }
                 }
+            }
+        }
+        greedy_merge_mask(&south_mask, CX, yh, |x, yr, rx, ry, id| {
+            let u = reg.uv(id, Face::South);
+            let b = by_block.entry(id).or_insert_with(MeshBuild::new);
+            let x0 = x as f32 * s;
+            let x1 = (x + rx) as f32 * s;
+            let y0p = (y0 + yr) as f32 * s;
+            let y1p = (y0 + yr + ry) as f32 * s;
+            let zp = (z + 1) as f32 * s;
+            b.quad(
+                [[x0, y0p, zp], [x1, y0p, zp], [x1, y1p, zp], [x0, y1p, zp]],
+                [0.0, 0.0, 1.0],
+                uvq_tiled(rx as f32, ry as f32, true),
+                [u.u0, u.v0, u.u1, u.v1],
+            );
+        });
+    }
 
-                // -Z (North)
+    // -Z (North): greedy in XY plane for each Z slice.
+    let mut north_mask = vec![0u16; CX * yh];
+    for z in 0..CZ {
+        north_mask.fill(0);
+        for y in y0..y1 {
+            let yr = y - y0;
+            for x in 0..CX {
+                let id = chunk.get(x, y, z);
+                if id == 0 {
+                    continue;
+                }
                 let n_north = if z > 0 {
-                    Some(get(x as isize, y as isize, z as isize - 1))
+                    Some(chunk.get(x, y, z - 1))
                 } else {
                     north_at_opt(y, x)
                 };
                 if let Some(nei) = n_north {
                     if face_visible(id, nei) {
-                        let u = reg.uv(id, Face::North);
-                        b.quad(
-                            [
-                                [wx + s, wy, wz],
-                                [wx, wy, wz],
-                                [wx, wy + s, wz],
-                                [wx + s, wy + s, wz],
-                            ],
-                            [0.0, 0.0, -1.0],
-                            uvq(u.u0, u.v0, u.u1, u.v1, true),
-                        );
+                        north_mask[yr * CX + x] = id;
                     }
                 }
             }
         }
+        greedy_merge_mask(&north_mask, CX, yh, |x, yr, rx, ry, id| {
+            let u = reg.uv(id, Face::North);
+            let b = by_block.entry(id).or_insert_with(MeshBuild::new);
+            let x0 = x as f32 * s;
+            let x1 = (x + rx) as f32 * s;
+            let y0p = (y0 + yr) as f32 * s;
+            let y1p = (y0 + yr + ry) as f32 * s;
+            let zp = z as f32 * s;
+            b.quad(
+                [[x1, y0p, zp], [x0, y0p, zp], [x0, y1p, zp], [x1, y1p, zp]],
+                [0.0, 0.0, -1.0],
+                uvq_tiled(rx as f32, ry as f32, true),
+                [u.u0, u.v0, u.u1, u.v1],
+            );
+        });
     }
 
     by_block.into_iter().map(|(k, b)| (k, b)).collect()

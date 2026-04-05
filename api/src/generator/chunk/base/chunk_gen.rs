@@ -3,7 +3,8 @@ use crate::core::world::biome::func::*;
 use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::{BlockId, BlockRegistry};
 use crate::core::world::chunk::{ChunkData, SEA_LEVEL};
-use crate::core::world::chunk_dimension::{CX, CY, CZ, Y_MIN};
+use crate::core::world::chunk_dimension::{CX, CY, CZ, Y_MAX, Y_MIN};
+use crate::generator::chunk::cave_utils::{CaveParams, worm_edits_for_chunk};
 use crate::generator::chunk::chunk_utils::map01;
 use crate::generator::chunk::river_utils::RiverSystem;
 use bevy::prelude::*;
@@ -21,6 +22,8 @@ pub(crate) async fn generate_chunk_async_biome(
 
     // Border/bedrock ID used at world bottom (Y_MIN)
     let id_border = reg.id_or_air("border_block");
+    let id_air = reg.id_or_air("air_block");
+    let id_water = reg.id_or_air("water_block");
 
     // Per-chunk noises
     let seafloor_n = make_seafloor_noise(cfg_seed, OCEAN_FREQ);
@@ -423,7 +426,79 @@ pub(crate) async fn generate_chunk_async_biome(
         }
     }
 
+    carve_caves_into_chunk(&mut chunk, coord, cfg_seed, id_air, id_water, id_border);
     chunk
+}
+
+#[inline]
+fn default_cave_params(seed: i32) -> CaveParams {
+    CaveParams {
+        seed,
+        y_top: 52,
+        y_bottom: -110,
+        worms_per_region: 1.35,
+        region_chunks: 3,
+        base_radius: 4.2,
+        radius_var: 3.0,
+        step_len: 1.5,
+        worm_len_steps: 360,
+        room_event_chance: 0.1,
+        room_radius_min: 6.0,
+        room_radius_max: 10.5,
+        caverns_per_region: 0.5,
+        cavern_room_count_min: 6,
+        cavern_room_count_max: 11,
+        cavern_room_radius_xz_min: 16.0,
+        cavern_room_radius_xz_max: 34.0,
+        cavern_room_radius_y_min: 9.0,
+        cavern_room_radius_y_max: 21.0,
+        cavern_connector_radius: 12.5,
+        cavern_y_top: -10,
+        cavern_y_bottom: -100,
+        mega_caverns_per_region: 0.075,
+        mega_room_count_min: 1,
+        mega_room_count_max: 3,
+        mega_room_radius_xz_min: 45.0,
+        mega_room_radius_xz_max: 144.0,
+        mega_room_radius_y_min: 20.0,
+        mega_room_radius_y_max: 46.0,
+        mega_connector_radius: 8.0,
+        mega_y_top: -30,
+        mega_y_bottom: -105,
+        entrance_chance: 0.55,
+        entrance_len_steps: 40,
+        entrance_radius_scale: 0.55,
+        entrance_min_radius: 2.8,
+        entrance_trigger_band: 12.0,
+    }
+}
+
+#[inline]
+fn carve_caves_into_chunk(
+    chunk: &mut ChunkData,
+    coord: IVec2,
+    seed: i32,
+    id_air: BlockId,
+    id_water: BlockId,
+    id_border: BlockId,
+) {
+    let params = default_cave_params(seed);
+    let edits = worm_edits_for_chunk(
+        &params,
+        coord,
+        IVec2::new(CX as i32, CZ as i32),
+        Y_MIN,
+        Y_MAX,
+    );
+    for (lx, ly, lz) in edits {
+        let x = lx as usize;
+        let y = ly as usize;
+        let z = lz as usize;
+        let cur = chunk.get(x, y, z);
+        if cur != 0 && cur != id_water && cur != id_border {
+            chunk.set(x, y, z, id_air);
+        }
+    }
 }
 
 /* ============================= Noises ======================================= */

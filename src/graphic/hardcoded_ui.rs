@@ -1,6 +1,7 @@
 use crate::core::config::{GlobalConfig, WorldGenConfig};
 use crate::core::debug::{
-    BuildInfo, DebugGridState, DebugOverlayState, SysStats, WorldInspectorState,
+    BuildInfo, ChunkDebugStats, DebugGridMode, DebugGridState, DebugOverlayState, RuntimePerfStats,
+    SysStats, WorldInspectorState,
 };
 use crate::core::entities::player::inventory::{
     InventorySlot, PLAYER_INVENTORY_SLOTS, PLAYER_INVENTORY_STACK_MAX, PlayerInventory,
@@ -28,11 +29,18 @@ use crate::core::states::world_gen::{LoadingPhase, LoadingProgress};
 use crate::core::ui::{HOTBAR_SLOTS, HotbarSelectionState, UiInteractionState};
 use crate::core::world::biome::func::dominant_biome_at_p_chunks;
 use crate::core::world::biome::registry::BiomeRegistry;
-use crate::core::world::block::{BlockRegistry, SelectedBlock};
+use crate::core::world::block::{BlockRegistry, SelectedBlock, VOXEL_SIZE};
 use crate::core::world::chunk::ChunkMap;
-use crate::core::world::chunk_dimension::{CX, CZ};
+use crate::core::world::chunk_dimension::{CX, CZ, SEC_COUNT, world_to_chunk_xz};
 use crate::core::world::fluid::{FluidMap, WaterMeshIndex};
 use crate::core::world::save::{RegionCache, WorldSave, default_saves_root};
+use crate::generator::chunk::chunk_builder::{
+    ChunkStageTelemetry, ColliderBacklog, PendingColliderBuild,
+};
+use crate::generator::chunk::chunk_struct::{MeshBacklog, PendingGen, PendingMesh};
+use crate::generator::chunk::water_builder::{
+    PendingWaterLoad, PendingWaterMesh, WaterMeshBacklog,
+};
 use crate::utils::key_utils::convert;
 use api::core::network::config::NetworkSettings;
 use api::core::network::discovery::{LanDiscoveryClient, LanServerInfo};
@@ -133,6 +141,7 @@ const CREATIVE_PANEL_SLOT_PREFIX: &str = "creative-panel-slot-";
 const CREATIVE_RECIPE_HINT_ID: &str = "creative-recipe-hint";
 
 const WORLD_GEN_PROGRESS_ID: &str = "world-gen-progress";
+const WORLD_GEN_CHUNKS_ID: &str = "world-gen-chunks";
 
 const ID_BUILD: &str = "debug-build";
 const ID_CPU_NAME: &str = "debug-cpu-name";
@@ -142,7 +151,13 @@ const ID_BIOME: &str = "debug-biome";
 const ID_GLOBAL_CPU: &str = "debug-global-cpu";
 const ID_APP_CPU: &str = "debug-app-cpu";
 const ID_APP_MEM: &str = "debug-app-mem";
+const ID_FPS: &str = "debug-fps";
+const ID_TICK_SPEED: &str = "debug-tick-speed";
 const ID_PLAYER_POS: &str = "debug-player-pos";
+const ID_CHUNK_COORD: &str = "debug-chunk-coord";
+const ID_CHUNK_LOADING: &str = "debug-chunk-loading";
+const ID_CHUNK_STAGE: &str = "debug-chunk-stage";
+const ID_CHUNK_LATENCY: &str = "debug-chunk-latency";
 const ID_GRID: &str = "debug-grid";
 const ID_INSPECTOR: &str = "debug-world-inspector";
 const ID_OVERLAY: &str = "debug-overlay";
@@ -589,6 +604,8 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<DebugOverlayState>()
             .init_resource::<DebugGridState>()
             .init_resource::<SysStats>()
+            .init_resource::<RuntimePerfStats>()
+            .init_resource::<ChunkDebugStats>()
             .init_resource::<ActiveInventorySavePath>()
             .insert_non_send_resource(ServerProbeRuntime::default())
             .add_plugins(ExtendedUiPlugin)
@@ -821,6 +838,8 @@ impl Plugin for HardcodedUiPlugin {
                 Update,
                 (
                     toggle_system_last_ui,
+                    sample_runtime_perf_stats,
+                    sample_chunk_debug_stats,
                     refresh_sys_stats,
                     sync_system_last_ui,
                 )
