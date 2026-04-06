@@ -75,6 +75,8 @@ pub struct BlockStats {
     #[serde(default)]
     pub fluid: bool,
     #[serde(default)]
+    pub foliage: bool,
+    #[serde(default)]
     pub emissive: f32,
 }
 

@@ -32,6 +32,7 @@ pub struct RegLiteEntry {
     pub west: UvRect,
     pub opaque: bool,
     pub fluid: bool,
+    pub foliage: bool,
 }
 /// Represents reg lite used by the `generator::chunk::chunk_struct` module.
 #[derive(Clone)]
@@ -58,6 +59,7 @@ impl RegLite {
                     west: reg.uv(id, Face::West),
                     opaque: reg.def(id).stats.opaque,
                     fluid: reg.def(id).stats.fluid,
+                    foliage: reg.def(id).stats.foliage,
                 },
             );
         }
@@ -85,6 +87,11 @@ impl RegLite {
     #[inline]
     pub fn fluid(&self, id: BlockId) -> bool {
         self.map.get(&id).map(|e| e.fluid).unwrap_or(false)
+    }
+    /// Runs the `foliage` routine for foliage in the `generator::chunk::chunk_struct` module.
+    #[inline]
+    pub fn foliage(&self, id: BlockId) -> bool {
+        self.map.get(&id).map(|e| e.foliage).unwrap_or(false)
     }
 }
 

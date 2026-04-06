@@ -1051,7 +1051,7 @@ fn collect_meshed_subchunks(
     mut commands: Commands,
     mut apply_state: ChunkMeshApplyState,
     reg: Res<BlockRegistry>,
-    terrain_mats: Option<Res<TerrainChunkMatIndex>>,
+    terrain_mats: Res<TerrainChunkMatIndex>,
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
     load_center: Option<Res<LoadCenter>>,
@@ -1059,6 +1059,10 @@ fn collect_meshed_subchunks(
     app_state: Res<State<AppState>>,
     time: Res<Time>,
 ) {
+    if terrain_mats.0.len() < reg.defs.len().saturating_sub(1) {
+        return;
+    }
+
     let stage_start = Instant::now();
     let waiting = is_waiting(&app_state);
     let apply_cap = if waiting {
@@ -1128,45 +1132,25 @@ fn collect_meshed_subchunks(
 
                 let mesh = mb.into_mesh();
 
-                let ent = if let Some(handle) = terrain_mats
-                    .as_ref()
-                    .and_then(|idx| idx.0.get(&bid))
-                    .cloned()
-                {
-                    commands
-                        .spawn((
-                            Mesh3d(apply_state.meshes.add(mesh)),
-                            MeshMaterial3d::<TerrainChunkMaterial>(handle),
-                            Transform::from_translation(origin),
-                            SubchunkMesh {
-                                coord,
-                                sub: sub as u8,
-                                block: bid,
-                            },
-                            Name::new(format!(
-                                "chunk({},{}) sub{} block{}",
-                                coord.x, coord.y, sub, bid
-                            )),
-                        ))
-                        .id()
-                } else {
-                    commands
-                        .spawn((
-                            Mesh3d(apply_state.meshes.add(mesh)),
-                            MeshMaterial3d(reg.material(bid)),
-                            Transform::from_translation(origin),
-                            SubchunkMesh {
-                                coord,
-                                sub: sub as u8,
-                                block: bid,
-                            },
-                            Name::new(format!(
-                                "chunk({},{}) sub{} block{}",
-                                coord.x, coord.y, sub, bid
-                            )),
-                        ))
-                        .id()
+                let Some(handle) = terrain_mats.0.get(&bid).cloned() else {
+                    continue;
                 };
+                let ent = commands
+                    .spawn((
+                        Mesh3d(apply_state.meshes.add(mesh)),
+                        MeshMaterial3d::<TerrainChunkMaterial>(handle),
+                        Transform::from_translation(origin),
+                        SubchunkMesh {
+                            coord,
+                            sub: sub as u8,
+                            block: bid,
+                        },
+                        Name::new(format!(
+                            "chunk({},{}) sub{} block{}",
+                            coord.x, coord.y, sub, bid
+                        )),
+                    ))
+                    .id();
                 apply_state
                     .mesh_index
                     .map

@@ -127,6 +127,11 @@ pub async fn mesh_subchunk_async(
             return true;
         }
 
+        // Treat neighboring foliage blocks as connected canopy: don't render inner faces.
+        if reg.foliage(self_id) && reg.foliage(neigh_id) {
+            return false;
+        }
+
         let self_fluid = reg.fluid(self_id);
         let neigh_fluid = reg.fluid(neigh_id);
 

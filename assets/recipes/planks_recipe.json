@@ -1,0 +1,20 @@
+{
+  "type": "crafting_shaped",
+  "crafting": [
+    {
+      "type": "oplexa:hand_crafted",
+      "data": {
+        "craft": {
+          "0": {
+            "item": "oplexa:log_block",
+            "count": 1
+          }
+        }
+      }
+    }
+  ],
+  "result": {
+    "item": "oplexa:oak_planks_block",
+    "count": 2
+  }
+}

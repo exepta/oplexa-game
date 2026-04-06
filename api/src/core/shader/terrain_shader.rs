@@ -15,7 +15,7 @@ pub struct TerrainChunkParams {
 /// Material for greedy terrain chunk meshes using atlas-local tiling in shader.
 #[derive(AsBindGroup, Asset, TypePath, Clone, Debug)]
 pub struct TerrainChunkMaterial {
-    #[uniform(0, visibility = "Fragment")]
+    #[uniform(0, visibility = "VertexFragment")]
     pub params: TerrainChunkParams,
 
     #[texture(1)]
