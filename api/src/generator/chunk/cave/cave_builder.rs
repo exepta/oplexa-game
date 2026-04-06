@@ -163,48 +163,48 @@ fn carve_caves_step(
         y_top: 52,
         y_bottom: -110,
 
-        /* worms: a bit wider/longer */
-        worms_per_region: 1.35,
+        /* worms: denser + more variable */
+        worms_per_region: 1.65,
         region_chunks: 3,
-        base_radius: 4.2,
-        radius_var: 3.0,
-        step_len: 1.5,
-        worm_len_steps: 360,
+        base_radius: 4.1,
+        radius_var: 3.8,
+        step_len: 1.45,
+        worm_len_steps: 400,
 
         /* small rooms along tunnels */
-        room_event_chance: 0.1,
-        room_radius_min: 6.0,
-        room_radius_max: 10.5,
+        room_event_chance: 0.16,
+        room_radius_min: 6.5,
+        room_radius_max: 12.5,
 
-        /* normal caverns: uncommon mid-sized rooms */
-        caverns_per_region: 0.5,
+        /* normal caverns: more frequent and less regular */
+        caverns_per_region: 0.72,
         cavern_room_count_min: 6,
-        cavern_room_count_max: 11,
-        cavern_room_radius_xz_min: 16.0,
-        cavern_room_radius_xz_max: 34.0,
-        cavern_room_radius_y_min: 9.0,
-        cavern_room_radius_y_max: 21.0,
-        cavern_connector_radius: 12.5,
+        cavern_room_count_max: 13,
+        cavern_room_radius_xz_min: 14.0,
+        cavern_room_radius_xz_max: 38.0,
+        cavern_room_radius_y_min: 8.5,
+        cavern_room_radius_y_max: 23.0,
+        cavern_connector_radius: 11.5,
         cavern_y_top: -10,
         cavern_y_bottom: -100,
 
-        /* MEGA caverns: very rare, very large */
-        mega_caverns_per_region: 0.075,
+        /* MEGA caverns: still rare, but slightly more present */
+        mega_caverns_per_region: 0.11,
         mega_room_count_min: 1,
-        mega_room_count_max: 3,
-        mega_room_radius_xz_min: 45.0,
-        mega_room_radius_xz_max: 144.0,
+        mega_room_count_max: 4,
+        mega_room_radius_xz_min: 44.0,
+        mega_room_radius_xz_max: 156.0,
         mega_room_radius_y_min: 20.0,
-        mega_room_radius_y_max: 46.0,
-        mega_connector_radius: 8.0,
+        mega_room_radius_y_max: 52.0,
+        mega_connector_radius: 10.0,
         mega_y_top: -30,
         mega_y_bottom: -105,
 
         /* entrances (NEW) */
-        entrance_chance: 0.55, // ~35% chance when a segment hits the trigger band
-        entrance_len_steps: 40, // short spur climb
+        entrance_chance: 0.62,       // ~more vertical exits
+        entrance_len_steps: 48,      // short spur climb
         entrance_radius_scale: 0.55, // narrower than the main tunnel
-        entrance_min_radius: 2.8, // don't get thinner than this
+        entrance_min_radius: 2.8,    // don't get thinner than this
         entrance_trigger_band: 12.0, // start spurs within 12 blocks below y_top
     };
 

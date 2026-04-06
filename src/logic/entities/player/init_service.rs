@@ -358,8 +358,8 @@ fn player_move_simple(
     };
 
     let ground_speed = ctrl.speed;
-    let fly_multi = 4.0;
-    let fly_v_multi = 4.0;
+    let fly_multi = 2.4;
+    let fly_v_multi = 2.4;
     let gravity = 30.0;
     let fall_multi = 2.2;
     const JUMP_HEIGHT: f32 = 1.65;

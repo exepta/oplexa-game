@@ -3,8 +3,8 @@
   "name": "Mountains",
   "stand_alone": false,
   "climate": ["normal"],
-  "rarity": 0.1,
-  "sizes": [ "Small", "Medium" ],
+  "rarity": 0.16,
+  "sizes": [ "Medium", "Large" ],
   "surface": {
     "top": ["grass_block"],
     "bottom": ["stone_block"],
@@ -13,11 +13,13 @@
     "under_zero": ["deep_stone_block"]
   },
   "settings": {
-    "height_offset": 68.0,
-    "mount_amp": 46.0,
-    "mount_freq": 0.03
+    "height_offset": 74.0,
+    "mount_amp": 68.0,
+    "mount_freq": 0.022
   },
   "generation": {
-    "rivers": false
+    "rivers": "tunnel | stop",
+    "river_chance": 0.4,
+    "river_size_between": "20:30"
   }
 }

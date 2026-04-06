@@ -1,0 +1,14 @@
+{
+  "name": "spruce_leaves_block",
+  "texture_dir": "textures/blocks/spruce_leaves",
+  "texture": {
+    "all": "spruce_leaves"
+  },
+  "stats": {
+    "hardness": 0.2,
+    "blast_resistance": 0.2,
+    "level": "0",
+    "opaque": false,
+    "emissive": 0.0
+  }
+}

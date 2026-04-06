@@ -1,0 +1,25 @@
+{
+  "localized_name": "desert_mountains",
+  "name": "Desert_Mountains",
+  "stand_alone": false,
+  "climate": ["dry", "hot"],
+  "rarity": 0.12,
+  "sizes": ["Small", "Medium"],
+  "surface": {
+    "top": ["sand_block"],
+    "bottom": ["sand_stone_block"],
+    "sea_floor": ["sand_block", "gravel_block"],
+    "upper_zero": ["stone_block"],
+    "under_zero": ["deep_stone_block"]
+  },
+  "settings": {
+    "height_offset": 38.0,
+    "mount_amp": 58.0,
+    "mount_freq": 0.016
+  },
+  "generation": {
+    "rivers": "tunnel | stop",
+    "river_chance": 0.08,
+    "river_size_between": "18:26"
+  }
+}

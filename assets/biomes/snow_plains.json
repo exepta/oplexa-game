@@ -1,0 +1,26 @@
+{
+  "localized_name": "snow_plains",
+  "name": "Snow_Plains",
+  "stand_alone": true,
+  "subs": ["Snowy_mountains"],
+  "climate": ["cold", "normal"],
+  "rarity": 0.07,
+  "sizes": ["Large", "Huge"],
+  "surface": {
+    "top": ["snow_block"],
+    "bottom": ["dirt_block"],
+    "sea_floor": ["sand_block", "gravel_block"],
+    "upper_zero": ["stone_block"],
+    "under_zero": ["deep_stone_block"]
+  },
+  "settings": {
+    "height_offset": 10.0,
+    "land_amp": 20.0,
+    "land_freq": 0.0085
+  },
+  "generation": {
+    "rivers": true,
+    "river_chance": 0.35,
+    "river_size_between": "20:30"
+  }
+}

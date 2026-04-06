@@ -1,0 +1,14 @@
+{
+  "name": "oak_planks_block",
+  "texture_dir": "textures/blocks/oak_planks",
+  "texture": {
+    "all": "oak_planks"
+  },
+  "stats": {
+    "hardness": 2.0,
+    "blast_resistance": 3.0,
+    "level": "0",
+    "opaque": true,
+    "emissive": 0.0
+  }
+}

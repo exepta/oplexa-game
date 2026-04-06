@@ -1,6 +1,6 @@
 {
   "localized_name": "oplexa:log_block",
-  "name": "Log Block",
+  "name": "Oak Log Block",
   "max_stack_size": -1,
   "category": "block",
   "block_item": true,

@@ -1,0 +1,9 @@
+{
+  "image": "spruce_planks.png",
+  "tile_size": 128,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "spruce_planks": [0, 0]
+  }
+}

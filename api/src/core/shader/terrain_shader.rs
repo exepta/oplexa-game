@@ -1,14 +1,25 @@
 use crate::core::world::block::BlockId;
 use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
+use bevy::render::render_resource::ShaderType;
 use bevy::shader::ShaderRef;
 use std::collections::HashMap;
+
+/// Per-material terrain shader params.
+#[derive(Clone, Copy, Default, ShaderType, Debug)]
+pub struct TerrainChunkParams {
+    pub leaf_cfg: Vec4,
+    pub leaf_tint: Vec4,
+}
 
 /// Material for greedy terrain chunk meshes using atlas-local tiling in shader.
 #[derive(AsBindGroup, Asset, TypePath, Clone, Debug)]
 pub struct TerrainChunkMaterial {
-    #[texture(0)]
-    #[sampler(1)]
+    #[uniform(0, visibility = "Fragment")]
+    pub params: TerrainChunkParams,
+
+    #[texture(1)]
+    #[sampler(2)]
     pub atlas: Handle<Image>,
 
     pub alpha_mode: AlphaMode,

@@ -24,6 +24,9 @@ pub(crate) async fn generate_chunk_async_biome(
     let id_border = reg.id_or_air("border_block");
     let id_air = reg.id_or_air("air_block");
     let id_water = reg.id_or_air("water_block");
+    let id_sand = reg.id_or_air("sand_block");
+    let id_dirt = reg.id_or_air("dirt_block");
+    let id_gravel = reg.id_or_air("gravel_block");
 
     // Per-chunk noises
     let seafloor_n = make_seafloor_noise(cfg_seed, OCEAN_FREQ);
@@ -31,6 +34,13 @@ pub(crate) async fn generate_chunk_async_biome(
     let coast_n = make_coast_noise(cfg_seed ^ SALT_COAST, COAST_NOISE_FREQ);
     let coast_d = make_coast_noise(cfg_seed ^ SALT_COAST2, COAST_DETAIL_FREQ);
     let sub_edge_n = make_coast_noise(cfg_seed ^ SALT_SUB_EDGE, SUB_EDGE_NOISE_FREQ);
+    let river_mode_n = make_coast_noise(cfg_seed ^ 0x5256_4D44, 0.0016);
+    let macro_uplift_n = make_coast_noise(cfg_seed ^ 0x4D41_4352, 0.0014);
+    let macro_ridge_n = make_coast_noise(cfg_seed ^ 0x5249_4447, 0.0039);
+    let seafloor_mat_n = make_coast_noise(cfg_seed ^ 0x53EA_F001, 0.0048);
+    let seafloor_mat_d = make_coast_noise(cfg_seed ^ 0x53EA_F002, 0.0185);
+    let underground_blob_n = make_coast_noise(cfg_seed ^ 0x554E_4447, 0.0100);
+    let underground_mat_n = make_coast_noise(cfg_seed ^ 0x554E_444D, 0.0280);
 
     let pick_seed: u32 = (cfg_seed as u32) ^ 0x0CE4_11CE;
     let mut chunk = ChunkData::new();
@@ -60,6 +70,8 @@ pub(crate) async fn generate_chunk_async_biome(
     #[inline]
     fn site_total_height<'a>(
         plains_n: &FastNoiseLite,
+        macro_uplift_n: &FastNoiseLite,
+        macro_ridge_n: &FastNoiseLite,
         sub_edge_n: &FastNoiseLite,
         biomes: &'a BiomeRegistry,
         // site definition
@@ -79,7 +91,19 @@ pub(crate) async fn generate_chunk_async_biome(
         // --- base plains height from this site's own settings
         let base_off = site_biome.settings.height_offset;
         let base_amp = site_biome.settings.land_amp.unwrap_or(PLAINS_AMP);
-        let mut h = sample_plains_height(plains_n, wxf, wzf, SEA_LEVEL, base_off, base_amp);
+        let base_freq = site_biome.settings.land_freq.unwrap_or(PLAINS_FREQ);
+        let freq_scale = (base_freq / PLAINS_FREQ).clamp(0.2, 4.0);
+        let mut h = sample_plains_height(
+            plains_n, wxf, wzf, SEA_LEVEL, base_off, base_amp, freq_scale,
+        );
+
+        // Macro relief produces broader highlands/ridges so terrain is less uniform.
+        let mut uplift = sample_land_uplift(macro_uplift_n, macro_ridge_n, wxf, wzf, base_amp);
+        if site_biome.name.eq_ignore_ascii_case("desert") {
+            // Keep most desert flat; mountain share comes from dedicated desert sub-biomes.
+            uplift *= 0.35;
+        }
+        h += uplift;
 
         // default materials/soil
         let mut mat_biome = site_biome;
@@ -199,6 +223,8 @@ pub(crate) async fn generate_chunk_async_biome(
             // --- total height for site 0 (host)
             let (h0_total, mats0, soil0) = site_total_height(
                 &plains_n,
+                &macro_uplift_n,
+                &macro_ridge_n,
                 &sub_edge_n,
                 biomes,
                 land0,
@@ -216,6 +242,8 @@ pub(crate) async fn generate_chunk_async_biome(
             let (h1_total, mats1, soil1) = if let Some(land1) = land1_opt {
                 site_total_height(
                     &plains_n,
+                    &macro_uplift_n,
+                    &macro_ridge_n,
                     &sub_edge_n,
                     biomes,
                     land1,
@@ -249,7 +277,9 @@ pub(crate) async fn generate_chunk_async_biome(
             let h_ocean = {
                 let amp = ocean_biome.settings.seafloor_amp.unwrap_or(OCEAN_AMP);
                 let off = ocean_biome.settings.height_offset;
-                sample_ocean_height(&seafloor_n, wxf, wzf, SEA_LEVEL, off, amp)
+                let freq = ocean_biome.settings.seafloor_freq.unwrap_or(OCEAN_FREQ);
+                let freq_scale = (freq / OCEAN_FREQ).clamp(0.2, 4.0);
+                sample_ocean_height(&seafloor_n, wxf, wzf, SEA_LEVEL, off, amp, freq_scale)
             };
 
             // Coast mask: only fade to ocean if outside *all* land regions
@@ -269,12 +299,24 @@ pub(crate) async fn generate_chunk_async_biome(
             if t_ocean > 0.55 {
                 h_f = h_f.min((SEA_LEVEL - 1) as f32);
             }
+            let mut river_tunnel_weight = 0.0f32;
+            let mut river_tunnel_center_y = SEA_LEVEL - 6;
+            let mut river_tunnel_half = 0i32;
+            let mut river_tunnel_roof = 0i32;
 
             {
                 // 1) Local river permission from the two land sites (soft biome fade).
-                let allow0 = if land0.generation.rivers { w0 } else { 0.0 };
+                let allow0 = if land0.generation.rivers.enabled() {
+                    w0
+                } else {
+                    0.0
+                };
                 let allow1 = if let Some(land1) = land1_opt {
-                    if land1.generation.rivers { w1 } else { 0.0 }
+                    if land1.generation.rivers.enabled() {
+                        w1
+                    } else {
+                        0.0
+                    }
                 } else {
                     0.0
                 };
@@ -289,21 +331,90 @@ pub(crate) async fn generate_chunk_async_biome(
                  * - We keep neighbor continuation: if chance==0 but the river is coming from a neighbor,
                  *   we allow a gentle tail so ends never stop abruptly at the biome boundary.
                  */
-                if generate.rivers && perm_here > 0.02 {
+                if generate.rivers.enabled() && perm_here > 0.02 {
+                    let allow_sum = (allow0 + allow1).max(1e-6);
+                    let chance0 = if allow0 > 0.0 {
+                        land0.generation.river_chance
+                    } else {
+                        0.0
+                    };
+                    let chance1 = if allow1 > 0.0 {
+                        land1_opt
+                            .map(|b| b.generation.river_chance)
+                            .unwrap_or(chance0)
+                    } else {
+                        0.0
+                    };
+                    let river_chance_here =
+                        ((chance0 * allow0 + chance1 * allow1) / allow_sum).clamp(0.0, 1.0);
+
+                    let size0 = if allow0 > 0.0 {
+                        land0.generation.river_size_between
+                    } else {
+                        generate.river_size_between
+                    };
+                    let size1 = if allow1 > 0.0 {
+                        land1_opt
+                            .map(|b| b.generation.river_size_between)
+                            .unwrap_or(size0)
+                    } else {
+                        size0
+                    };
+                    let lo_blend = ((size0.0 as f32 * allow0 + size1.0 as f32 * allow1) / allow_sum)
+                        .round() as i32;
+                    let hi_blend = ((size0.1 as f32 * allow0 + size1.1 as f32 * allow1) / allow_sum)
+                        .round() as i32;
+                    let river_size_between = if lo_blend <= hi_blend {
+                        (lo_blend, hi_blend)
+                    } else {
+                        (hi_blend, lo_blend)
+                    };
+
+                    let tunnel_pref0 = if allow0 > 0.0 && land0.generation.rivers.tunnel {
+                        allow0
+                    } else {
+                        0.0
+                    };
+                    let tunnel_pref1 = if allow1 > 0.0
+                        && land1_opt
+                            .map(|b| b.generation.rivers.tunnel)
+                            .unwrap_or(false)
+                    {
+                        allow1
+                    } else {
+                        0.0
+                    };
+                    let stop_pref0 = if allow0 > 0.0 && land0.generation.rivers.stop {
+                        allow0
+                    } else {
+                        0.0
+                    };
+                    let stop_pref1 = if allow1 > 0.0
+                        && land1_opt.map(|b| b.generation.rivers.stop).unwrap_or(false)
+                    {
+                        allow1
+                    } else {
+                        0.0
+                    };
+                    let tunnel_mode_pref = tunnel_pref0 + tunnel_pref1;
+                    let stop_mode_pref = stop_pref0 + stop_pref1;
+                    let mode_pref_sum = (tunnel_mode_pref + stop_mode_pref).max(1e-6);
+                    let tunnel_mode_ratio = (tunnel_mode_pref / mode_pref_sum).clamp(0.0, 1.0);
+
                     // Stable width per coarse tile
-                    let width_blocks = river.tile_width_blocks(wx, wz, generate.river_size_between);
+                    let width_blocks = river.tile_width_blocks(wx, wz, river_size_between);
 
                     // Base smoothed potential from the river field (already handles tile gating and longitudinal fade)
                     let mut p_smoothed = river.potential_gated_smoothed(
                         wxf,
                         wzf,
                         width_blocks,
-                        generate.river_chance, // local chance threshold
-                        true,                  // rivers_enabled at this biome
+                        river_chance_here, // blended local chance threshold
+                        true,              // rivers_enabled at this biome
                     );
 
                     // If this biome's chance is 0.0, only allow continuation from neighbors:
-                    if generate.river_chance == 0.0 {
+                    if river_chance_here <= 0.0001 {
                         if neighbor_has_river {
                             // soften a bit so the tail looks natural
                             p_smoothed *= 0.90;
@@ -318,8 +429,45 @@ pub(crate) async fn generate_chunk_async_biome(
 
                     if p_eff > 0.0 {
                         let h_before = h_f;
-                        let mut h_carved = river
-                            .carve_height(h_before, p_eff, width_blocks, SEA_LEVEL as f32)
+                        let rel_h = (h_before - SEA_LEVEL as f32).max(0.0);
+                        let selector = map01(river_mode_n.get_noise_2d(wxf, wzf));
+                        let tunnel_pick = smoothstep(0.34, 0.66, selector);
+                        let (tunnel_w, stop_w) = if tunnel_mode_pref <= 0.0 {
+                            (0.0, 1.0)
+                        } else if stop_mode_pref <= 0.0 {
+                            (1.0, 0.0)
+                        } else {
+                            // Blend smooth random field with biome preference to avoid sharp mode seams.
+                            let t = (0.58 * tunnel_pick + 0.42 * tunnel_mode_ratio).clamp(0.0, 1.0);
+                            (t, 1.0 - t)
+                        };
+
+                        // STOP profile: gradually fades out before high mountains, with runout blend.
+                        let h_stop = {
+                            let stop_fac = 1.0 - smoothstep(18.0, 92.0, rel_h);
+                            let stop_bias = stop_fac * (0.65 + 0.35 * stop_fac);
+                            let p_mode = p_eff * stop_bias;
+                            let carved = if p_mode <= 0.0005 {
+                                h_before
+                            } else {
+                                river.carve_height(h_before, p_mode, width_blocks, SEA_LEVEL as f32)
+                            };
+                            let runout = smoothstep(24.0, 104.0, rel_h);
+                            lerp(carved, h_before, runout * 0.55)
+                        };
+
+                        // TUNNEL profile: keep mountain silhouette by limiting visible surface cut.
+                        let h_tunnel = {
+                            let desired =
+                                river.carve_height(h_before, p_eff, width_blocks, SEA_LEVEL as f32);
+                            let max_cut = lerp(12.0, 1.6, smoothstep(22.0, 96.0, rel_h));
+                            let cut = (h_before - desired).max(0.0).min(max_cut);
+                            let carved = h_before - cut;
+                            let high_soft = smoothstep(96.0, 138.0, rel_h);
+                            lerp(carved, h_before, high_soft * 0.30)
+                        };
+
+                        let mut h_carved = (h_stop * stop_w + h_tunnel * tunnel_w)
                             .clamp((Y_MIN + 1) as f32, (SEA_LEVEL + 170) as f32);
 
                         // Small safety against sudden large cuts if p_smoothed dropped quickly:
@@ -329,6 +477,22 @@ pub(crate) async fn generate_chunk_async_biome(
                         }
 
                         h_f = h_carved;
+
+                        let tunnel_core = smoothstep(0.48, 0.92, p_eff);
+                        let tunnel_strength = tunnel_w * tunnel_core;
+                        if tunnel_strength > 0.28 && rel_h >= 26.0 {
+                            let y_jit =
+                                (map01(coast_d.get_noise_2d(wxf * 0.55 + 17.0, wzf * 0.55 - 11.0))
+                                    - 0.5)
+                                    * 3.0;
+                            let depth_bias = smoothstep(26.0, 150.0, rel_h);
+                            river_tunnel_center_y =
+                                (SEA_LEVEL as f32 - 6.0 - depth_bias * 9.0 + y_jit).round() as i32;
+                            river_tunnel_half = (1.5 + 2.7 * tunnel_strength).round() as i32;
+                            river_tunnel_roof =
+                                (9.0 + rel_h * 0.10).round().clamp(9.0, 24.0) as i32;
+                            river_tunnel_weight = tunnel_strength;
+                        }
                     }
                 }
                 /* ================== /RIVER PATCH END ================== */
@@ -346,7 +510,13 @@ pub(crate) async fn generate_chunk_async_biome(
             // Resolve block ids for surface/strata
             let top_name = pick(&dom_biome.surface.top, wx, wz, pick_seed ^ 0x11);
             let bottom_name = pick(&dom_biome.surface.bottom, wx, wz, pick_seed ^ 0x22);
-            let sea_floor_name = pick(&ocean_biome.surface.sea_floor, wx, wz, pick_seed ^ 0x33);
+            let sea_floor_name = pick_clustered_noise(
+                &ocean_biome.surface.sea_floor,
+                &seafloor_mat_n,
+                &seafloor_mat_d,
+                wxf,
+                wzf,
+            );
             let upper_zero_name = pick(&dom_biome.surface.upper_zero, wx, wz, pick_seed ^ 0x44);
 
             let id_top = reg.id_or_air(top_name);
@@ -371,6 +541,25 @@ pub(crate) async fn generate_chunk_async_biome(
 
             // Adaptive soil from the dominating land site
             let soil_cap = if w0 >= w1 { soil0 } else { soil1 };
+            let deep_mix = 0.72 * map01(underground_blob_n.get_noise_2d(wxf, wzf))
+                + 0.28 * map01(underground_mat_n.get_noise_2d(wxf, wzf));
+            let deep_sel =
+                map01(underground_mat_n.get_noise_2d(wxf * 1.7 + 91.3, wzf * 1.7 - 47.2));
+            let id_deep_mix = if deep_sel > 0.53 { id_gravel } else { id_dirt };
+            let beach_mix = 0.82 * map01(seafloor_mat_n.get_noise_2d(wxf * 0.85, wzf * 0.85))
+                + 0.18 * map01(seafloor_mat_d.get_noise_2d(wxf * 0.85, wzf * 0.85));
+            let snowy_shore = land_biome_for_materials
+                .name
+                .eq_ignore_ascii_case("snow_plains")
+                || land_biome_for_materials
+                    .name
+                    .eq_ignore_ascii_case("snowy_mountains");
+            let gravel_threshold = if snowy_shore { 0.30 } else { 0.87 };
+            let id_beach = if beach_mix > gravel_threshold {
+                id_gravel
+            } else {
+                id_sand
+            };
 
             // --- COLUMN WRITE LOOP (unchanged) ---------------------------------
             // Split at y=0: upper_zero for wy >= 0, under_zero for wy < 0.
@@ -381,6 +570,23 @@ pub(crate) async fn generate_chunk_async_biome(
                     break;
                 }
 
+                let carve_river_tunnel = river_tunnel_weight > 0.0
+                    && river_tunnel_half > 0
+                    && wy <= h_final - river_tunnel_roof
+                    && (wy - river_tunnel_center_y).abs() <= river_tunnel_half;
+                if carve_river_tunnel {
+                    // Tunnel river: water in lower half, air in upper half -> cave-like passage, no gorge.
+                    let id = if wy <= river_tunnel_center_y - 1 {
+                        id_water
+                    } else {
+                        id_air
+                    };
+                    if id != 0 {
+                        chunk.set(lx, ly, lz, id);
+                    }
+                    continue;
+                }
+
                 let underwater = h_final < SEA_LEVEL;
 
                 let id: BlockId = if underwater {
@@ -388,10 +594,23 @@ pub(crate) async fn generate_chunk_async_biome(
                     let depth_from_seabed = (h_final - wy).max(0);
                     if depth_from_seabed <= 2 {
                         // Top 3 layers of seabed
-                        id_sea_floor
+                        let shallow_coast = (SEA_LEVEL - h_final).clamp(0, 999) <= 4;
+                        if shallow_coast {
+                            id_beach
+                        } else {
+                            id_sea_floor
+                        }
                     } else {
                         // Below seabed: use ocean biome's zero-split
-                        if wy >= 0 {
+                        let depth_wave =
+                            ((wy as f32) * 0.11 + deep_sel * std::f32::consts::TAU).sin() * 0.08;
+                        let use_deep_mix = depth_from_seabed > 5
+                            && wy <= 30
+                            && wy >= -96
+                            && deep_mix + depth_wave > 0.70;
+                        if use_deep_mix {
+                            id_deep_mix
+                        } else if wy >= 0 {
                             id_ocean_upper_zero
                         } else {
                             id_ocean_under_zero
@@ -403,12 +622,22 @@ pub(crate) async fn generate_chunk_async_biome(
                         t_ocean > 0.10 && t_ocean < 0.90 && (h_final - SEA_LEVEL).abs() <= 5;
 
                     if wy == h_final {
-                        if near_coast { id_sea_floor } else { id_top }
+                        if near_coast { id_beach } else { id_top }
                     } else if wy >= h_final - if near_coast { beach_cap } else { soil_cap } {
-                        if near_coast { id_sea_floor } else { id_bottom }
+                        if near_coast { id_beach } else { id_bottom }
                     } else {
                         // Core below the soil horizon -> split at world zero
-                        if wy >= 0 {
+                        let depth_from_surface = (h_final - wy).max(0);
+                        let depth_wave =
+                            ((wy as f32) * 0.11 + deep_sel * std::f32::consts::TAU).sin() * 0.08;
+                        let use_deep_mix = depth_from_surface >= 5
+                            && wy <= 42
+                            && wy >= -96
+                            && deep_mix + depth_wave > 0.70;
+
+                        if use_deep_mix {
+                            id_deep_mix
+                        } else if wy >= 0 {
                             id_upper_zero
                         } else {
                             id_under_zero
@@ -436,37 +665,37 @@ fn default_cave_params(seed: i32) -> CaveParams {
         seed,
         y_top: 52,
         y_bottom: -110,
-        worms_per_region: 1.35,
+        worms_per_region: 1.65,
         region_chunks: 3,
-        base_radius: 4.2,
-        radius_var: 3.0,
-        step_len: 1.5,
-        worm_len_steps: 360,
-        room_event_chance: 0.1,
-        room_radius_min: 6.0,
-        room_radius_max: 10.5,
-        caverns_per_region: 0.5,
+        base_radius: 4.1,
+        radius_var: 3.8,
+        step_len: 1.45,
+        worm_len_steps: 400,
+        room_event_chance: 0.16,
+        room_radius_min: 6.5,
+        room_radius_max: 12.5,
+        caverns_per_region: 0.72,
         cavern_room_count_min: 6,
-        cavern_room_count_max: 11,
-        cavern_room_radius_xz_min: 16.0,
-        cavern_room_radius_xz_max: 34.0,
-        cavern_room_radius_y_min: 9.0,
-        cavern_room_radius_y_max: 21.0,
-        cavern_connector_radius: 12.5,
+        cavern_room_count_max: 13,
+        cavern_room_radius_xz_min: 14.0,
+        cavern_room_radius_xz_max: 38.0,
+        cavern_room_radius_y_min: 8.5,
+        cavern_room_radius_y_max: 23.0,
+        cavern_connector_radius: 11.5,
         cavern_y_top: -10,
         cavern_y_bottom: -100,
-        mega_caverns_per_region: 0.075,
+        mega_caverns_per_region: 0.11,
         mega_room_count_min: 1,
-        mega_room_count_max: 3,
-        mega_room_radius_xz_min: 45.0,
-        mega_room_radius_xz_max: 144.0,
+        mega_room_count_max: 4,
+        mega_room_radius_xz_min: 44.0,
+        mega_room_radius_xz_max: 156.0,
         mega_room_radius_y_min: 20.0,
-        mega_room_radius_y_max: 46.0,
-        mega_connector_radius: 8.0,
+        mega_room_radius_y_max: 52.0,
+        mega_connector_radius: 10.0,
         mega_y_top: -30,
         mega_y_bottom: -105,
-        entrance_chance: 0.55,
-        entrance_len_steps: 40,
+        entrance_chance: 0.62,
+        entrance_len_steps: 48,
         entrance_radius_scale: 0.55,
         entrance_min_radius: 2.8,
         entrance_trigger_band: 12.0,
@@ -551,9 +780,10 @@ fn sample_ocean_height(
     sea_level: i32,
     height_offset: f32,
     seafloor_amp: f32,
+    seafloor_freq_scale: f32,
 ) -> f32 {
     // Slightly slower noise to make a sea floor undulate more gently
-    let s = 0.9;
+    let s = (0.9 * seafloor_freq_scale).clamp(0.1, 4.0);
     let hn = map01(n.get_noise_2d(wxf * s, wzf * s));
     let undulation = (hn - 0.5) * seafloor_amp;
     let base = sea_level as f32 + height_offset;
@@ -569,12 +799,30 @@ fn sample_plains_height(
     sea_level: i32,
     height_offset: f32,
     land_amp: f32,
+    land_freq_scale: f32,
 ) -> f32 {
     // Land uses FBm around the biome's base offset
-    let hn = map01(n.get_noise_2d(wxf, wzf));
+    let sf = land_freq_scale.clamp(0.2, 4.0);
+    let hn = map01(n.get_noise_2d(wxf * sf, wzf * sf));
     let undulation = (hn - 0.5) * land_amp;
     let base = sea_level as f32 + height_offset;
     clamp_world_y(base + undulation)
+}
+
+#[inline]
+fn sample_land_uplift(
+    broad_n: &FastNoiseLite,
+    ridge_n: &FastNoiseLite,
+    wxf: f32,
+    wzf: f32,
+    land_amp: f32,
+) -> f32 {
+    let broad = map01(broad_n.get_noise_2d(wxf, wzf));
+    let ridge = 1.0 - ridge_n.get_noise_2d(wxf, wzf).abs();
+    let highland = smoothstep(0.58, 0.93, broad);
+    let ridge_core = smoothstep(0.52, 0.92, ridge).powf(1.2);
+    let lift_base = (land_amp * 0.18).clamp(0.25, 11.0);
+    lift_base * highland + lift_base * 1.15 * highland * ridge_core
 }
 
 /* ============= Mountains (plains-based delta composer) =================== */
@@ -594,4 +842,26 @@ fn sample_plains_mountain_delta(n: &FastNoiseLite, ux: f32, uz: f32, amp_json: f
     let a_mod = 0.90 + 0.20 * map01(n.get_noise_2d(ux * 0.25, uz * 0.25));
 
     amp_json * a_mod * peak
+}
+
+#[inline]
+fn pick_clustered_noise<'a>(
+    list: &'a [String],
+    macro_n: &FastNoiseLite,
+    detail_n: &FastNoiseLite,
+    wxf: f32,
+    wzf: f32,
+) -> &'a str {
+    if list.is_empty() {
+        return "stone_block";
+    }
+    if list.len() == 1 {
+        return &list[0];
+    }
+
+    let broad = map01(macro_n.get_noise_2d(wxf, wzf));
+    let detail = map01(detail_n.get_noise_2d(wxf, wzf));
+    let v = (0.84 * broad + 0.16 * detail.powf(1.35)).clamp(0.0, 0.999_999);
+    let idx = (v * list.len() as f32).floor() as usize;
+    &list[idx.min(list.len() - 1)]
 }

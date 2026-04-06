@@ -1324,7 +1324,6 @@ fn sync_water_mesh_visibility(
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
     load_center: Option<Res<LoadCenter>>,
     game_config: Res<GlobalConfig>,
-    chunk_map: Res<ChunkMap>,
     ready_set: Option<Res<WaterReadySet>>,
     multiplayer_connection: Res<MultiplayerConnectionState>,
     app_state: Res<State<AppState>>,
@@ -1354,11 +1353,6 @@ fn sync_water_mesh_visibility(
         let dz = (mesh.coord.y - center_c.y).abs();
         let in_visible = dx <= visible && dz <= visible;
         let in_hide_band = dx <= hide_radius && dz <= hide_radius;
-        let base_ready = chunk_map
-            .chunks
-            .get(&mesh.coord)
-            .map(|chunk| chunk.dirty_mask == 0)
-            .unwrap_or(false);
         let ready = if require_water_ready {
             ready_set
                 .as_ref()
@@ -1369,14 +1363,14 @@ fn sync_water_mesh_visibility(
         };
         *vis = match *vis {
             Visibility::Inherited => {
-                if in_hide_band && ready && base_ready {
+                if in_hide_band && ready {
                     Visibility::Inherited
                 } else {
                     Visibility::Hidden
                 }
             }
             _ => {
-                if in_visible && ready && base_ready {
+                if in_visible && ready {
                     Visibility::Inherited
                 } else {
                     Visibility::Hidden

@@ -106,8 +106,11 @@ pub struct BiomeSettings {
 /// Represents biome generation used by the `core::world::biome` module.
 #[derive(Debug, Deserialize, PartialEq, Clone, Default)]
 pub struct BiomeGeneration {
-    #[serde(default)]
-    pub rivers: bool,
+    #[serde(
+        default = "default_river_control",
+        deserialize_with = "deserialize_river_control"
+    )]
+    pub rivers: RiverControl,
     #[serde(default = "default_river_chance")]
     pub river_chance: f32,
     #[serde(
@@ -115,6 +118,137 @@ pub struct BiomeGeneration {
         deserialize_with = "deserialize_size_between"
     )]
     pub river_size_between: (i32, i32),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum RiverCarveMode {
+    Tunnel,
+    Stop,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct RiverControl {
+    pub enabled: bool,
+    pub tunnel: bool,
+    pub stop: bool,
+}
+
+impl RiverControl {
+    #[inline]
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            tunnel: false,
+            stop: false,
+        }
+    }
+
+    #[inline]
+    pub fn stop_only() -> Self {
+        Self {
+            enabled: true,
+            tunnel: false,
+            stop: true,
+        }
+    }
+
+    #[inline]
+    pub fn tunnel_only() -> Self {
+        Self {
+            enabled: true,
+            tunnel: true,
+            stop: false,
+        }
+    }
+
+    #[inline]
+    pub fn enabled(&self) -> bool {
+        self.enabled && (self.tunnel || self.stop)
+    }
+
+    #[inline]
+    pub fn pick_mode(&self, selector01: f32) -> Option<RiverCarveMode> {
+        if !self.enabled() {
+            return None;
+        }
+        match (self.tunnel, self.stop) {
+            (true, true) => {
+                if selector01 < 0.5 {
+                    Some(RiverCarveMode::Tunnel)
+                } else {
+                    Some(RiverCarveMode::Stop)
+                }
+            }
+            (true, false) => Some(RiverCarveMode::Tunnel),
+            (false, true) => Some(RiverCarveMode::Stop),
+            (false, false) => None,
+        }
+    }
+}
+
+impl Default for RiverControl {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RiverControlRaw {
+    Bool(bool),
+    Str(String),
+}
+
+#[inline]
+fn parse_river_control_from_str(s: &str) -> RiverControl {
+    let mut tunnel = false;
+    let mut stop = false;
+    let mut explicit_off = false;
+
+    for tok in s
+        .split(['|', ',', ';', '/'])
+        .map(|t| t.trim().to_ascii_lowercase())
+        .filter(|t| !t.is_empty())
+    {
+        match tok.as_str() {
+            "tunnel" => tunnel = true,
+            "stop" => stop = true,
+            "true" | "on" | "yes" | "river" | "rivers" => stop = true,
+            "false" | "off" | "none" | "no" => explicit_off = true,
+            _ => {}
+        }
+    }
+
+    if explicit_off && !tunnel && !stop {
+        return RiverControl::disabled();
+    }
+
+    if !tunnel && !stop {
+        return RiverControl::disabled();
+    }
+
+    RiverControl {
+        enabled: true,
+        tunnel,
+        stop,
+    }
+}
+
+fn deserialize_river_control<'de, D>(de: D) -> Result<RiverControl, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = RiverControlRaw::deserialize(de)?;
+    Ok(match raw {
+        RiverControlRaw::Bool(v) => {
+            if v {
+                RiverControl::stop_only()
+            } else {
+                RiverControl::disabled()
+            }
+        }
+        RiverControlRaw::Str(s) => parse_river_control_from_str(&s),
+    })
 }
 
 /// Runs the `default_true` routine for default true in the `core::world::biome` module.
@@ -130,6 +264,10 @@ fn default_rarity() -> f32 {
 /// Runs the `default_river_chance` routine for default river chance in the `core::world::biome` module.
 fn default_river_chance() -> f32 {
     0.1
+}
+
+fn default_river_control() -> RiverControl {
+    RiverControl::disabled()
 }
 
 /// Runs the `default_river_size_between` routine for default river size between in the `core::world::biome` module.

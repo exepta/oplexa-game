@@ -1,0 +1,9 @@
+{
+  "image": "oak_leaves.png",
+  "tile_size": 128,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "oak_leaves": [0, 0]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "ice_block",
+  "texture_dir": "textures/blocks/ice",
+  "texture": {
+    "all": "ice"
+  },
+  "stats": {
+    "hardness": 0.5,
+    "blast_resistance": 0.5,
+    "level": "0",
+    "opaque": false,
+    "emissive": 0.0
+  }
+}

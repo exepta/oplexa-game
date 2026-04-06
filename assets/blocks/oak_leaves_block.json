@@ -1,0 +1,14 @@
+{
+  "name": "oak_leaves_block",
+  "texture_dir": "textures/blocks/oak_leaves",
+  "texture": {
+    "all": "oak_leaves"
+  },
+  "stats": {
+    "hardness": 0.2,
+    "blast_resistance": 0.2,
+    "level": "0",
+    "opaque": false,
+    "emissive": 0.0
+  }
+}
