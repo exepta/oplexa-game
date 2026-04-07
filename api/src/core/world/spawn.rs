@@ -4,6 +4,7 @@ use crate::core::world::block::BlockRegistry;
 use crate::core::world::chunk::{ChunkData, SEA_LEVEL};
 use crate::core::world::chunk_dimension::{CY, local_y_to_world, world_to_chunk_xz};
 use crate::generator::chunk::chunk_utils::{load_or_gen_chunk_async, save_chunk_at_root_sync};
+use crate::generator::chunk::trees::registry::TreeRegistry;
 use bevy::log::info;
 use bevy::prelude::IVec2;
 use bevy::tasks::futures_lite::future;
@@ -23,8 +24,14 @@ pub fn ensure_world_spawn_generated(world_root: &Path, world_seed: i32) -> [f32;
     );
     let block_registry = BlockRegistry::load_headless("assets/blocks");
     let biome_registry = BiomeRegistry::load_from_folder("assets/biomes");
-    let generated_chunks =
-        generate_spawn_chunks(world_root, world_seed, &block_registry, &biome_registry);
+    let tree_registry = TreeRegistry::load_from_folder("assets/data/trees");
+    let generated_chunks = generate_spawn_chunks(
+        world_root,
+        world_seed,
+        &block_registry,
+        &biome_registry,
+        &tree_registry,
+    );
 
     let spawn_file = world_root.join("spawn.txt");
     if let Some(spawn) = read_spawn_translation(&spawn_file) {
@@ -52,6 +59,7 @@ fn generate_spawn_chunks(
     world_seed: i32,
     block_registry: &BlockRegistry,
     biome_registry: &BiomeRegistry,
+    tree_registry: &TreeRegistry,
 ) -> HashMap<IVec2, ChunkData> {
     let mut chunks = HashMap::new();
     let config = WorldGenConfig { seed: world_seed };
@@ -74,6 +82,7 @@ fn generate_spawn_chunks(
                 coord,
                 block_registry,
                 biome_registry,
+                tree_registry,
                 config.clone(),
             ));
             save_chunk_at_root_sync(world_root.to_path_buf(), coord, &chunk)

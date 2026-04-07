@@ -1,0 +1,9 @@
+{
+  "image": "ice.png",
+  "tile_size": 128,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "ice": [0, 0]
+  }
+}

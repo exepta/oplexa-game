@@ -273,6 +273,72 @@ pub fn choose_biome_label_thresholded(biomes: &BiomeRegistry, coord: IVec2, seed
     biomes.by_name.get(&biomes.ordered_names[0]).unwrap()
 }
 
+/// Locates the nearest chunk whose dominant biome matches `localized_name`.
+///
+/// Searches ring-by-ring around `origin_chunk` up to `max_radius_chunks`.
+pub fn locate_biome_chunk_by_localized_name(
+    biomes: &BiomeRegistry,
+    world_seed: i32,
+    origin_chunk: IVec2,
+    localized_name: &str,
+    max_radius_chunks: i32,
+) -> Option<IVec2> {
+    if biomes.is_empty() {
+        return None;
+    }
+
+    let target = localized_name.trim();
+    if target.is_empty() {
+        return None;
+    }
+
+    let max_radius_chunks = max_radius_chunks.max(0);
+
+    let matches = |coord: IVec2| {
+        choose_biome_label_smoothed(biomes, coord, world_seed)
+            .localized_name
+            .eq_ignore_ascii_case(target)
+    };
+
+    for radius in 0..=max_radius_chunks {
+        if radius == 0 {
+            if matches(origin_chunk) {
+                return Some(origin_chunk);
+            }
+            continue;
+        }
+
+        let min_x = origin_chunk.x - radius;
+        let max_x = origin_chunk.x + radius;
+        let min_z = origin_chunk.y - radius;
+        let max_z = origin_chunk.y + radius;
+
+        for x in min_x..=max_x {
+            if matches(IVec2::new(x, min_z)) {
+                return Some(IVec2::new(x, min_z));
+            }
+            if matches(IVec2::new(x, max_z)) {
+                return Some(IVec2::new(x, max_z));
+            }
+        }
+
+        if max_z - min_z <= 1 {
+            continue;
+        }
+
+        for z in (min_z + 1)..=(max_z - 1) {
+            if matches(IVec2::new(min_x, z)) {
+                return Some(IVec2::new(min_x, z));
+            }
+            if matches(IVec2::new(max_x, z)) {
+                return Some(IVec2::new(max_x, z));
+            }
+        }
+    }
+
+    None
+}
+
 /* ======================================================================= */
 /* == Site Queries / Sizes ================================================ */
 /* ======================================================================= */

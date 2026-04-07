@@ -71,6 +71,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<PlayerSnapshot>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<ServerTeleport>()
+            .add_direction(NetworkDirection::ServerToClient);
 
         // Messages – chunks
         app.register_message::<ClientChunkInterest>()

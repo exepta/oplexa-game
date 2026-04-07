@@ -1,10 +1,9 @@
-use self::manager::ManagerPlugin;
 use crate::core::chat::{ChatLine, ChatLog};
 use crate::core::commands::{
     CommandSender, EntitySender, GameModeKind, SystemMessageLevel, SystemSender,
     default_chat_command_registry, parse_chat_command,
 };
-use crate::core::config::GlobalConfig;
+use crate::core::config::{GlobalConfig, WorldGenConfig};
 use crate::core::debug::{BuildInfo, WorldInspectorState};
 use crate::core::entities::player::inventory::PlayerInventory;
 use crate::core::entities::player::{FlightState, FpsController, GameMode, GameModeState, Player};
@@ -20,6 +19,8 @@ use crate::core::inventory::items::{ItemRegistry, build_world_item_drop_visual};
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
 use crate::core::states::states::{AppState, BeforeUiState, LoadingStates};
 use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, get_block_world};
+use crate::core::world::biome::func::locate_biome_chunk_by_localized_name;
+use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::chunk::{ChunkMap, LoadCenter, SEA_LEVEL};
 use crate::core::world::chunk_dimension::{
     CX, CY, CZ, SEC_COUNT, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local,
@@ -36,7 +37,7 @@ use api::core::network::{
         ClientDropItem, ClientDropPickup, ClientKeepAlive, OrderedReliable, PlayerJoined,
         PlayerLeft, PlayerMove, PlayerSnapshot, ProtocolPlugin, ServerAuthRejected,
         ServerBlockBreak, ServerBlockPlace, ServerChatMessage, ServerChunkData, ServerDropPicked,
-        ServerDropSpawn, ServerGameModeChanged, ServerWelcome, UnorderedReliable,
+        ServerDropSpawn, ServerGameModeChanged, ServerTeleport, ServerWelcome, UnorderedReliable,
         UnorderedUnreliable,
     },
 };
@@ -73,6 +74,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tracing_subscriber::Layer;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
+
+mod bootstrap;
+mod chunk_debug_grid;
+pub(crate) mod manager;
+mod runtime;
+
+use bootstrap::init_bevy_app;
+use runtime::*;
 
 /// Represents remote player avatar used by the `client` module.
 #[derive(Component)]
@@ -279,440 +288,12 @@ const REMOTE_PLAYER_INTERP_BACK_TIME_SECS: f32 = 0.10;
 const REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS: f32 = 0.08;
 const REMOTE_PLAYER_MAX_SNAPSHOT_POINTS: usize = 24;
 const REMOTE_PLAYER_SMOOTHING_HZ: f32 = 18.0;
+const LOCATE_MAX_RADIUS_CHUNKS: i32 = 256;
 const NETWORK_CONFIG_PATH: &str = "config/network.toml";
 const CTRL_C_GRACEFUL_EXIT_DELAY_SECS: f64 = 0.25;
 const SERVER_TIMEOUT_ERROR_TEXT: &str = "Server time out!";
 
 static TERMINAL_INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-/// Represents client identity used by the `client` module.
-#[derive(Clone, Debug)]
-struct ClientIdentity {
-    uuid: String,
-    player_name: String,
-    prod_mode: bool,
-    multi_instance: bool,
-}
-
-/// Runs the `resolve_client_identity` routine for resolve client identity in the `client` module.
-fn resolve_client_identity(settings: &mut NetworkSettings) -> ClientIdentity {
-    let multi_instance = is_multi_instance_enabled();
-    let prod_mode = settings.client.prod;
-    let persistent_identity_enabled = prod_mode && !multi_instance;
-    let configured_uuid = settings
-        .client
-        .client_uuid
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-
-    let uuid = if let Some(configured_uuid) = configured_uuid {
-        configured_uuid
-    } else if persistent_identity_enabled {
-        if let Some(existing_uuid) = settings
-            .client
-            .client_uuid
-            .as_deref()
-            .filter(|value| parse_uuid_bytes(value).is_some())
-        {
-            existing_uuid.to_string()
-        } else {
-            let new_uuid = generate_uuid_v4_string();
-            settings.client.client_uuid = Some(new_uuid.clone());
-            if let Err(error) = settings.save(NETWORK_CONFIG_PATH) {
-                warn!(
-                    "Failed to persist client UUID to {}: {}",
-                    NETWORK_CONFIG_PATH, error
-                );
-            }
-            new_uuid
-        }
-    } else {
-        generate_uuid_v4_string()
-    };
-
-    let player_name = resolve_player_name(settings.client.player_name.as_str());
-
-    ClientIdentity {
-        uuid,
-        player_name,
-        prod_mode,
-        multi_instance,
-    }
-}
-
-/// Checks whether multi instance enabled in the `client` module.
-fn is_multi_instance_enabled() -> bool {
-    env::var_os("multi_instance").is_some() || env::var_os("MULTI_INSTANCE").is_some()
-}
-
-/// Generates uuid v4 string for the `client` module.
-fn generate_uuid_v4_string() -> String {
-    let mut bytes = rand::random::<[u8; 16]>();
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-
-    let mut uuid = String::with_capacity(36);
-    for (index, byte) in bytes.iter().enumerate() {
-        if matches!(index, 4 | 6 | 8 | 10) {
-            uuid.push('-');
-        }
-        let _ = write!(&mut uuid, "{:02x}", byte);
-    }
-
-    uuid
-}
-
-/// Parses uuid bytes for the `client` module.
-fn parse_uuid_bytes(value: &str) -> Option<[u8; 16]> {
-    if value.len() != 36 {
-        return None;
-    }
-
-    let bytes = value.as_bytes();
-    for &separator_index in &[8usize, 13, 18, 23] {
-        if bytes.get(separator_index) != Some(&b'-') {
-            return None;
-        }
-    }
-
-    let mut compact = String::with_capacity(32);
-    for (index, ch) in value.chars().enumerate() {
-        if matches!(index, 8 | 13 | 18 | 23) {
-            continue;
-        }
-        if !ch.is_ascii_hexdigit() {
-            return None;
-        }
-        compact.push(ch);
-    }
-
-    if compact.len() != 32 {
-        return None;
-    }
-
-    let mut decoded = [0u8; 16];
-    for (index, slot) in decoded.iter_mut().enumerate() {
-        let start = index * 2;
-        *slot = u8::from_str_radix(&compact[start..start + 2], 16).ok()?;
-    }
-
-    Some(decoded)
-}
-
-/// Runs the `resolve_player_name` routine for resolve player name in the `client` module.
-fn resolve_player_name(configured_name: &str) -> String {
-    let trimmed = configured_name.trim();
-    if trimmed.is_empty() || trimmed == "?" {
-        generate_random_player_name()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Generates random player name for the `client` module.
-fn generate_random_player_name() -> String {
-    format!("{:08x}", rand::random::<u32>())
-}
-
-/// Parses a session URL like "http://127.0.0.1:14191" into a SocketAddr.
-fn parse_session_url(url: &str) -> Option<SocketAddr> {
-    let stripped = url
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    stripped.parse().ok()
-}
-
-/// Runs the `remap_server_block_id` routine for remap server block id in the `client` module.
-fn remap_server_block_id(
-    block_remap: &BlockIdRemap,
-    registry: &BlockRegistry,
-    server_id: u16,
-) -> u16 {
-    let local_id = block_remap.to_local(server_id);
-    if (local_id as usize) < registry.defs.len() {
-        local_id
-    } else {
-        0
-    }
-}
-
-/// Represents multiplayer client runtime used by the `client` module.
-#[derive(Resource)]
-struct MultiplayerClientRuntime {
-    enabled: bool,
-    player_name: String,
-    session_url: String,
-    client_uuid: String,
-    auto_connect_lan: bool,
-    connection_entity: Option<Entity>,
-    local_player_id: Option<u64>,
-    player_names: HashMap<u64, String>,
-    remote_players: HashMap<u64, Entity>,
-    disconnected_remote_players: HashSet<u64>,
-    remote_player_smoothing: HashMap<u64, RemotePlayerSmoothing>,
-    next_local_drop_seq: u32,
-    disconnect_requested: bool,
-    keepalive_timer: Timer,
-    send_timer: Timer,
-}
-
-/// Represents terminal interrupt exit state used by the `client` module.
-#[derive(Resource, Default)]
-struct TerminalInterruptExitState {
-    started_at: Option<f64>,
-}
-
-impl MultiplayerClientRuntime {
-    /// Creates a new instance for the `client` module.
-    fn new(settings: &NetworkSettings, identity: ClientIdentity) -> Self {
-        let auto_connect_lan = settings.client.session_url.eq_ignore_ascii_case("lan:auto");
-        info!(
-            "Loaded client identity (prod={}, multi_instance={}): uuid={}, player_name={}",
-            identity.prod_mode, identity.multi_instance, identity.uuid, identity.player_name
-        );
-        Self {
-            enabled: settings.client.enabled,
-            player_name: identity.player_name,
-            session_url: settings.client.session_url.clone(),
-            client_uuid: identity.uuid,
-            auto_connect_lan,
-            connection_entity: None,
-            local_player_id: None,
-            player_names: HashMap::new(),
-            remote_players: HashMap::new(),
-            disconnected_remote_players: HashSet::new(),
-            remote_player_smoothing: HashMap::new(),
-            next_local_drop_seq: 1,
-            disconnect_requested: false,
-            keepalive_timer: Timer::from_seconds(2.0, TimerMode::Repeating),
-            send_timer: Timer::from_seconds(
-                Duration::from_millis(settings.client.transform_send_interval_ms).as_secs_f32(),
-                TimerMode::Repeating,
-            ),
-        }
-    }
-}
-
-/// Runs the `do_connect` routine for do connect in the `client` module.
-fn do_connect(
-    runtime: &mut MultiplayerClientRuntime,
-    session_url: String,
-    commands: &mut Commands,
-) {
-    if !runtime.enabled {
-        return;
-    }
-
-    let Some(server_addr) = parse_session_url(&session_url) else {
-        warn!("Cannot parse session URL: {}", session_url);
-        return;
-    };
-
-    // Keep netcode client IDs ephemeral so duplicate UUID handling happens in
-    // our auth layer (with explicit error dialog) instead of netcode timeout.
-    let auth = Authentication::Manual {
-        server_addr,
-        client_id: rand::random::<u64>().max(1),
-        private_key: [0u8; 32],
-        protocol_id: 0,
-    };
-
-    let netcode_client = match NetcodeClient::new(auth, NetcodeConfig::default()) {
-        Ok(c) => c,
-        Err(e) => {
-            warn!("Failed to create netcode client: {:?}", e);
-            return;
-        }
-    };
-
-    let entity = commands
-        .spawn((
-            netcode_client,
-            PeerAddr(server_addr),
-            WebSocketClientIo::from_addr(
-                ClientConfig::builder().with_no_encryption(),
-                WebSocketScheme::Plain,
-            ),
-        ))
-        .id();
-
-    commands.trigger_with(Connect { entity }, EntityTrigger);
-
-    info!(
-        "Connecting to multiplayer server at {} with player_name={} and client UUID {}",
-        session_url, runtime.player_name, runtime.client_uuid
-    );
-
-    runtime.connection_entity = Some(entity);
-    runtime.session_url = session_url;
-    runtime.local_player_id = None;
-    runtime.player_names.clear();
-    runtime.remote_players.clear();
-    runtime.disconnected_remote_players.clear();
-    runtime.remote_player_smoothing.clear();
-    runtime.next_local_drop_seq = 1;
-    runtime.disconnect_requested = false;
-    runtime.keepalive_timer.reset();
-}
-
-/// Runs the `do_disconnect` routine for do disconnect in the `client` module.
-fn do_disconnect(runtime: &mut MultiplayerClientRuntime, commands: &mut Commands) {
-    if let Some(entity) = runtime.connection_entity.take() {
-        runtime.disconnect_requested = true;
-        commands.trigger_with(Disconnect { entity }, EntityTrigger);
-    }
-}
-
-/// Represents lan discovery runtime used by the `client` module.
-struct LanDiscoveryRuntime {
-    client: Option<LanDiscoveryClient>,
-    known_servers: Vec<LanServerInfo>,
-    refresh_timer: Timer,
-}
-
-impl LanDiscoveryRuntime {
-    /// Creates a new instance for the `client` module.
-    fn new(settings: &NetworkSettings) -> Self {
-        let client = if settings.client.lan_discovery {
-            LanDiscoveryClient::bind(settings.client.lan_discovery_port).ok()
-        } else {
-            None
-        };
-
-        Self {
-            client,
-            known_servers: Vec::new(),
-            refresh_timer: Timer::from_seconds(3.0, TimerMode::Repeating),
-        }
-    }
-}
-
-/// Represents local lan host used by the `client` module.
-struct LocalLanHost {
-    child: Option<Child>,
-    session_url: Option<String>,
-    connect_timer: Option<Timer>,
-}
-
-impl Default for LocalLanHost {
-    /// Runs the `default` routine for default in the `client` module.
-    fn default() -> Self {
-        Self {
-            child: None,
-            session_url: None,
-            connect_timer: None,
-        }
-    }
-}
-
-impl LocalLanHost {
-    /// Refreshes the requested data for the `client` module.
-    fn refresh(&mut self) {
-        let Some(child) = self.child.as_mut() else {
-            return;
-        };
-
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                self.child = None;
-                self.session_url = None;
-                self.connect_timer = None;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                warn!("Failed to poll LAN host process: {}", error);
-                self.child = None;
-                self.session_url = None;
-                self.connect_timer = None;
-            }
-        }
-    }
-
-    /// Runs the `stop` routine for stop in the `client` module.
-    fn stop(&mut self) {
-        self.refresh();
-        let Some(mut child) = self.child.take() else {
-            self.session_url = None;
-            self.connect_timer = None;
-            return;
-        };
-
-        if let Err(error) = child.kill() {
-            warn!("Failed to stop LAN host process: {}", error);
-        }
-        let _ = child.wait();
-        self.session_url = None;
-        self.connect_timer = None;
-    }
-}
-
-/// Runs the `lan_server_binary_path` routine for lan server binary path in the `client` module.
-fn lan_server_binary_path() -> Option<PathBuf> {
-    let current = env::current_exe().ok()?;
-    let exe_name = format!("oplexa-game-server{}", env::consts::EXE_SUFFIX);
-    let direct = current.with_file_name(&exe_name);
-    if direct.exists() {
-        return Some(direct);
-    }
-
-    let parent = current.parent()?;
-    let sibling = parent.join(&exe_name);
-    if sibling.exists() {
-        return Some(sibling);
-    }
-
-    let workspace_debug = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
-        .join("debug")
-        .join(&exe_name);
-    if workspace_debug.exists() {
-        return Some(workspace_debug);
-    }
-
-    None
-}
-
-/// Spawns lan host process for the `client` module.
-fn spawn_lan_host_process() -> std::io::Result<Child> {
-    let Some(binary) = lan_server_binary_path() else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "oplexa-game-server binary not found",
-        ));
-    };
-
-    Command::new(binary)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-}
-
-/// Starts streamed multiplayer world load for the `client` module.
-fn start_streamed_multiplayer_world_load(
-    spawn_translation: [f32; 3],
-    region_cache: &mut RegionCache,
-    chunk_map: &mut ChunkMap,
-    fluid_map: &mut FluidMap,
-    water_mesh_index: &mut WaterMeshIndex,
-    commands: &mut Commands,
-    next_state: &mut NextState<AppState>,
-) {
-    let (spawn_chunk, _) = world_to_chunk_xz(
-        spawn_translation[0].floor() as i32,
-        spawn_translation[2].floor() as i32,
-    );
-    region_cache.0.clear();
-    chunk_map.chunks.clear();
-    fluid_map.0.clear();
-    water_mesh_index.0.clear();
-    commands.insert_resource(LoadCenter {
-        world_xz: spawn_chunk,
-    });
-    next_state.set(AppState::Loading(LoadingStates::BaseGen));
-}
 
 /// Runs the main routine for the `client` module.
 pub fn run() {
@@ -741,401 +322,6 @@ fn install_terminal_interrupt_handler() {
             warn!("Failed to install terminal interrupt handler: {}", error);
         }
     });
-}
-
-/// Initializes bevy app for the `client` module.
-fn init_bevy_app(
-    app: &mut App,
-    config: &GlobalConfig,
-    multiplayer_settings: NetworkSettings,
-    client_identity: ClientIdentity,
-) {
-    let client_uuid = client_identity.uuid.clone();
-    let build = BuildInfo {
-        app_name: "Game Version",
-        app_version: env!("CARGO_PKG_VERSION"),
-        bevy_version: "0.18.1",
-    };
-
-    app.insert_resource(config.clone())
-        .insert_resource(build)
-        .insert_resource(ClearColor(Color::Srgba(Srgba::rgb_u8(20, 25, 27))))
-        .insert_resource(WorldInspectorState(false))
-        .insert_resource(MultiplayerConnectionState::with_client_uuid(client_uuid))
-        .add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: String::from("Gear Born"),
-                        mode: if config.graphics.fullscreen {
-                            WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
-                        } else {
-                            WindowMode::Windowed
-                        },
-                        resolution: WindowResolution::new(
-                            config.graphics.window_width,
-                            config.graphics.window_height,
-                        ),
-                        present_mode: PresentMode::AutoVsync,
-                        ..default()
-                    }),
-                    ..default()
-                })
-                .set(RenderPlugin {
-                    render_creation: RenderCreation::Automatic(create_gpu_settings(
-                        &config.graphics.graphic_backend,
-                    )),
-                    ..default()
-                })
-                .set(ImagePlugin {
-                    default_sampler: ImageSamplerDescriptor {
-                        address_mode_u: ImageAddressMode::Repeat,
-                        address_mode_v: ImageAddressMode::Repeat,
-                        address_mode_w: ImageAddressMode::Repeat,
-                        mag_filter: ImageFilterMode::Linear,
-                        min_filter: ImageFilterMode::Linear,
-                        mipmap_filter: ImageFilterMode::Linear,
-                        anisotropy_clamp: 16,
-                        ..default()
-                    },
-                    ..default()
-                })
-                .set(LogPlugin {
-                    level: Level::DEBUG,
-                    filter: load_log_env_filter(),
-                    custom_layer: log_file_appender,
-                    ..default()
-                }),
-        );
-
-    register_world_inspector_types(app);
-
-    app.add_plugins(ClientPlugins {
-        tick_duration: Duration::from_millis(50),
-    })
-    .add_plugins(ProtocolPlugin);
-
-    app.insert_resource(MultiplayerClientRuntime::new(
-        &multiplayer_settings,
-        client_identity,
-    ))
-    .insert_non_send_resource(LanDiscoveryRuntime::new(&multiplayer_settings))
-    .insert_non_send_resource(LocalLanHost::default())
-    .init_resource::<RemoteChunkStreamState>()
-    .init_state::<AppState>()
-    .add_plugins(EguiPlugin::default())
-    .add_plugins(WorldInspectorPlugin::default().run_if(check_world_inspector_state))
-    .add_plugins(ManagerPlugin)
-    .add_plugins(MultiplayerClientPlugin)
-    .add_systems(
-        Update,
-        init_app_finish.run_if(in_state(AppState::AppInit).and(resource_exists::<GlobalConfig>)),
-    )
-    .run();
-}
-
-/// Registers world inspector types for the `client` module.
-fn register_world_inspector_types(app: &mut App) {
-    app.register_type::<GizmoConfigStore>()
-        .register_type::<bevy::render::view::ColorGradingSection>()
-        .register_type::<bevy::render::view::ColorGradingGlobal>()
-        .register_type::<AmbientLight>()
-        .register_type::<PointLight>()
-        .register_type::<DirectionalLight>()
-        .register_type::<bevy::camera::Camera3dDepthLoadOp>();
-}
-
-/// Initializes app finish for the `client` module.
-fn init_app_finish(mut next_state: ResMut<NextState<AppState>>) {
-    info!("Finish initializing app...");
-    next_state.set(AppState::Preload);
-}
-
-/// Creates gpu settings for the `client` module.
-fn create_gpu_settings(backend_str: &str) -> WgpuSettings {
-    let backend = match backend_str {
-        "auto" | "AUTO" | "primary" | "PRIMARY" => Some(Backends::PRIMARY),
-        "vulkan" | "VULKAN" => Some(Backends::VULKAN),
-        "dx12" | "DX12" => Some(Backends::DX12),
-        "metal" | "METAL" => Some(Backends::METAL),
-        other => {
-            eprintln!("Unknown backend '{}', falling back to PRIMARY", other);
-            Some(Backends::PRIMARY)
-        }
-    };
-
-    WgpuSettings {
-        features: if cfg!(debug_assertions) {
-            WgpuFeatures::POLYGON_MODE_LINE
-        } else {
-            WgpuFeatures::empty()
-        },
-        backends: backend,
-        ..default()
-    }
-}
-
-/// Runs the `check_world_inspector_state` routine for check world inspector state in the `client` module.
-fn check_world_inspector_state(world_inspector_state: Res<WorldInspectorState>) -> bool {
-    world_inspector_state.0
-}
-
-/// Runs the `log_file_appender` routine for log file appender in the `client` module.
-fn log_file_appender(_app: &mut App) -> Option<BoxedLayer> {
-    let log_dir = PathBuf::from("logs");
-    if let Err(error) = std::fs::create_dir_all(&log_dir) {
-        eprintln!("Failed to create log directory: {}", error);
-        return None;
-    }
-
-    let timestamp = Utc::now().format("bevy-%d-%m-%Y.log").to_string();
-    let log_path = log_dir.join(timestamp);
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .ok()?;
-    let file_arc = std::sync::Arc::new(std::sync::Mutex::new(file));
-
-    let _shutdown_logger = StartLogText {
-        file: std::sync::Arc::clone(&file_arc),
-    };
-
-    let writer = BoxMakeWriter::new(move || {
-        let file = file_arc
-            .lock()
-            .unwrap()
-            .try_clone()
-            .expect("Failed to clone log file handle");
-        Box::new(file) as Box<dyn Write + Send>
-    });
-
-    Some(Box::new(
-        tracing_subscriber::fmt::layer()
-            .with_ansi(false)
-            .with_writer(writer)
-            .boxed(),
-    ))
-}
-
-/// Loads log env filter for the `client` module.
-fn load_log_env_filter() -> String {
-    dotenv().ok();
-    env::var("LOG_ENV_FILTER").unwrap_or_else(|_| "error".to_string())
-}
-
-/// Represents start log text used by the `client` module.
-struct StartLogText {
-    file: std::sync::Arc<std::sync::Mutex<File>>,
-}
-
-impl Drop for StartLogText {
-    /// Runs the `drop` routine for drop in the `client` module.
-    fn drop(&mut self) {
-        let mut file = self.file.lock().unwrap();
-        let _ = writeln!(
-            file,
-            "\n====================================== [ Start ] ======================================\n"
-        );
-        let _ = file.flush();
-    }
-}
-
-pub(crate) mod manager {
-    use crate::core::CoreModule;
-    use crate::core::config::GlobalConfig;
-    use crate::core::debug::{ChunkGridGizmos, DebugGridState, WorldInspectorState};
-    use crate::core::entities::player::Player;
-    use crate::core::world::chunk_dimension::{CX, CZ, Y_MAX, Y_MIN, world_to_chunk_xz};
-    use crate::generator::GeneratorModule;
-    use crate::graphic::GraphicModule;
-    use crate::logic::LogicModule;
-    use crate::utils::key_utils::convert;
-    use bevy::camera::visibility::RenderLayers;
-    use bevy::gizmos::config::{DefaultGizmoConfigGroup, GizmoConfigGroup};
-    use bevy::light::DirectionalLightShadowMap;
-    use bevy::prelude::*;
-    use bevy_rapier3d::prelude::*;
-
-    /// Represents manager plugin used by the `client` module.
-    pub struct ManagerPlugin;
-
-    impl Plugin for ManagerPlugin {
-        /// Builds this component for the `client` module.
-        fn build(&self, app: &mut App) {
-            app.init_gizmo_group::<ChunkGridGizmos>();
-            app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default());
-            app.add_plugins((CoreModule, LogicModule, GeneratorModule, GraphicModule));
-            app.add_systems(
-                Startup,
-                (
-                    setup_shadow_map,
-                    configure_default_gizmos,
-                    configure_chunk_grid_gizmos,
-                ),
-            );
-            app.add_systems(
-                Update,
-                (
-                    toggle_world_inspector,
-                    toggle_chunk_grid,
-                    draw_chunk_grid_gizmo,
-                ),
-            );
-        }
-    }
-
-    /// Runs the `setup_shadow_map` routine for setup shadow map in the `client` module.
-    fn setup_shadow_map(mut commands: Commands) {
-        commands.insert_resource(DirectionalLightShadowMap { size: 1024 });
-    }
-
-    /// Runs the `configure_default_gizmos` routine for configure default gizmos in the `client` module.
-    fn configure_default_gizmos(mut gizmo_config_store: ResMut<GizmoConfigStore>) {
-        let (config, _) = gizmo_config_store.config_mut::<DefaultGizmoConfigGroup>();
-        config.enabled = true;
-        config.line.width = 3.0;
-        config.depth_bias = -1.0;
-        config.render_layers = RenderLayers::from_layers(&[0, 1, 2]);
-    }
-
-    /// Runs the `configure_chunk_grid_gizmos` routine for configure chunk grid gizmos in the `client` module.
-    fn configure_chunk_grid_gizmos(mut gizmo_config_store: ResMut<GizmoConfigStore>) {
-        let (config, _) = gizmo_config_store.config_mut::<ChunkGridGizmos>();
-        config.enabled = true;
-        config.line.width = 3.0;
-        config.depth_bias = -1.0;
-        config.render_layers = RenderLayers::from_layers(&[0, 1, 2]);
-    }
-
-    /// Runs the `toggle_world_inspector` routine for toggle world inspector in the `client` module.
-    fn toggle_world_inspector(
-        mut debug_context: ResMut<WorldInspectorState>,
-        keyboard: Res<ButtonInput<KeyCode>>,
-        game_config: Res<GlobalConfig>,
-    ) {
-        let key = convert(game_config.input.world_inspector.as_str())
-            .expect("Invalid key for world inspector");
-        if keyboard.just_pressed(key) {
-            debug_context.0 = !debug_context.0;
-            info!("World Inspector: {}", debug_context.0);
-        }
-    }
-
-    /// Runs the `toggle_chunk_grid` routine for toggle chunk grid in the `client` module.
-    fn toggle_chunk_grid(
-        mut debug_grid: ResMut<DebugGridState>,
-        keyboard: Res<ButtonInput<KeyCode>>,
-        game_config: Res<GlobalConfig>,
-        player_query: Query<&Transform, With<Player>>,
-    ) {
-        let key =
-            convert(game_config.input.chunk_grid.as_str()).expect("Invalid key for chunk grid");
-
-        if keyboard.just_pressed(key) {
-            debug_grid.show = !debug_grid.show;
-            if let Ok(player_transform) = player_query.single() {
-                debug_grid.plane_y = player_transform.translation.y.floor();
-            }
-            info!("Chunk Grid: {}", debug_grid.show);
-        }
-
-        if debug_grid.show
-            && let Ok(player_transform) = player_query.single()
-        {
-            debug_grid.plane_y = player_transform.translation.y.floor();
-        }
-    }
-
-    /// Draws chunk grid gizmo for the `client` module.
-    fn draw_chunk_grid_gizmo(
-        debug_grid: Res<DebugGridState>,
-        player_query: Query<&Transform, With<Player>>,
-        mut gizmos: Gizmos<ChunkGridGizmos>,
-        mut fallback_gizmos: Gizmos,
-    ) {
-        if !debug_grid.show {
-            return;
-        }
-
-        let Ok(player_transform) = player_query.single() else {
-            return;
-        };
-
-        let world_x = player_transform.translation.x.floor() as i32;
-        let world_z = player_transform.translation.z.floor() as i32;
-        let (center_chunk, _) = world_to_chunk_xz(world_x, world_z);
-        let plane_y = debug_grid.plane_y + 0.05;
-        let y_min = Y_MIN as f32;
-        let y_max = (Y_MAX + 1) as f32;
-        let range = 2;
-
-        for dz in -range..=range {
-            for dx in -range..=range {
-                let chunk = center_chunk + IVec2::new(dx, dz);
-                draw_chunk_outline(&mut gizmos, chunk, plane_y, y_min, y_max);
-                draw_chunk_outline(&mut fallback_gizmos, chunk, plane_y, y_min, y_max);
-            }
-        }
-    }
-
-    /// Draws chunk outline for the `client` module.
-    fn draw_chunk_outline<G: GizmoConfigGroup>(
-        gizmos: &mut Gizmos<G>,
-        chunk: IVec2,
-        plane_y: f32,
-        y_min: f32,
-        y_max: f32,
-    ) {
-        let x0 = chunk.x as f32 * CX as f32;
-        let z0 = chunk.y as f32 * CZ as f32;
-        let x1 = x0 + CX as f32;
-        let z1 = z0 + CZ as f32;
-        let border_color = Color::srgb(0.98, 0.88, 0.16);
-        let corner_color = Color::srgb(0.96, 0.54, 0.12);
-
-        gizmos.line(
-            Vec3::new(x0, plane_y, z0),
-            Vec3::new(x1, plane_y, z0),
-            border_color,
-        );
-        gizmos.line(
-            Vec3::new(x1, plane_y, z0),
-            Vec3::new(x1, plane_y, z1),
-            border_color,
-        );
-        gizmos.line(
-            Vec3::new(x1, plane_y, z1),
-            Vec3::new(x0, plane_y, z1),
-            border_color,
-        );
-        gizmos.line(
-            Vec3::new(x0, plane_y, z1),
-            Vec3::new(x0, plane_y, z0),
-            border_color,
-        );
-
-        gizmos.line(
-            Vec3::new(x0, y_min, z0),
-            Vec3::new(x0, y_max, z0),
-            corner_color,
-        );
-        gizmos.line(
-            Vec3::new(x1, y_min, z0),
-            Vec3::new(x1, y_max, z0),
-            corner_color,
-        );
-        gizmos.line(
-            Vec3::new(x1, y_min, z1),
-            Vec3::new(x1, y_max, z1),
-            corner_color,
-        );
-        gizmos.line(
-            Vec3::new(x0, y_min, z1),
-            Vec3::new(x0, y_max, z1),
-            corner_color,
-        );
-    }
 }
 
 /// Represents multiplayer client plugin used by the `client` module.
@@ -1177,6 +363,7 @@ impl Plugin for MultiplayerClientPlugin {
                     send_local_player_pose,
                 ),
             )
+            .add_systems(Update, stop_lan_host_after_disconnect)
             .add_systems(Update, smooth_remote_players);
     }
 }
@@ -1485,6 +672,7 @@ fn open_to_lan_requested(
             Ok(child) => {
                 info!("Started LAN host at {}", session_url);
                 local_host.child = Some(child);
+                local_host.stop_pending = false;
             }
             Err(error) => {
                 warn!("Failed to start LAN host: {}", error);
@@ -1543,9 +731,60 @@ fn finish_open_to_lan_connect(
 /// Runs the `stop_lan_host_requested` routine for stop lan host requested in the `client` module.
 fn stop_lan_host_requested(
     mut requests: MessageReader<StopLanHostRequest>,
+    runtime: Res<MultiplayerClientRuntime>,
+    q_active: Query<
+        (),
+        Or<(
+            With<Connected>,
+            With<lightyear::prelude::client::Connecting>,
+        )>,
+    >,
     mut local_host: NonSendMut<LocalLanHost>,
 ) {
     if requests.read().next().is_none() {
+        return;
+    }
+
+    let connection_active = runtime
+        .connection_entity
+        .map(|entity| q_active.get(entity).is_ok())
+        .unwrap_or(false);
+
+    if connection_active {
+        local_host.stop_pending = true;
+        return;
+    }
+
+    local_host.stop();
+}
+
+/// Stops local LAN host after disconnect is fully complete.
+fn stop_lan_host_after_disconnect(
+    runtime: Res<MultiplayerClientRuntime>,
+    q_active: Query<
+        (),
+        Or<(
+            With<Connected>,
+            With<lightyear::prelude::client::Connecting>,
+        )>,
+    >,
+    mut local_host: NonSendMut<LocalLanHost>,
+) {
+    if !local_host.stop_pending {
+        return;
+    }
+
+    local_host.refresh();
+    if local_host.child.is_none() {
+        local_host.stop_pending = false;
+        return;
+    }
+
+    let connection_active = runtime
+        .connection_entity
+        .map(|entity| q_active.get(entity).is_ok())
+        .unwrap_or(false);
+    if connection_active {
         return;
     }
 
@@ -1772,16 +1011,18 @@ fn receive_chat_messages(
     mut chat_log: ResMut<ChatLog>,
     mut game_mode: ResMut<GameModeState>,
     mut flight_state: Query<&mut FlightState>,
+    mut q_player: Query<&mut Transform, With<Player>>,
     mut q: Query<(
         &mut MessageReceiver<ServerChatMessage>,
         &mut MessageReceiver<ServerGameModeChanged>,
+        &mut MessageReceiver<ServerTeleport>,
     )>,
 ) {
     let Some(entity) = runtime.connection_entity else {
         return;
     };
 
-    let Ok((mut recv_chat, mut recv_game_mode)) = q.get_mut(entity) else {
+    let Ok((mut recv_chat, mut recv_game_mode, mut recv_teleport)) = q.get_mut(entity) else {
         return;
     };
 
@@ -1795,6 +1036,15 @@ fn receive_chat_messages(
         }
         apply_local_game_mode(message.mode, &mut game_mode, &mut flight_state);
     }
+
+    for message in recv_teleport.receive() {
+        if Some(message.player_id) != runtime.local_player_id {
+            continue;
+        }
+        if let Ok(mut player_transform) = q_player.single_mut() {
+            player_transform.translation = Vec3::from_array(message.translation);
+        }
+    }
 }
 
 /// Handles locally submitted chat input and forwards it to multiplayer or local command handling.
@@ -1807,6 +1057,9 @@ fn handle_chat_submit_requests(
     mut chat_log: ResMut<ChatLog>,
     mut game_mode: ResMut<GameModeState>,
     mut flight_state: Query<&mut FlightState>,
+    world_gen_config: Res<WorldGenConfig>,
+    biomes: Res<BiomeRegistry>,
+    mut q_player: Query<&mut Transform, With<Player>>,
 ) {
     for request in submit_requests.read() {
         let text = request.text.trim();
@@ -1881,6 +1134,139 @@ fn handle_chat_submit_requests(
                         format!("Game mode set to {}.", mode.as_str()),
                     );
                 }
+                "locate" => {
+                    let Some(raw_type) = command.args.first() else {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Usage: /locate <biome> <name:key>".to_string(),
+                        );
+                        continue;
+                    };
+                    let Some(raw_target) = command.args.get(1) else {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Usage: /locate <biome> <name:key>".to_string(),
+                        );
+                        continue;
+                    };
+
+                    if !raw_type.eq_ignore_ascii_case("biome") {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Only type 'biome' is supported right now.".to_string(),
+                        );
+                        continue;
+                    }
+
+                    let target = raw_target.trim();
+                    if !target.contains(':') {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Biome key must be in format 'name:key'.".to_string(),
+                        );
+                        continue;
+                    }
+
+                    if biomes.get_by_localized_name(target).is_none() {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            format!("Unknown biome '{}'.", target),
+                        );
+                        continue;
+                    }
+
+                    let Ok(player_transform) = q_player.single() else {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Could not resolve player position for locate.".to_string(),
+                        );
+                        continue;
+                    };
+
+                    let world_x = player_transform.translation.x.floor() as i32;
+                    let world_z = player_transform.translation.z.floor() as i32;
+                    let (origin_chunk, _) = world_to_chunk_xz(world_x, world_z);
+
+                    let Some(found_chunk) = locate_biome_chunk_by_localized_name(
+                        &biomes,
+                        world_gen_config.seed,
+                        origin_chunk,
+                        target,
+                        LOCATE_MAX_RADIUS_CHUNKS,
+                    ) else {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            format!("Biome '{}' not found nearby.", target),
+                        );
+                        continue;
+                    };
+
+                    let found_x = found_chunk.x * CX as i32 + (CX as i32 / 2);
+                    let found_z = found_chunk.y * CZ as i32 + (CZ as i32 / 2);
+                    push_system_chat(
+                        &mut chat_log,
+                        SystemMessageLevel::Info,
+                        format!("found: [{}, {}]", found_x, found_z),
+                    );
+                }
+                "tp" => {
+                    let args = command.args.as_slice();
+                    if args.is_empty() {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Usage: /tp <player>|<x y z>|<player player>|<player x y z>"
+                                .to_string(),
+                        );
+                        continue;
+                    }
+
+                    match args.len() {
+                        3 => {
+                            let Ok(target) = parse_tp_xyz(&args[0], &args[1], &args[2]) else {
+                                push_system_chat(
+                                    &mut chat_log,
+                                    SystemMessageLevel::Warn,
+                                    "Usage: /tp <x> <y> <z>".to_string(),
+                                );
+                                continue;
+                            };
+                            let Ok(mut player_transform) = q_player.single_mut() else {
+                                push_system_chat(
+                                    &mut chat_log,
+                                    SystemMessageLevel::Warn,
+                                    "Could not resolve player for teleport.".to_string(),
+                                );
+                                continue;
+                            };
+                            player_transform.translation = Vec3::new(target[0], target[1], target[2]);
+                            push_system_chat(
+                                &mut chat_log,
+                                SystemMessageLevel::Info,
+                                format!(
+                                    "Teleported to [{:.2}, {:.2}, {:.2}].",
+                                    target[0], target[1], target[2]
+                                ),
+                            );
+                        }
+                        _ => {
+                            push_system_chat(
+                                &mut chat_log,
+                                SystemMessageLevel::Warn,
+                                "Local /tp supports only coordinates: /tp <x> <y> <z>. \
+In multiplayer all /tp variants are available."
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
                 _ => {
                     push_system_chat(
                         &mut chat_log,
@@ -1907,6 +1293,13 @@ fn push_system_chat(chat_log: &mut ChatLog, level: SystemMessageLevel, message: 
         CommandSender::System(SystemSender::Server { level }),
         message,
     ));
+}
+
+fn parse_tp_xyz(x: &str, y: &str, z: &str) -> Result<[f32; 3], ()> {
+    let x = x.trim().parse::<f32>().map_err(|_| ())?;
+    let y = y.trim().parse::<f32>().map_err(|_| ())?;
+    let z = z.trim().parse::<f32>().map_err(|_| ())?;
+    Ok([x, y, z])
 }
 
 fn apply_local_game_mode(

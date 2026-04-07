@@ -1,0 +1,14 @@
+{
+  "name": "mossy_cobble_stone_block",
+  "texture_dir": "textures/blocks/mossy_cobble_stone",
+  "texture": {
+    "all": "mossy_cobble"
+  },
+  "stats": {
+    "hardness": 4.0,
+    "blast_resistance": 3.25,
+    "level": "1",
+    "opaque": true,
+    "emissive": 0.0
+  }
+}

@@ -2,13 +2,13 @@ use bevy::prelude::*;
 
 /// Chunk dimensions in cells (X × Y × Z).
 pub const CX: usize = 32;
-pub const CY: usize = 384;
+pub const CY: usize = 320;
 pub const CZ: usize = 32;
 
 /// Inclusive world-space vertical bounds covered by a single column of chunks.
 ///
 /// Invariants: `CY == (Y_MAX - Y_MIN + 1)`.
-pub const Y_MIN: i32 = -128;
+pub const Y_MIN: i32 = -96;
 pub const Y_MAX: i32 = Y_MIN + CY as i32 - 1;
 
 /// Height of a vertical section within a chunk (in cells).

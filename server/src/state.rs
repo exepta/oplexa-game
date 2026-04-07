@@ -12,6 +12,7 @@ use api::{
     generator::chunk::{
         cave_utils::{CaveParams, worm_edits_for_chunk},
         chunk_utils::{encode_chunk, load_or_gen_chunk_async},
+        trees::registry::TreeRegistry,
     },
 };
 use bevy::ecs::entity::Entity;
@@ -51,6 +52,7 @@ pub struct ServerState {
     pub world_root: PathBuf,
     pub block_registry: BlockRegistry,
     pub biome_registry: BiomeRegistry,
+    pub tree_registry: TreeRegistry,
     pub world_gen_config: WorldGenConfig,
     pub block_overrides: HashMap<[i32; 3], u16>,
     pub streamed_chunk_cache: HashMap<IVec2, Vec<u8>>,
@@ -73,6 +75,7 @@ impl ServerState {
     pub fn new(world_root: PathBuf, world_seed: i32) -> Self {
         let block_registry = BlockRegistry::load_headless("assets/blocks");
         let biome_registry = BiomeRegistry::load_from_folder("assets/biomes");
+        let tree_registry = TreeRegistry::load_from_folder("assets/data/trees");
         let world_gen_config = WorldGenConfig { seed: world_seed };
         let block_overrides = load_block_overrides(world_root.join("blocks.txt").as_path());
         AsyncComputeTaskPool::get_or_init(TaskPool::default);
@@ -80,6 +83,7 @@ impl ServerState {
             world_root,
             block_registry,
             biome_registry,
+            tree_registry,
             world_gen_config,
             block_overrides,
             streamed_chunk_cache: HashMap::new(),
@@ -135,6 +139,7 @@ impl ServerState {
         let world_root = self.world_root.clone();
         let block_registry = self.block_registry.clone();
         let biome_registry = self.biome_registry.clone();
+        let tree_registry = self.tree_registry.clone();
         let world_gen_config = self.world_gen_config.clone();
         let pool = AsyncComputeTaskPool::get();
         let task = pool.spawn(async move {
@@ -143,6 +148,7 @@ impl ServerState {
                 coord,
                 &block_registry,
                 &biome_registry,
+                &tree_registry,
                 world_gen_config,
             )
             .await;

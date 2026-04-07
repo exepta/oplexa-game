@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use fastnoise_lite::*;
+use std::collections::HashSet;
 
 /* =========================
 Safety / globals
@@ -684,18 +685,31 @@ pub fn worm_edits_for_chunk(
         }
     };
 
-    /* ------------------------- tunnels ------------------------- */
+    // Side spur used to break up "too ordered" tunnel flow.
+    let carve_side_spur = |out: &mut Vec<(u16, u16, u16)>,
+                           start: Vec3,
+                           base_dir: Vec3,
+                           base_r: f32,
+                           turn_sign: f32,
+                           chaos: f32| {
+        let mut p_prev = start;
+        let side = Vec3::new(-base_dir.z, 0.0, base_dir.x) * turn_sign.signum().max(-1.0);
+        let mut d = clamp_pitch(
+            (side * 0.82 + base_dir * 0.28 + Vec3::Y * ((chaos - 0.5) * 0.25)).normalize(),
+        );
 
-    for w in worms {
-        let mut p_prev = w.start;
-        let mut d = clamp_pitch(w.dir);
+        let spur_steps = (18.0 + chaos * 28.0).round() as i32;
+        let step_len = (base_r * (0.42 + 0.18 * chaos)).max(0.45);
 
-        for step in 0..w.steps {
-            // Curvature
-            let n1 = warp.get_noise_3d(p_prev.x, p_prev.y, p_prev.z);
-            let n2 = warp.get_noise_3d(p_prev.z * 0.7, p_prev.x * 0.7, p_prev.y * 0.7);
-            let yaw_delta = n1 * 0.09;
-            let pitch_delta = n2 * 0.06;
+        for s in 0..spur_steps.max(1) {
+            let n1 = warp.get_noise_3d(p_prev.x * 1.25, p_prev.y * 1.25, p_prev.z * 1.25);
+            let n2 = warp.get_noise_3d(
+                p_prev.z * 0.95 + 11.1,
+                p_prev.x * 0.95 - 7.3,
+                p_prev.y * 0.95 + 5.4,
+            );
+            let yaw_delta = n1 * 0.17 + turn_sign * 0.03;
+            let pitch_delta = n2 * 0.11;
 
             let cy = yaw_delta.cos();
             let sy = yaw_delta.sin();
@@ -707,7 +721,68 @@ pub fn worm_edits_for_chunk(
             let dy = d.y * cp + sp * dx.hypot(dz).min(1.0);
             d = clamp_pitch(Vec3::new(dx, dy, dz).normalize());
 
-            let p_next = p_prev + d * w.step_len;
+            let p_next = p_prev + d * step_len;
+            if (p_next.y as i32) < params.y_bottom - 8 || (p_next.y as i32) > params.y_top + 20 {
+                break;
+            }
+
+            let max_r = (base_r * 0.8).ceil() as i32 + 1;
+            let min_x = (p_prev.x.min(p_next.x) as i32) - max_r;
+            let max_x = (p_prev.x.max(p_next.x) as i32) + max_r;
+            let min_z = (p_prev.z.min(p_next.z) as i32) - max_r;
+            let max_z = (p_prev.z.max(p_next.z) as i32) + max_r;
+            if max_x < wx0 || min_x > wx1 || max_z < wz0 || min_z > wz1 {
+                p_prev = p_next;
+                continue;
+            }
+
+            let t = s as f32 / spur_steps.max(1) as f32;
+            let rh = lerp((base_r * 0.72).max(1.8), (base_r * 0.38).max(1.35), t);
+            let rv = (rh * 0.82).max(1.4);
+
+            let seg = p_next - p_prev;
+            let seg_len = seg.length().max(1e-4);
+            let samples = (seg_len / (rh * 0.6).max(0.45)).ceil() as i32;
+            for k in 0..=samples {
+                let tk = k as f32 / samples.max(1) as f32;
+                let q = p_prev.lerp(p_next, tk);
+                append_ellipsoid_into_chunk(out, q, rh, rv, rh, wx0, wz0, chunk_size, y_min, y_max);
+            }
+
+            p_prev = p_next;
+        }
+    };
+
+    /* ------------------------- tunnels ------------------------- */
+
+    for w in worms {
+        let mut p_prev = w.start;
+        let mut d = clamp_pitch(w.dir);
+
+        for step in 0..w.steps {
+            // Curvature
+            let n1 = warp.get_noise_3d(p_prev.x, p_prev.y, p_prev.z);
+            let n2 = warp.get_noise_3d(p_prev.z * 0.7, p_prev.x * 0.7, p_prev.y * 0.7);
+            let n3 = warp.get_noise_3d(
+                p_prev.x * 0.37 + 17.0,
+                p_prev.y * 0.37 - 9.0,
+                p_prev.z * 0.37 + 31.0,
+            );
+            let yaw_delta = n1 * 0.12 + n3 * 0.06;
+            let pitch_delta = n2 * 0.08 + n3 * 0.03;
+
+            let cy = yaw_delta.cos();
+            let sy = yaw_delta.sin();
+            let cp = pitch_delta.cos();
+            let sp = pitch_delta.sin();
+
+            let dx = cy * d.x + sy * d.z;
+            let dz = -sy * d.x + cy * d.z;
+            let dy = d.y * cp + sp * dx.hypot(dz).min(1.0);
+            d = clamp_pitch(Vec3::new(dx, dy, dz).normalize());
+
+            let step_len_jitter = w.step_len * (0.88 + 0.26 * (0.5 * (n3 + 1.0)));
+            let p_next = p_prev + d * step_len_jitter;
 
             // Keep simulation going even when outside the main window,
             // but only carve inside the nominal [y_bottom, y_top] band
@@ -763,6 +838,27 @@ pub fn worm_edits_for_chunk(
                         y_min,
                         y_max,
                     );
+                }
+            }
+
+            // Side branches make cave paths less linear/ordered.
+            if step > 8 && (step % 17 == 0) {
+                let branch_v = 0.5
+                    * (warp.get_noise_3d(
+                        p_next.x * 0.31 + 77.0,
+                        p_next.y * 0.31 - 41.0,
+                        p_next.z * 0.31 + 19.0,
+                    ) + 1.0);
+                if branch_v > 0.84 {
+                    let turn_sign =
+                        if warp.get_noise_3d(p_next.z * 0.22, p_next.x * 0.22, p_next.y * 0.22)
+                            >= 0.0
+                        {
+                            1.0
+                        } else {
+                            -1.0
+                        };
+                    carve_side_spur(&mut edits, p_next, d, r_h, turn_sign, branch_v);
                 }
             }
 
@@ -913,34 +1009,52 @@ pub fn worm_edits_for_chunk(
             }
         }
 
-        // Connect rooms by shortest links
+        // Connect rooms as an irregular network (instead of strict nearest chain).
         if cluster.rooms.len() >= 2 {
-            let mut used = vec![false; cluster.rooms.len()];
-            let mut idx = 0usize;
-            used[idx] = true;
-            for _ in 1..cluster.rooms.len() {
-                let p = cluster.rooms[idx].center;
-                let mut best: Option<(usize, f32)> = None;
-                for (j, r) in cluster.rooms.iter().enumerate() {
-                    if used[j] {
+            let mut linked: HashSet<(usize, usize)> = HashSet::new();
+
+            for i in 0..cluster.rooms.len() {
+                let mut neigh: Vec<(usize, f32)> = (0..cluster.rooms.len())
+                    .filter(|&j| j != i)
+                    .map(|j| {
+                        (
+                            j,
+                            (cluster.rooms[j].center - cluster.rooms[i].center).length_squared(),
+                        )
+                    })
+                    .collect();
+                neigh.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+                let target_links = if cluster.rooms.len() >= 6 { 3 } else { 2 };
+                for (rank, (j, _)) in neigh.into_iter().take(target_links).enumerate() {
+                    let key = if i < j { (i, j) } else { (j, i) };
+                    if linked.contains(&key) {
                         continue;
                     }
-                    let d2 = (r.center - p).length_squared();
-                    if best.map_or(true, |(_, bd)| d2 < bd) {
-                        best = Some((j, d2));
+
+                    if rank > 0 {
+                        let mid = cluster.rooms[i].center.lerp(cluster.rooms[j].center, 0.5);
+                        let chaos = 0.5
+                            * (warp.get_noise_3d(
+                                mid.x * 0.065 + i as f32 * 0.7,
+                                mid.y * 0.065 + j as f32 * 0.9,
+                                mid.z * 0.065 + rank as f32 * 3.1,
+                            ) + 1.0);
+                        let threshold = if rank == 1 { 0.74 } else { 0.45 };
+                        if chaos > threshold {
+                            continue;
+                        }
                     }
-                }
-                if let Some((j, _)) = best {
+
                     append_corridor(
                         &mut edits,
-                        &cluster.rooms[idx],
+                        &cluster.rooms[i],
                         &cluster.rooms[j],
                         cluster.noisy,
                         params.seed,
                         cluster.connector_r,
                     );
-                    used[j] = true;
-                    idx = j;
+                    linked.insert(key);
                 }
             }
         }

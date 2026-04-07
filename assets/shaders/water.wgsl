@@ -1,6 +1,7 @@
  // shaders/water.wgsl
 
-#import bevy_pbr::mesh_view_bindings
+#import bevy_pbr::mesh_view_bindings::{view, fog}
+#import bevy_pbr::pbr_functions::apply_fog
 #import bevy_pbr::prepass_utils::prepass_depth
 #import bevy_pbr::view_transformations::{
   position_world_to_clip,
@@ -80,7 +81,6 @@ fn vertex(v: VertexInput) -> VOut {
 
 @fragment
 fn fragment(in: VOut) -> @location(0) vec4<f32> {
-  let view    = bevy_pbr::mesh_view_bindings::view;
   let cam_pos = (view.world_from_view * vec4<f32>(0.0,0.0,0.0,1.0)).xyz;
   let V       = normalize(cam_pos - in.world_pos);
   let N       = normalize(in.normal_ws);
@@ -132,7 +132,14 @@ fn fragment(in: VOut) -> @location(0) vec4<f32> {
   let a_base       = params.tint.a;
   let a_final      = clamp(a_base + contact * 0.12, 0.0, 1.0);
 
-  let rgb_lit    = (fres_rgb * contact_dark) + vec3<f32>(spec);
-  let rgb_premul = rgb_lit * a_final; // premultiplied
-  return vec4<f32>(rgb_premul, a_final);
+  let rgb_lit = (fres_rgb * contact_dark) + vec3<f32>(spec);
+  let fogged = apply_fog(
+    fog,
+    vec4<f32>(rgb_lit, a_final),
+    in.world_pos,
+    view.world_position.xyz
+  );
+
+  // Keep premultiplied output because material blend mode is premultiplied alpha.
+  return vec4<f32>(fogged.rgb * fogged.a, fogged.a);
 }

@@ -1,11 +1,11 @@
-use crate::core::config::WorldGenConfig;
+use crate::core::config::{GlobalConfig, WorldGenConfig};
 use crate::core::events::block::block_player_events::BlockBreakByPlayerEvent;
 use crate::core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent};
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::shader::water_shader::{WaterMatHandle, WaterMaterial};
 use crate::core::states::states::{AppState, InGameStates, LoadingStates};
 use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, id_any};
-use crate::core::world::chunk::{BIG, ChunkMap, MAX_UPDATE_FRAMES, SEA_LEVEL};
+use crate::core::world::chunk::{BIG, ChunkMap, LoadCenter, MAX_UPDATE_FRAMES, SEA_LEVEL};
 use crate::core::world::chunk_dimension::*;
 use crate::core::world::fluid::*;
 use crate::core::world::save::{RegionCache, WorldSave};
@@ -17,11 +17,12 @@ use bevy::tasks::AsyncComputeTaskPool;
 use futures_lite::future;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-const WATER_GEN_BUDGET_PER_FRAME: usize = 48;
-const MAX_INFLIGHT_WATER_LOAD: usize = 32;
+const WATER_GEN_BUDGET_PER_FRAME: usize = 24;
+const MAX_INFLIGHT_WATER_LOAD: usize = 16;
+const WATER_FINISH_HOLD_SECS: f32 = 1.0;
 
-const MAX_INFLIGHT_WATER_MESH: usize = 64;
-const MAX_WATER_MESH_APPLY_PER_FRAME: usize = MAX_UPDATE_FRAMES / 2;
+const MAX_INFLIGHT_WATER_MESH: usize = 24;
+const MAX_WATER_MESH_APPLY_PER_FRAME: usize = MAX_UPDATE_FRAMES / 6;
 
 /// Represents water boot used by the `generator::chunk::water_builder` module.
 #[derive(Resource, Default)]
@@ -65,6 +66,14 @@ pub struct WaterFlowQueue(pub(crate) VecDeque<FlowJob>);
 #[derive(Resource, Default)]
 pub struct PendingWaterFlow(pub HashMap<u64, bevy::tasks::Task<(u64, FlowResult)>>);
 
+#[derive(Resource, Default)]
+pub struct WaterReadySet(pub HashSet<IVec2>);
+
+#[derive(Component, Copy, Clone)]
+struct WaterSubchunkMesh {
+    coord: IVec2,
+}
+
 /// Represents water flow ids used by the `generator::chunk::water_builder` module.
 #[derive(Resource, Default)]
 pub struct WaterFlowIds {
@@ -76,6 +85,22 @@ impl WaterFlowIds {
         let id = self.next;
         self.next += 1;
         id
+    }
+}
+
+/// Holds the final transition from WaterGen to InGame for a short moment.
+#[derive(Resource)]
+struct WaterFinishDelay {
+    armed: bool,
+    timer: Timer,
+}
+
+impl Default for WaterFinishDelay {
+    fn default() -> Self {
+        Self {
+            armed: false,
+            timer: Timer::from_seconds(WATER_FINISH_HOLD_SECS, TimerMode::Once),
+        }
     }
 }
 
@@ -92,11 +117,40 @@ struct WaterCleanupState<'w, 's> {
     flow_q: ResMut<'w, WaterFlowQueue>,
     pending_flow: ResMut<'w, PendingWaterFlow>,
     flow_ids: ResMut<'w, WaterFlowIds>,
+    ready_set: ResMut<'w, WaterReadySet>,
+    _marker: std::marker::PhantomData<&'s ()>,
+}
+
+#[derive(SystemParam)]
+struct WaterUnloadState<'w, 's> {
+    pending_save: ResMut<'w, PendingWaterSave>,
+    todo: Option<ResMut<'w, WaterMeshingTodo>>,
+    backlog: Option<ResMut<'w, WaterMeshBacklog>>,
+    pending_mesh: Option<ResMut<'w, PendingWaterMesh>>,
+    pending_load: Option<ResMut<'w, PendingWaterLoad>>,
+    flow_q: Option<ResMut<'w, WaterFlowQueue>>,
+    q: Option<ResMut<'w, WaterGenQueue>>,
+    ready_set: ResMut<'w, WaterReadySet>,
     _marker: std::marker::PhantomData<&'s ()>,
 }
 
 /// Represents water builder used by the `generator::chunk::water_builder` module.
 pub struct WaterBuilder;
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum WaterLocalPipelineSet {
+    Prep,
+    Gen,
+    Mesh,
+    Events,
+    Finish,
+}
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum WaterRemotePipelineSet {
+    Mesh,
+    Events,
+}
 
 impl Plugin for WaterBuilder {
     /// Builds this component for the `generator::chunk::water_builder` module.
@@ -113,29 +167,20 @@ impl Plugin for WaterBuilder {
             .init_resource::<WaterFlowQueue>()
             .init_resource::<PendingWaterFlow>()
             .init_resource::<WaterFlowIds>()
+            .init_resource::<WaterReadySet>()
+            .init_resource::<WaterFinishDelay>()
             .add_systems(
                 OnEnter(AppState::Loading(LoadingStates::WaterGen)),
-                water_gen_build_worklist,
+                (reset_water_finish_delay, water_gen_build_worklist).chain(),
             )
-            .add_systems(
+            .configure_sets(
                 Update,
                 (
-                    collect_water_save_tasks,
-                    water_mark_from_dirty,
-                    water_track_new_chunks,
-                    // Gen/Load
-                    schedule_water_generation_jobs,
-                    collect_water_generation_jobs,
-                    // Mesh
-                    water_backlog_from_todo,
-                    water_drain_mesh_backlog,
-                    water_collect_meshed_subchunks,
-                    // Unload & Co.
-                    water_unload_on_event,
-                    enqueue_flow_on_block_removed,
-                    schedule_flow_jobs,
-                    collect_flow_jobs,
-                    water_finish_check,
+                    WaterLocalPipelineSet::Prep,
+                    WaterLocalPipelineSet::Gen,
+                    WaterLocalPipelineSet::Mesh,
+                    WaterLocalPipelineSet::Events,
+                    WaterLocalPipelineSet::Finish,
                 )
                     .chain()
                     .run_if(uses_local_world_data)
@@ -144,6 +189,60 @@ impl Plugin for WaterBuilder {
                             .or(in_state(AppState::InGame(InGameStates::Game))),
                     ),
             )
+            .configure_sets(
+                Update,
+                (WaterRemotePipelineSet::Mesh, WaterRemotePipelineSet::Events)
+                    .chain()
+                    .run_if(uses_remote_world_data)
+                    .run_if(
+                        in_state(AppState::Loading(LoadingStates::BaseGen))
+                            .or(in_state(AppState::InGame(InGameStates::Game))),
+                    ),
+            )
+            .add_systems(
+                Update,
+                (
+                    collect_water_save_tasks,
+                    water_mark_from_dirty,
+                    water_track_new_chunks,
+                )
+                    .chain()
+                    .in_set(WaterLocalPipelineSet::Prep),
+            )
+            .add_systems(
+                Update,
+                (
+                    schedule_water_generation_jobs,
+                    collect_water_generation_jobs,
+                )
+                    .chain()
+                    .in_set(WaterLocalPipelineSet::Gen),
+            )
+            .add_systems(
+                Update,
+                (
+                    water_backlog_from_todo,
+                    water_drain_mesh_backlog,
+                    water_collect_meshed_subchunks,
+                )
+                    .chain()
+                    .in_set(WaterLocalPipelineSet::Mesh),
+            )
+            .add_systems(
+                Update,
+                (
+                    water_unload_on_event,
+                    enqueue_flow_on_block_removed,
+                    schedule_flow_jobs,
+                    collect_flow_jobs,
+                )
+                    .chain()
+                    .in_set(WaterLocalPipelineSet::Events),
+            )
+            .add_systems(
+                Update,
+                water_finish_check.in_set(WaterLocalPipelineSet::Finish),
+            )
             .add_systems(
                 Update,
                 (
@@ -151,15 +250,39 @@ impl Plugin for WaterBuilder {
                     water_backlog_from_todo,
                     water_drain_mesh_backlog,
                     water_collect_meshed_subchunks,
+                )
+                    .chain()
+                    .in_set(WaterRemotePipelineSet::Mesh),
+            )
+            .add_systems(
+                Update,
+                (
                     water_unload_on_event,
                     enqueue_flow_on_block_removed,
                     schedule_flow_jobs,
                     collect_flow_jobs,
                 )
                     .chain()
-                    .run_if(uses_remote_world_data)
+                    .in_set(WaterRemotePipelineSet::Events),
+            )
+            .add_systems(
+                Update,
+                sync_water_mesh_visibility.run_if(
+                    in_state(AppState::Loading(LoadingStates::BaseGen))
+                        .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
+                        .or(in_state(AppState::Loading(LoadingStates::WaterGen)))
+                        .or(in_state(AppState::InGame(InGameStates::Game))),
+                ),
+            )
+            .add_systems(
+                Update,
+                sync_water_ready_set
+                    .after(WaterLocalPipelineSet::Events)
+                    .before(WaterLocalPipelineSet::Finish)
+                    .run_if(uses_local_world_data)
                     .run_if(
                         in_state(AppState::Loading(LoadingStates::BaseGen))
+                            .or(in_state(AppState::Loading(LoadingStates::WaterGen)))
                             .or(in_state(AppState::InGame(InGameStates::Game))),
                     ),
             );
@@ -531,6 +654,9 @@ fn schedule_water_generation_jobs(
     ws: Res<WorldSave>,
     gen_cfg: Res<WorldGenConfig>,
     mut pending: ResMut<PendingWaterLoad>,
+    q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    load_center: Option<Res<LoadCenter>>,
+    game_config: Res<GlobalConfig>,
     app_state: Res<State<AppState>>,
 ) {
     let max_inflight = if in_water_gen(&app_state) {
@@ -556,9 +682,47 @@ fn schedule_water_generation_jobs(
 
     let pool = AsyncComputeTaskPool::get();
     let seed = gen_cfg.seed as u32;
+    let center_c = if let Ok(t) = q_cam.single() {
+        let (c, _) = world_to_chunk_xz(
+            (t.translation().x / VOXEL_SIZE).floor() as i32,
+            (t.translation().z / VOXEL_SIZE).floor() as i32,
+        );
+        c
+    } else if let Some(lc) = load_center {
+        lc.world_xz
+    } else {
+        IVec2::ZERO
+    };
+    let visible = game_config.graphics.chunk_range.max(0);
+    let loaded = if visible >= 10 { visible + 4 } else { visible };
 
     while budget > 0 {
-        let Some(coord) = q.work.pop_front() else {
+        let next = if in_water_gen(&app_state) {
+            q.work.pop_front()
+        } else {
+            let best = q
+                .work
+                .iter()
+                .take(1024)
+                .enumerate()
+                .min_by_key(|(_, coord)| {
+                    let dx = coord.x - center_c.x;
+                    let dz = coord.y - center_c.y;
+                    let rank = if dx.abs() <= visible && dz.abs() <= visible {
+                        0
+                    } else if dx.abs() <= loaded && dz.abs() <= loaded {
+                        1
+                    } else {
+                        2
+                    };
+                    (rank, dx * dx + dz * dz)
+                })
+                .map(|(idx, _)| idx);
+            best.and_then(|idx| q.work.remove(idx))
+                .or_else(|| q.work.pop_front())
+        };
+
+        let Some(coord) = next else {
             break;
         };
         if water.0.contains_key(&coord) {
@@ -650,6 +814,11 @@ fn water_mark_from_dirty(
     }
 }
 
+fn reset_water_finish_delay(mut delay: ResMut<WaterFinishDelay>) {
+    delay.armed = false;
+    delay.timer.reset();
+}
+
 /// Runs the `water_finish_check` routine for water finish check in the `generator::chunk::water_builder` module.
 fn water_finish_check(
     chunk_map: Res<ChunkMap>,
@@ -660,23 +829,46 @@ fn water_finish_check(
     to_mesh: Res<WaterMeshingTodo>,
     pending_mesh: Res<PendingWaterMesh>,
     backlog: Res<WaterMeshBacklog>,
+    ready_set: Res<WaterReadySet>,
+    mut delay: ResMut<WaterFinishDelay>,
+    time: Res<Time>,
     app_state: Res<State<AppState>>,
     mut next: ResMut<NextState<AppState>>,
 ) {
     let in_water_gen = matches!(app_state.get(), AppState::Loading(LoadingStates::WaterGen));
     if !in_water_gen {
+        delay.armed = false;
+        delay.timer.reset();
         return;
     }
 
     let coverage_ok = all_chunks_have_water(&chunk_map, &water);
+    let finalized_ok = chunk_map
+        .chunks
+        .keys()
+        .all(|coord| ready_set.0.contains(coord));
 
     let gen_done = q.work.is_empty() && pending_load.0.is_empty();
     let mesh_done = to_mesh.0.is_empty() && backlog.0.is_empty() && pending_mesh.0.is_empty();
     let world_ok = !chunk_map.chunks.is_empty();
 
-    if boot.started && world_ok && gen_done && coverage_ok && mesh_done {
-        debug!("Water gen complete");
-        next.set(AppState::InGame(InGameStates::Game));
+    if boot.started && world_ok && gen_done && coverage_ok && mesh_done && finalized_ok {
+        if !delay.armed {
+            delay.armed = true;
+            delay.timer.reset();
+            return;
+        }
+
+        delay.timer.tick(time.delta());
+        if delay.timer.is_finished() {
+            debug!("Water gen complete");
+            delay.armed = false;
+            delay.timer.reset();
+            next.set(AppState::InGame(InGameStates::Game));
+        }
+    } else if delay.armed {
+        delay.armed = false;
+        delay.timer.reset();
     }
 }
 
@@ -691,28 +883,23 @@ fn water_unload_on_event(
     chunk_map: Res<ChunkMap>,
     ws: Res<WorldSave>,
     multiplayer_connection: Res<MultiplayerConnectionState>,
-    mut pending_save: ResMut<PendingWaterSave>,
-    mut todo: Option<ResMut<WaterMeshingTodo>>,
-    mut backlog: Option<ResMut<WaterMeshBacklog>>,
-    mut pending_mesh: Option<ResMut<PendingWaterMesh>>,
-    mut pending_load: Option<ResMut<PendingWaterLoad>>,
-    mut flow_q: Option<ResMut<WaterFlowQueue>>,
-    mut q: Option<ResMut<WaterGenQueue>>,
+    mut unload: WaterUnloadState,
 ) {
     for ChunkUnloadEvent { coord } in ev.read().copied() {
-        if let Some(t) = todo.as_mut() {
+        unload.ready_set.0.remove(&coord);
+        if let Some(t) = unload.todo.as_mut() {
             t.0.remove(&coord);
         }
-        if let Some(b) = backlog.as_mut() {
+        if let Some(b) = unload.backlog.as_mut() {
             b.0.retain(|(c, _)| *c != coord);
         }
-        if let Some(pm) = pending_mesh.as_mut() {
+        if let Some(pm) = unload.pending_mesh.as_mut() {
             pm.0.retain(|(c, _), _| *c != coord);
         }
-        if let Some(pl) = pending_load.as_mut() {
+        if let Some(pl) = unload.pending_load.as_mut() {
             pl.0.remove(&coord);
         }
-        if let Some(fq) = flow_q.as_mut() {
+        if let Some(fq) = unload.flow_q.as_mut() {
             fq.0.retain(|job| job.seeds.iter().all(|s| s.c != coord));
         }
 
@@ -726,7 +913,7 @@ fn water_unload_on_event(
                     save_water_chunk_at_root_sync(root, coord, &wc);
                     coord
                 });
-                pending_save.0.insert(coord, task);
+                unload.pending_save.0.insert(coord, task);
             }
         }
 
@@ -740,7 +927,7 @@ fn water_unload_on_event(
             despawn_water_mesh(key, &mut windex, &mut commands, &q_mesh, &mut meshes);
         }
 
-        if let Some(q) = q.as_mut() {
+        if let Some(q) = unload.q.as_mut() {
             q.work.retain(|c| *c != coord);
         }
     }
@@ -789,6 +976,7 @@ fn cleanup_water_runtime_on_exit(
     cleanup.flow_q.0.clear();
     cleanup.pending_flow.0.clear();
     cleanup.flow_ids.next = 0;
+    cleanup.ready_set.0.clear();
 }
 
 /// Runs the `collect_water_save_tasks` routine for collect water save tasks in the `generator::chunk::water_builder` module.
@@ -829,6 +1017,7 @@ fn save_all_water_on_exit(
 /// Runs the `water_backlog_from_todo` routine for water backlog from todo in the `generator::chunk::water_builder` module.
 fn water_backlog_from_todo(
     mut todo: ResMut<WaterMeshingTodo>,
+    chunk_map: Res<ChunkMap>,
     water: Res<FluidMap>,
     mut backlog: ResMut<WaterMeshBacklog>,
 ) {
@@ -839,6 +1028,14 @@ fn water_backlog_from_todo(
     let coords: Vec<_> = todo.0.drain().collect();
 
     for coord in coords {
+        if !chunk_map.chunks.contains_key(&coord) {
+            continue;
+        }
+        if !chunk_base_ready(coord, &chunk_map) {
+            // Base terrain not ready yet -> try again later.
+            todo.0.insert(coord);
+            continue;
+        }
         if let Some(fc) = water.0.get(&coord) {
             for sub in 0..SEC_COUNT {
                 if fc.sub_has_any(sub) {
@@ -858,6 +1055,9 @@ fn water_drain_mesh_backlog(
     mut pending: ResMut<PendingWaterMesh>,
     chunk_map: Res<ChunkMap>,
     water: Res<FluidMap>,
+    q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    load_center: Option<Res<LoadCenter>>,
+    game_config: Res<GlobalConfig>,
     app_state: Res<State<AppState>>,
 ) {
     let max_inflight = if in_water_gen(&app_state) {
@@ -866,15 +1066,58 @@ fn water_drain_mesh_backlog(
         MAX_INFLIGHT_WATER_MESH
     };
     let pool = AsyncComputeTaskPool::get();
+    let center_c = if let Ok(t) = q_cam.single() {
+        let (c, _) = world_to_chunk_xz(
+            (t.translation().x / VOXEL_SIZE).floor() as i32,
+            (t.translation().z / VOXEL_SIZE).floor() as i32,
+        );
+        c
+    } else if let Some(lc) = load_center {
+        lc.world_xz
+    } else {
+        IVec2::ZERO
+    };
+    let visible = game_config.graphics.chunk_range.max(0);
+    let loaded = if visible >= 10 { visible + 4 } else { visible };
 
     let mut processed = 0usize;
     let limit = backlog.0.len();
 
     while pending.0.len() < max_inflight && processed < limit {
-        let Some((coord, sub)) = backlog.0.pop_front() else {
+        let next = if in_water_gen(&app_state) {
+            backlog.0.pop_front()
+        } else {
+            let best = backlog
+                .0
+                .iter()
+                .take(1024)
+                .enumerate()
+                .min_by_key(|(_, (coord, sub))| {
+                    let dx = coord.x - center_c.x;
+                    let dz = coord.y - center_c.y;
+                    let rank = if dx.abs() <= visible && dz.abs() <= visible {
+                        0
+                    } else if dx.abs() <= loaded && dz.abs() <= loaded {
+                        1
+                    } else {
+                        2
+                    };
+                    (rank, dx * dx + dz * dz, *sub)
+                })
+                .map(|(idx, _)| idx);
+            best.and_then(|idx| backlog.0.remove(idx))
+                .or_else(|| backlog.0.pop_front())
+        };
+
+        let Some((coord, sub)) = next else {
             break;
         };
         processed += 1;
+
+        if !chunk_base_ready(coord, &chunk_map) {
+            backlog.0.push_back((coord, sub));
+            continue;
+        }
 
         if !water_meshing_ready(coord, &water, &chunk_map) {
             backlog.0.push_back((coord, sub));
@@ -912,6 +1155,7 @@ fn water_collect_meshed_subchunks(
     mut commands: Commands,
     mut pending: ResMut<PendingWaterMesh>,
     mut windex: ResMut<WaterMeshIndex>,
+    mut backlog: ResMut<WaterMeshBacklog>,
     mut meshes: ResMut<Assets<Mesh>>,
     q_mesh: Query<&Mesh3d>,
     water_handle: Res<WaterMatHandle>,
@@ -940,6 +1184,14 @@ fn water_collect_meshed_subchunks(
         }
 
         if let Some(((coord, sub), build)) = future::block_on(future::poll_once(task)) {
+            if !chunk_base_ready(coord, &chunk_map) {
+                if !backlog.0.iter().any(|k| *k == (coord, sub)) {
+                    backlog.0.push_back((coord, sub));
+                }
+                done.push(*key);
+                continue;
+            }
+
             if !chunk_map.chunks.contains_key(&coord) || !water.0.contains_key(&coord) {
                 done.push(*key);
                 continue;
@@ -967,6 +1219,7 @@ fn water_collect_meshed_subchunks(
                         Mesh3d(meshes.add(mesh)),
                         MeshMaterial3d::<WaterMaterial>(water_handle.0.clone()),
                         Transform::from_translation(origin),
+                        WaterSubchunkMesh { coord },
                         NotShadowReceiver,
                         NotShadowCaster,
                         Name::new(format!("water chunk({},{}) sub{}", coord.x, coord.y, sub)),
@@ -1005,6 +1258,15 @@ fn try_enqueue(
     }
 }
 
+#[inline]
+fn chunk_base_ready(coord: IVec2, chunk_map: &ChunkMap) -> bool {
+    chunk_map
+        .chunks
+        .get(&coord)
+        .map(|chunk| chunk.dirty_mask == 0)
+        .unwrap_or(false)
+}
+
 /// Runs the `rebuild_water_work_queue_impl` routine for rebuild water work queue impl in the `generator::chunk::water_builder` module.
 fn rebuild_water_work_queue_impl(
     work: &mut VecDeque<IVec2>,
@@ -1021,5 +1283,99 @@ fn rebuild_water_work_queue_impl(
         for d in [IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] {
             try_enqueue(c + d, work, &mut queued, chunk_map, water, pending);
         }
+    }
+}
+
+fn sync_water_ready_set(
+    chunk_map: Res<ChunkMap>,
+    water: Res<FluidMap>,
+    q: Res<WaterGenQueue>,
+    pending_load: Res<PendingWaterLoad>,
+    todo: Res<WaterMeshingTodo>,
+    backlog: Res<WaterMeshBacklog>,
+    pending_mesh: Res<PendingWaterMesh>,
+    mut ready_set: ResMut<WaterReadySet>,
+) {
+    ready_set
+        .0
+        .retain(|coord| chunk_map.chunks.contains_key(coord));
+
+    let mut busy: HashSet<IVec2> = HashSet::new();
+    busy.extend(q.work.iter().copied());
+    busy.extend(pending_load.0.keys().copied());
+    busy.extend(todo.0.iter().copied());
+    busy.extend(backlog.0.iter().map(|(c, _)| *c));
+    busy.extend(pending_mesh.0.keys().map(|(c, _)| *c));
+
+    for &coord in chunk_map.chunks.keys() {
+        let ready = chunk_base_ready(coord, &chunk_map)
+            && water.0.contains_key(&coord)
+            && !busy.contains(&coord);
+        if ready {
+            ready_set.0.insert(coord);
+        } else {
+            ready_set.0.remove(&coord);
+        }
+    }
+}
+
+fn sync_water_mesh_visibility(
+    mut q_mesh: Query<(&WaterSubchunkMesh, &mut Visibility)>,
+    q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    load_center: Option<Res<LoadCenter>>,
+    game_config: Res<GlobalConfig>,
+    ready_set: Option<Res<WaterReadySet>>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
+    app_state: Res<State<AppState>>,
+) {
+    let center_c = if let Ok(t) = q_cam.single() {
+        let (c, _) = world_to_chunk_xz(
+            (t.translation().x / VOXEL_SIZE).floor() as i32,
+            (t.translation().z / VOXEL_SIZE).floor() as i32,
+        );
+        c
+    } else if let Some(lc) = load_center {
+        lc.world_xz
+    } else {
+        IVec2::ZERO
+    };
+
+    let visible = if game_config.graphics.chunk_range.max(0) >= 10 {
+        game_config.graphics.chunk_range.max(0) + 4
+    } else {
+        game_config.graphics.chunk_range.max(0)
+    };
+    let hide_radius = visible + 1;
+    let require_water_ready = multiplayer_connection.uses_local_save_data()
+        && matches!(app_state.get(), AppState::Loading(LoadingStates::WaterGen));
+    for (mesh, mut vis) in &mut q_mesh {
+        let dx = (mesh.coord.x - center_c.x).abs();
+        let dz = (mesh.coord.y - center_c.y).abs();
+        let in_visible = dx <= visible && dz <= visible;
+        let in_hide_band = dx <= hide_radius && dz <= hide_radius;
+        let ready = if require_water_ready {
+            ready_set
+                .as_ref()
+                .map(|set| set.0.contains(&mesh.coord))
+                .unwrap_or(false)
+        } else {
+            true
+        };
+        *vis = match *vis {
+            Visibility::Inherited => {
+                if in_hide_band && ready {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                }
+            }
+            _ => {
+                if in_visible && ready {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                }
+            }
+        };
     }
 }

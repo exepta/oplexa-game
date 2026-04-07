@@ -1,5 +1,5 @@
 {
-  "localized_name": "plains",
+  "localized_name": "oplexa:plains",
   "name": "Plains",
   "stand_alone": true,
   "subs": ["mountains"],
@@ -21,6 +21,7 @@
   "generation": {
     "rivers": true,
     "river_chance": 0.5,
-    "river_size_between": "24:24"
+    "river_size_between": "24:24",
+    "trees": [ ]
   }
 }
