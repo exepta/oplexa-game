@@ -1,5 +1,5 @@
 {
-  "localized_name": "ocean",
+  "localized_name": "oplexa:ocean",
   "name": "Ocean",
   "stand_alone": true,
   "climate": ["wet"],

@@ -14,6 +14,7 @@ const SALT_TREE_CANOPY_RADIUS: u32 = 0xA9D1_0555;
 const SALT_TREE_CANOPY_HEIGHT: u32 = 0xA9D1_0666;
 const SALT_TREE_LEAF_SHAPE: u32 = 0xA9D1_0777;
 const SALT_TREE_OAK_BRANCH: u32 = 0xA9D1_0888;
+const TREE_LEAF_DENSITY_SCALE: f32 = 0.82;
 
 #[derive(Clone, Copy)]
 enum TreeStyle {
@@ -633,6 +634,7 @@ fn fill_leaf_blob(
     let rx = rx.max(1);
     let ry = ry.max(1);
     let rz = rz.max(1);
+    let density = (density * TREE_LEAF_DENSITY_SCALE).clamp(0.0, 1.0);
     let inv_rx = 1.0 / rx as f32;
     let inv_ry = 1.0 / ry as f32;
     let inv_rz = 1.0 / rz as f32;
@@ -684,6 +686,7 @@ fn fill_leaf_disk(
     seed: u32,
 ) {
     let radius = radius.max(1.0);
+    let density = (density * TREE_LEAF_DENSITY_SCALE).clamp(0.0, 1.0);
     let r_outer = radius + 0.82;
     let r_inner = (radius - 0.65).max(0.25);
     let ir = r_outer.ceil() as i32;

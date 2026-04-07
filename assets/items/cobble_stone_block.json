@@ -1,0 +1,19 @@
+{
+  "localized_name": "oplexa:cobble_stone_block",
+  "name": "Cobble Stone Block",
+  "max_stack_size": -1,
+  "category": "block",
+  "block_item": true,
+  "placeable": true,
+  "block": "cobble_stone_block",
+  "tags": ["block"],
+  "rarity": "common",
+  "render": {
+    "type": "block",
+    "block": "cobble_stone_block",
+    "projection": "isometric"
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

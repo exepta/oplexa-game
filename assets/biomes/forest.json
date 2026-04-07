@@ -1,5 +1,5 @@
 {
-  "localized_name": "forest",
+  "localized_name": "oplexa:forest",
   "name": "Forest",
   "stand_alone": false,
   "climate": ["normal"],

@@ -309,6 +309,7 @@ pub(super) struct LocalLanHost {
     pub(super) child: Option<Child>,
     pub(super) session_url: Option<String>,
     pub(super) connect_timer: Option<Timer>,
+    pub(super) stop_pending: bool,
 }
 
 impl Default for LocalLanHost {
@@ -318,6 +319,7 @@ impl Default for LocalLanHost {
             child: None,
             session_url: None,
             connect_timer: None,
+            stop_pending: false,
         }
     }
 }
@@ -351,6 +353,7 @@ impl LocalLanHost {
         let Some(mut child) = self.child.take() else {
             self.session_url = None;
             self.connect_timer = None;
+            self.stop_pending = false;
             return;
         };
 
@@ -360,6 +363,7 @@ impl LocalLanHost {
         let _ = child.wait();
         self.session_url = None;
         self.connect_timer = None;
+        self.stop_pending = false;
     }
 }
 

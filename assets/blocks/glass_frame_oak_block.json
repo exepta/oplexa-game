@@ -1,0 +1,14 @@
+{
+  "name": "glass_frame_oak_block",
+  "texture_dir": "textures/blocks/glass_oak_frame",
+  "texture": {
+    "all": "glass"
+  },
+  "stats": {
+    "hardness": 0.1,
+    "blast_resistance": 1.5,
+    "level": "0",
+    "opaque": false,
+    "emissive": 0.0
+  }
+}

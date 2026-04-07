@@ -1,0 +1,9 @@
+{
+  "image": "mossy_stone.png",
+  "tile_size": 128,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "mossy_stone": [0, 0]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "image": "cobble_stone.png",
+  "tile_size": 128,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "cobble": [0, 0]
+  }
+}

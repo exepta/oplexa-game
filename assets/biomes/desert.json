@@ -1,5 +1,5 @@
 {
-  "localized_name": "desert",
+  "localized_name": "oplexa:desert",
   "name": "Desert",
   "stand_alone": true,
   "subs": ["Desert_Mountains"],

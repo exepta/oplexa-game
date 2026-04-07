@@ -3,7 +3,7 @@ use crate::core::commands::{
     CommandSender, EntitySender, GameModeKind, SystemMessageLevel, SystemSender,
     default_chat_command_registry, parse_chat_command,
 };
-use crate::core::config::GlobalConfig;
+use crate::core::config::{GlobalConfig, WorldGenConfig};
 use crate::core::debug::{BuildInfo, WorldInspectorState};
 use crate::core::entities::player::inventory::PlayerInventory;
 use crate::core::entities::player::{FlightState, FpsController, GameMode, GameModeState, Player};
@@ -19,6 +19,8 @@ use crate::core::inventory::items::{ItemRegistry, build_world_item_drop_visual};
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
 use crate::core::states::states::{AppState, BeforeUiState, LoadingStates};
 use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, get_block_world};
+use crate::core::world::biome::func::locate_biome_chunk_by_localized_name;
+use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::chunk::{ChunkMap, LoadCenter, SEA_LEVEL};
 use crate::core::world::chunk_dimension::{
     CX, CY, CZ, SEC_COUNT, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local,
@@ -35,7 +37,7 @@ use api::core::network::{
         ClientDropItem, ClientDropPickup, ClientKeepAlive, OrderedReliable, PlayerJoined,
         PlayerLeft, PlayerMove, PlayerSnapshot, ProtocolPlugin, ServerAuthRejected,
         ServerBlockBreak, ServerBlockPlace, ServerChatMessage, ServerChunkData, ServerDropPicked,
-        ServerDropSpawn, ServerGameModeChanged, ServerWelcome, UnorderedReliable,
+        ServerDropSpawn, ServerGameModeChanged, ServerTeleport, ServerWelcome, UnorderedReliable,
         UnorderedUnreliable,
     },
 };
@@ -286,6 +288,7 @@ const REMOTE_PLAYER_INTERP_BACK_TIME_SECS: f32 = 0.10;
 const REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS: f32 = 0.08;
 const REMOTE_PLAYER_MAX_SNAPSHOT_POINTS: usize = 24;
 const REMOTE_PLAYER_SMOOTHING_HZ: f32 = 18.0;
+const LOCATE_MAX_RADIUS_CHUNKS: i32 = 256;
 const NETWORK_CONFIG_PATH: &str = "config/network.toml";
 const CTRL_C_GRACEFUL_EXIT_DELAY_SECS: f64 = 0.25;
 const SERVER_TIMEOUT_ERROR_TEXT: &str = "Server time out!";
@@ -360,6 +363,7 @@ impl Plugin for MultiplayerClientPlugin {
                     send_local_player_pose,
                 ),
             )
+            .add_systems(Update, stop_lan_host_after_disconnect)
             .add_systems(Update, smooth_remote_players);
     }
 }
@@ -668,6 +672,7 @@ fn open_to_lan_requested(
             Ok(child) => {
                 info!("Started LAN host at {}", session_url);
                 local_host.child = Some(child);
+                local_host.stop_pending = false;
             }
             Err(error) => {
                 warn!("Failed to start LAN host: {}", error);
@@ -726,9 +731,60 @@ fn finish_open_to_lan_connect(
 /// Runs the `stop_lan_host_requested` routine for stop lan host requested in the `client` module.
 fn stop_lan_host_requested(
     mut requests: MessageReader<StopLanHostRequest>,
+    runtime: Res<MultiplayerClientRuntime>,
+    q_active: Query<
+        (),
+        Or<(
+            With<Connected>,
+            With<lightyear::prelude::client::Connecting>,
+        )>,
+    >,
     mut local_host: NonSendMut<LocalLanHost>,
 ) {
     if requests.read().next().is_none() {
+        return;
+    }
+
+    let connection_active = runtime
+        .connection_entity
+        .map(|entity| q_active.get(entity).is_ok())
+        .unwrap_or(false);
+
+    if connection_active {
+        local_host.stop_pending = true;
+        return;
+    }
+
+    local_host.stop();
+}
+
+/// Stops local LAN host after disconnect is fully complete.
+fn stop_lan_host_after_disconnect(
+    runtime: Res<MultiplayerClientRuntime>,
+    q_active: Query<
+        (),
+        Or<(
+            With<Connected>,
+            With<lightyear::prelude::client::Connecting>,
+        )>,
+    >,
+    mut local_host: NonSendMut<LocalLanHost>,
+) {
+    if !local_host.stop_pending {
+        return;
+    }
+
+    local_host.refresh();
+    if local_host.child.is_none() {
+        local_host.stop_pending = false;
+        return;
+    }
+
+    let connection_active = runtime
+        .connection_entity
+        .map(|entity| q_active.get(entity).is_ok())
+        .unwrap_or(false);
+    if connection_active {
         return;
     }
 
@@ -955,16 +1011,18 @@ fn receive_chat_messages(
     mut chat_log: ResMut<ChatLog>,
     mut game_mode: ResMut<GameModeState>,
     mut flight_state: Query<&mut FlightState>,
+    mut q_player: Query<&mut Transform, With<Player>>,
     mut q: Query<(
         &mut MessageReceiver<ServerChatMessage>,
         &mut MessageReceiver<ServerGameModeChanged>,
+        &mut MessageReceiver<ServerTeleport>,
     )>,
 ) {
     let Some(entity) = runtime.connection_entity else {
         return;
     };
 
-    let Ok((mut recv_chat, mut recv_game_mode)) = q.get_mut(entity) else {
+    let Ok((mut recv_chat, mut recv_game_mode, mut recv_teleport)) = q.get_mut(entity) else {
         return;
     };
 
@@ -978,6 +1036,15 @@ fn receive_chat_messages(
         }
         apply_local_game_mode(message.mode, &mut game_mode, &mut flight_state);
     }
+
+    for message in recv_teleport.receive() {
+        if Some(message.player_id) != runtime.local_player_id {
+            continue;
+        }
+        if let Ok(mut player_transform) = q_player.single_mut() {
+            player_transform.translation = Vec3::from_array(message.translation);
+        }
+    }
 }
 
 /// Handles locally submitted chat input and forwards it to multiplayer or local command handling.
@@ -990,6 +1057,9 @@ fn handle_chat_submit_requests(
     mut chat_log: ResMut<ChatLog>,
     mut game_mode: ResMut<GameModeState>,
     mut flight_state: Query<&mut FlightState>,
+    world_gen_config: Res<WorldGenConfig>,
+    biomes: Res<BiomeRegistry>,
+    mut q_player: Query<&mut Transform, With<Player>>,
 ) {
     for request in submit_requests.read() {
         let text = request.text.trim();
@@ -1064,6 +1134,139 @@ fn handle_chat_submit_requests(
                         format!("Game mode set to {}.", mode.as_str()),
                     );
                 }
+                "locate" => {
+                    let Some(raw_type) = command.args.first() else {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Usage: /locate <biome> <name:key>".to_string(),
+                        );
+                        continue;
+                    };
+                    let Some(raw_target) = command.args.get(1) else {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Usage: /locate <biome> <name:key>".to_string(),
+                        );
+                        continue;
+                    };
+
+                    if !raw_type.eq_ignore_ascii_case("biome") {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Only type 'biome' is supported right now.".to_string(),
+                        );
+                        continue;
+                    }
+
+                    let target = raw_target.trim();
+                    if !target.contains(':') {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Biome key must be in format 'name:key'.".to_string(),
+                        );
+                        continue;
+                    }
+
+                    if biomes.get_by_localized_name(target).is_none() {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            format!("Unknown biome '{}'.", target),
+                        );
+                        continue;
+                    }
+
+                    let Ok(player_transform) = q_player.single() else {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Could not resolve player position for locate.".to_string(),
+                        );
+                        continue;
+                    };
+
+                    let world_x = player_transform.translation.x.floor() as i32;
+                    let world_z = player_transform.translation.z.floor() as i32;
+                    let (origin_chunk, _) = world_to_chunk_xz(world_x, world_z);
+
+                    let Some(found_chunk) = locate_biome_chunk_by_localized_name(
+                        &biomes,
+                        world_gen_config.seed,
+                        origin_chunk,
+                        target,
+                        LOCATE_MAX_RADIUS_CHUNKS,
+                    ) else {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            format!("Biome '{}' not found nearby.", target),
+                        );
+                        continue;
+                    };
+
+                    let found_x = found_chunk.x * CX as i32 + (CX as i32 / 2);
+                    let found_z = found_chunk.y * CZ as i32 + (CZ as i32 / 2);
+                    push_system_chat(
+                        &mut chat_log,
+                        SystemMessageLevel::Info,
+                        format!("found: [{}, {}]", found_x, found_z),
+                    );
+                }
+                "tp" => {
+                    let args = command.args.as_slice();
+                    if args.is_empty() {
+                        push_system_chat(
+                            &mut chat_log,
+                            SystemMessageLevel::Warn,
+                            "Usage: /tp <player>|<x y z>|<player player>|<player x y z>"
+                                .to_string(),
+                        );
+                        continue;
+                    }
+
+                    match args.len() {
+                        3 => {
+                            let Ok(target) = parse_tp_xyz(&args[0], &args[1], &args[2]) else {
+                                push_system_chat(
+                                    &mut chat_log,
+                                    SystemMessageLevel::Warn,
+                                    "Usage: /tp <x> <y> <z>".to_string(),
+                                );
+                                continue;
+                            };
+                            let Ok(mut player_transform) = q_player.single_mut() else {
+                                push_system_chat(
+                                    &mut chat_log,
+                                    SystemMessageLevel::Warn,
+                                    "Could not resolve player for teleport.".to_string(),
+                                );
+                                continue;
+                            };
+                            player_transform.translation = Vec3::new(target[0], target[1], target[2]);
+                            push_system_chat(
+                                &mut chat_log,
+                                SystemMessageLevel::Info,
+                                format!(
+                                    "Teleported to [{:.2}, {:.2}, {:.2}].",
+                                    target[0], target[1], target[2]
+                                ),
+                            );
+                        }
+                        _ => {
+                            push_system_chat(
+                                &mut chat_log,
+                                SystemMessageLevel::Warn,
+                                "Local /tp supports only coordinates: /tp <x> <y> <z>. \
+In multiplayer all /tp variants are available."
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
                 _ => {
                     push_system_chat(
                         &mut chat_log,
@@ -1090,6 +1293,13 @@ fn push_system_chat(chat_log: &mut ChatLog, level: SystemMessageLevel, message: 
         CommandSender::System(SystemSender::Server { level }),
         message,
     ));
+}
+
+fn parse_tp_xyz(x: &str, y: &str, z: &str) -> Result<[f32; 3], ()> {
+    let x = x.trim().parse::<f32>().map_err(|_| ())?;
+    let y = y.trim().parse::<f32>().map_err(|_| ())?;
+    let z = z.trim().parse::<f32>().map_err(|_| ())?;
+    Ok([x, y, z])
 }
 
 fn apply_local_game_mode(
