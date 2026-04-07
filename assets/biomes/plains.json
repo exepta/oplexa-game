@@ -21,6 +21,7 @@
   "generation": {
     "rivers": true,
     "river_chance": 0.5,
-    "river_size_between": "24:24"
+    "river_size_between": "24:24",
+    "trees": [ ]
   }
 }

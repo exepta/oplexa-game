@@ -7,6 +7,8 @@ use crate::core::world::chunk_dimension::{CX, CY, CZ, Y_MAX, Y_MIN};
 use crate::generator::chunk::cave_utils::{CaveParams, worm_edits_for_chunk};
 use crate::generator::chunk::chunk_utils::map01;
 use crate::generator::chunk::river_utils::RiverSystem;
+use crate::generator::chunk::trees::registry::TreeRegistry;
+use crate::generator::chunk::trees::tree_gen::populate_trees_in_chunk;
 use bevy::prelude::*;
 use fastnoise_lite::*;
 /* ========================= Generator =================================== */
@@ -17,6 +19,7 @@ pub(crate) async fn generate_chunk_async_biome(
     reg: &BlockRegistry,
     cfg_seed: i32,
     biomes: &BiomeRegistry,
+    trees: &TreeRegistry,
 ) -> ChunkData {
     let fallback_label = choose_biome_label_smoothed(biomes, coord, cfg_seed);
 
@@ -175,7 +178,10 @@ pub(crate) async fn generate_chunk_async_biome(
                         smoothstep(MNT_DETAIL_EDGE_FADE_START, MNT_DETAIL_EDGE_FADE_END, core);
                     let delta = delta_clamped * edge_fade;
 
-                    let dome = (amp * MNT_DOME_GAIN) * core.powf(MNT_DOME_EXP);
+                    // Fade dome uplift near sub-biome edge to avoid hard mountain "walls"
+                    // against surrounding plains.
+                    let dome_fade = smoothstep(0.14, 0.82, core);
+                    let dome = (amp * MNT_DOME_GAIN) * core.powf(MNT_DOME_EXP) * dome_fade;
                     h += dome + core * delta;
 
                     // surface materials taken from the sub-biome when the site dominates locally
@@ -260,8 +266,23 @@ pub(crate) async fn generate_chunk_async_biome(
                 (h0_total, land0, soil0)
             };
 
-            // Final land height = distance-weighted blend of both *total* heights.
-            let h_land = (h0_total * w0 + h1_total * w1) / w_sum;
+            // Final land height:
+            // 1) Use softer weights for height blending (less abrupt site handover).
+            // 2) If both sites strongly disagree in height, add boundary smoothing near 50/50.
+            let w0_h = w0.powf(0.68);
+            let w1_h = w1.powf(0.68);
+            let w_sum_h = (w0_h + w1_h).max(1e-6);
+            let t01 = (w1_h / w_sum_h).clamp(0.0, 1.0);
+            let t_soft = smoothstep(0.08, 0.92, t01);
+            let h_blend = lerp(h0_total, h1_total, t_soft);
+
+            let h_diff = (h0_total - h1_total).abs();
+            let boundary = (1.0 - (t01 - 0.5).abs() * 2.0).clamp(0.0, 1.0);
+            let diff_smooth = smoothstep(16.0, 112.0, h_diff);
+            let boundary_smooth = boundary * boundary;
+            let soften = (0.42 * diff_smooth * boundary_smooth).clamp(0.0, 0.42);
+            let h_mean = (h0_total + h1_total) * 0.5;
+            let h_land = lerp(h_blend, h_mean, soften);
 
             // Choose materials from whichever land site dominates locally
             let land_biome_for_materials = if w0 >= w1 { mats0 } else { mats1 };
@@ -656,6 +677,7 @@ pub(crate) async fn generate_chunk_async_biome(
     }
 
     carve_caves_into_chunk(&mut chunk, coord, cfg_seed, id_air, id_water, id_border);
+    populate_trees_in_chunk(&mut chunk, coord, reg, biomes, trees, cfg_seed);
     chunk
 }
 

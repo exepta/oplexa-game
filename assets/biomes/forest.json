@@ -1,9 +1,9 @@
 {
-  "localized_name": "mountains",
-  "name": "Mountains",
+  "localized_name": "forest",
+  "name": "Forest",
   "stand_alone": false,
   "climate": ["normal"],
-  "rarity": 0.16,
+  "rarity": 0.20,
   "sizes": [ "Medium", "Large" ],
   "surface": {
     "top": ["grass_block"],
@@ -13,9 +13,9 @@
     "under_zero": ["deep_stone_block"]
   },
   "settings": {
-    "height_offset": 74.0,
-    "mount_amp": 68.0,
-    "mount_freq": 0.022
+    "height_offset": 10.0,
+    "land_amp": 19.0,
+    "land_freq": 0.0095
   },
   "generation": {
     "rivers": "tunnel | stop",

@@ -76,7 +76,8 @@ fn ensure_leaves_fx_assets(
     fx_assets.spruce_leaves_id = id_any(&reg, &["spruce_leaves_block"]);
     fx_assets.quad = meshes.add(Mesh::from(Rectangle::new(0.20, 0.20)));
 
-    let oak_tex: Handle<Image> = asset_server.load("textures/blocks/oak_leaves/oak_leaf_particle.png");
+    let oak_tex: Handle<Image> =
+        asset_server.load("textures/blocks/oak_leaves/oak_leaf_particle.png");
     let spruce_tex: Handle<Image> =
         asset_server.load("textures/blocks/spruce_leaves/spruce_leaf_particle.png");
 
@@ -124,7 +125,12 @@ fn spawn_falling_leaves(
         .iter()
         .next()
         .map(GlobalTransform::translation)
-        .or_else(|| q_fallback_cam.iter().next().map(GlobalTransform::translation));
+        .or_else(|| {
+            q_fallback_cam
+                .iter()
+                .next()
+                .map(GlobalTransform::translation)
+        });
     let Some(cam_pos) = cam_pos else {
         return;
     };
@@ -146,9 +152,12 @@ fn spawn_falling_leaves(
             continue;
         }
 
-        let Some((spawn_pos, spruce)) =
-            find_leaf_spawn(cam_pos, &chunk_map, fx_assets.oak_leaves_id, fx_assets.spruce_leaves_id)
-        else {
+        let Some((spawn_pos, spruce)) = find_leaf_spawn(
+            cam_pos,
+            &chunk_map,
+            fx_assets.oak_leaves_id,
+            fx_assets.spruce_leaves_id,
+        ) else {
             continue;
         };
 
@@ -205,7 +214,12 @@ fn update_falling_leaves(
         .iter()
         .next()
         .map(GlobalTransform::translation)
-        .or_else(|| q_fallback_cam.iter().next().map(GlobalTransform::translation));
+        .or_else(|| {
+            q_fallback_cam
+                .iter()
+                .next()
+                .map(GlobalTransform::translation)
+        });
 
     for (entity, mut tf, mut leaf) in &mut q_particles {
         leaf.age += dt;

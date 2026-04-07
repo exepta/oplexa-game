@@ -54,7 +54,7 @@ fn infer_required_tool_type(block_name: &str) -> Option<ToolType> {
         }
         "dirt_block" | "grass_block" | "sand_block" | "gravel_block" | "clay_block"
         | "snow_block" => Some(ToolType::Shovel),
-        "log_block" => Some(ToolType::Axe),
+        "oak_log_block" | "log_block" => Some(ToolType::Axe),
         _ => None,
     }
 }

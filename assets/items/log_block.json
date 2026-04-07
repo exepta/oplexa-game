@@ -1,16 +1,16 @@
 {
-  "localized_name": "oplexa:log_block",
+  "localized_name": "oplexa:oak_log_block",
   "name": "Oak Log Block",
   "max_stack_size": -1,
   "category": "block",
   "block_item": true,
   "placeable": true,
-  "block": "log_block",
+  "block": "oak_log_block",
   "tags": ["block"],
   "rarity": "common",
   "render": {
     "type": "block",
-    "block": "log_block",
+    "block": "oak_log_block",
     "projection": "isometric"
   },
   "world_drop": {

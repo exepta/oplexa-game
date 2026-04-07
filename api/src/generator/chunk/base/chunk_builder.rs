@@ -10,6 +10,7 @@ use crate::core::world::chunk_dimension::*;
 use crate::core::world::save::WorldSave;
 use crate::generator::chunk::chunk_struct::*;
 use crate::generator::chunk::chunk_utils::*;
+use crate::generator::chunk::trees::registry::TreeRegistry;
 use crate::generator::chunk::water_builder::WaterReadySet;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -458,6 +459,7 @@ fn schedule_chunk_generation(
     pending_save: Res<PendingChunkSave>,
     reg: Res<BlockRegistry>,
     biomes: Res<BiomeRegistry>,
+    trees: Res<TreeRegistry>,
     gen_cfg: Res<WorldGenConfig>,
     game_config: Res<GlobalConfig>,
     ws: Res<WorldSave>,
@@ -625,6 +627,7 @@ fn schedule_chunk_generation(
     // --- NEW: Arc-wrap registries once per system tick (cheap per task) ---
     let reg_arc = Arc::new(reg.clone());
     let biomes_arc = Arc::new(biomes.clone());
+    let trees_arc = Arc::new(trees.clone());
 
     let cfg_clone = gen_cfg.clone();
     let ws_root = ws.root.clone();
@@ -707,16 +710,18 @@ fn schedule_chunk_generation(
         // clone the inexpensive Arcs for this task
         let reg_for_task = Arc::clone(&reg_arc);
         let biomes_for_task = Arc::clone(&biomes_arc);
+        let trees_for_task = Arc::clone(&trees_arc);
         let cfg = cfg_clone.clone();
         let root = ws_root.clone();
 
         let task = pool.spawn(async move {
-            // NOTE: new load_or_gen signature: (root, coord, &BlockRegistry, &BiomeRegistry, cfg)
+            // NOTE: load_or_gen signature: (root, coord, &BlockRegistry, &BiomeRegistry, &TreeRegistry, cfg)
             let data = load_or_gen_chunk_async(
                 root,
                 c,
                 &*reg_for_task,    // deref Arc -> &BlockRegistry
                 &*biomes_for_task, // deref Arc -> &BiomeRegistry
+                &*trees_for_task,
                 cfg,
             )
             .await;
@@ -736,12 +741,20 @@ fn schedule_chunk_generation(
 
         let reg_for_task = Arc::clone(&reg_arc);
         let biomes_for_task = Arc::clone(&biomes_arc);
+        let trees_for_task = Arc::clone(&trees_arc);
         let cfg = cfg_clone.clone();
         let root = ws_root.clone();
 
         let task = pool.spawn(async move {
-            let data =
-                load_or_gen_chunk_async(root, c, &*reg_for_task, &*biomes_for_task, cfg).await;
+            let data = load_or_gen_chunk_async(
+                root,
+                c,
+                &*reg_for_task,
+                &*biomes_for_task,
+                &*trees_for_task,
+                cfg,
+            )
+            .await;
             (c, data)
         });
 
@@ -1480,10 +1493,11 @@ fn schedule_remesh_tasks_from_events(
         let chunk_shared = Arc::new(chunk.clone());
         for sub in subs {
             let key = (coord, sub);
-            if pending_mesh.0.contains_key(&key) {
-                // Avoid dropping a dirty signal while an older task is still inflight.
-                enqueue_mesh_fast(&mut backlog, &mut backlog_set, &pending_mesh, key);
-                continue;
+            if pending_mesh.0.remove(&key).is_some() {
+                // Replace stale in-flight mesh task with a fresh one that includes
+                // the newest block edits, instead of waiting for old results first.
+                backlog_set.0.remove(&key);
+                backlog.0.retain(|queued| *queued != key);
             }
 
             let y0 = sub * SEC_H;

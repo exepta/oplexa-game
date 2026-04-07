@@ -381,7 +381,7 @@ impl Blocks {
             Blocks::Dirt => "dirt_block",
             Blocks::Grass => "grass_block",
             Blocks::Stone => "stone_block",
-            Blocks::Log => "log_block",
+            Blocks::Log => "oak_log_block",
             Blocks::Sand => "sand_block",
             Blocks::Water => "water_block",
             Blocks::Glass => "glass_block",

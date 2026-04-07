@@ -118,6 +118,17 @@ pub struct BiomeGeneration {
         deserialize_with = "deserialize_size_between"
     )]
     pub river_size_between: (i32, i32),
+    #[serde(default)]
+    pub trees: Vec<BiomeTreeSpawn>,
+}
+
+/// Tree spawn config entry in `biome.generation.trees`.
+#[derive(Debug, Deserialize, PartialEq, Clone, Default)]
+pub struct BiomeTreeSpawn {
+    #[serde(rename = "type", alias = "tree", alias = "name", default)]
+    pub tree_type: String,
+    #[serde(default)]
+    pub density: f32,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

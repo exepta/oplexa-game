@@ -7,6 +7,7 @@ use crate::core::world::chunk_dimension::*;
 use crate::core::world::save::*;
 use crate::generator::chunk::chunk_gen::generate_chunk_async_biome;
 use crate::generator::chunk::chunk_struct::*;
+use crate::generator::chunk::trees::registry::TreeRegistry;
 use bevy::prelude::*;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
@@ -413,7 +414,8 @@ pub async fn load_or_gen_chunk_async(
     coord: IVec2,
     reg: &BlockRegistry,    // ⟵ NEW: pass the registry
     biomes: &BiomeRegistry, // ⟵ NEW: pass the biome registry
-    cfg: WorldGenConfig,    // we only need cfg.seed right now
+    trees: &TreeRegistry,
+    cfg: WorldGenConfig, // we only need cfg.seed right now
 ) -> ChunkData {
     // Try to load from a region file first
     let (r_coord, _) = chunk_to_region_slot(coord);
@@ -440,8 +442,8 @@ pub async fn load_or_gen_chunk_async(
     }
 
     // Fallback: generate fresh chunk via biome-based generator
-    // Note: new generator expects (coord, &BlockRegistry, seed, &BiomeRegistry)
-    generate_chunk_async_biome(coord, reg, cfg.seed, biomes).await
+    // Note: new generator expects (coord, &BlockRegistry, seed, &BiomeRegistry, &TreeRegistry)
+    generate_chunk_async_biome(coord, reg, cfg.seed, biomes, trees).await
 }
 
 /// Runs the `snapshot_borders` routine for snapshot borders in the `generator::chunk::chunk_utils` module.

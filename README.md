@@ -112,8 +112,8 @@ For plugin-style commands in future, add an executor registry (function map) and
       "type": "oplexa:hand_crafted",
       "data": {
         "craft": {
-          "0": { "item": "oplexa:log_block", "count": 1 },
-          "1": { "item": "oplexa:log_block", "count": 1 }
+          "0": { "item": "oplexa:oak_log_block", "count": 1 },
+          "1": { "item": "oplexa:oak_log_block", "count": 1 }
         }
       }
     }
@@ -268,7 +268,7 @@ Texture face keys:
 
 `texture_dir` is optional; if omitted it is inferred from block name:
 
-- `log_block` -> `textures/blocks/log`
+- `oak_log_block` -> `textures/blocks/log`
 
 ### 4.1.3 Atlas `data.json` format
 
@@ -318,16 +318,16 @@ The `texture` names in block JSON must exist in `tiles`.
 
 ```json
 {
-  "localized_name": "oplexa:log_block",
+  "localized_name": "oplexa:oak_log_block",
   "name": "Log Block",
   "max_stack_size": -1,
   "category": "block",
   "block_item": true,
   "placeable": true,
-  "block": "log_block",
+  "block": "oak_log_block",
   "render": {
     "type": "block",
-    "block": "log_block",
+    "block": "oak_log_block",
     "projection": "isometric"
   }
 }
