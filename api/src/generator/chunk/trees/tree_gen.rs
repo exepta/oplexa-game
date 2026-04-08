@@ -14,7 +14,9 @@ const SALT_TREE_CANOPY_RADIUS: u32 = 0xA9D1_0555;
 const SALT_TREE_CANOPY_HEIGHT: u32 = 0xA9D1_0666;
 const SALT_TREE_LEAF_SHAPE: u32 = 0xA9D1_0777;
 const SALT_TREE_OAK_BRANCH: u32 = 0xA9D1_0888;
+const SALT_TREE_GOLDEN_TRUNK_REDUCE: u32 = 0xA9D1_0999;
 const TREE_LEAF_DENSITY_SCALE: f32 = 0.82;
+const GOLDEN_SHOWER_LEAF_DENSITY_SCALE: f32 = 0.60;
 
 #[derive(Clone, Copy)]
 enum TreeStyle {
@@ -181,7 +183,12 @@ fn try_place_tree(
         return false;
     }
 
-    let trunk_h = pick_i32_inclusive(wx, wz, seed ^ SALT_TREE_TRUNK_HEIGHT, variant.trunk_height);
+    let mut trunk_h =
+        pick_i32_inclusive(wx, wz, seed ^ SALT_TREE_TRUNK_HEIGHT, variant.trunk_height);
+    if matches!(style, TreeStyle::GoldenShower) {
+        let reduce_by = pick_i32_inclusive(wx, wz, seed ^ SALT_TREE_GOLDEN_TRUNK_REDUCE, (5, 7));
+        trunk_h = (trunk_h - reduce_by).max(6);
+    }
     let canopy_r = pick_i32_inclusive(
         wx,
         wz,
@@ -290,7 +297,7 @@ fn try_place_tree(
             base_y,
             canopy_r,
             canopy_h,
-            variant.canopy_density,
+            variant.canopy_density * GOLDEN_SHOWER_LEAF_DENSITY_SCALE,
         ),
         TreeStyle::Generic => place_generic_canopy(
             chunk,
@@ -806,7 +813,7 @@ fn place_golden_shower_canopy(
     wz: i32,
     seed: u32,
     trunk_top: i32,
-    trunk_base_y: i32,
+    _trunk_base_y: i32,
     canopy_r: i32,
     canopy_h: i32,
     base_density: f32,
@@ -918,67 +925,7 @@ fn place_golden_shower_canopy(
         );
     }
 
-    let hanging_count = 6 + (col_rand_u32(wx, wz, seed ^ 0xD00D_1300) % 5) as i32;
-    let hang_start = (col_rand_u32(wx, wz, seed ^ 0xD00D_1301) % DIRS.len() as u32) as usize;
-    for i in 0..hanging_count {
-        let (dx, dz) = DIRS[(hang_start + i as usize * 2) % DIRS.len()];
-        let dist =
-            canopy_r + 1 + (col_rand_u32(wx + i * 5, wz - i * 7, seed ^ 0xD00D_1302) % 2) as i32;
-        let hx =
-            x + dx * dist + rand_signed_offset(wx + i * 37, wz - i * 41, seed ^ 0xD00D_1303, 1);
-        let hz =
-            z + dz * dist + rand_signed_offset(wx - i * 43, wz + i * 47, seed ^ 0xD00D_1304, 1);
-        if !in_bounds_local(hx, crown_mid, hz) {
-            continue;
-        }
-
-        let vertical_span = (crown_top - crown_low).max(2);
-        let anchor_y = crown_low
-            + (col_rand_u32(wx + i * 11, wz - i * 13, seed ^ 0xD00D_1305) % vertical_span as u32)
-                as i32;
-        let Some(ground_y) = find_ground_y_below(chunk, reg, hx, hz, anchor_y - 1) else {
-            continue;
-        };
-        let min_tip_y = (ground_y + 4).max(trunk_base_y - 1);
-        let desired_len =
-            3 + (col_rand_u32(wx + i * 17, wz - i * 19, seed ^ 0xD00D_1306) % 7) as i32;
-        let tip_y = (anchor_y - desired_len).max(min_tip_y);
-        if tip_y >= anchor_y {
-            continue;
-        }
-
-        for y in tip_y..=anchor_y {
-            place_leaf_if_replaceable(chunk, reg, hx, y, hz, leaves_id);
-            if (anchor_y - y) % 2 == 0
-                && col_rand_f32(wx + i * 59 + y * 3, wz - i * 61 - y * 5, seed ^ 0xD00D_1307) > 0.45
-            {
-                place_leaf_if_replaceable(
-                    chunk,
-                    reg,
-                    hx + dx.signum(),
-                    y,
-                    hz + dz.signum(),
-                    leaves_id,
-                );
-            }
-        }
-
-        fill_leaf_blob(
-            chunk,
-            reg,
-            leaves_id,
-            hx,
-            tip_y,
-            hz,
-            1,
-            1,
-            1,
-            (base_density + 0.01).clamp(0.54, 0.90),
-            wx + dx * dist,
-            wz + dz * dist,
-            seed ^ 0xD00D_1308,
-        );
-    }
+    // Golden Shower canopy intentionally has no hanging leaf strands.
 
     place_leaf_if_replaceable(chunk, reg, x, crown_top + 2, z, leaves_id);
     place_leaf_if_replaceable(chunk, reg, x, crown_top + 3, z, leaves_id);
@@ -1161,31 +1108,6 @@ fn stabilize_log_column_down(
 #[inline]
 fn in_bounds_local(x: i32, y: i32, z: i32) -> bool {
     x >= 0 && x < CX as i32 && y >= 0 && y < CY as i32 && z >= 0 && z < CZ as i32
-}
-
-#[inline]
-fn find_ground_y_below(
-    chunk: &ChunkData,
-    reg: &BlockRegistry,
-    x: i32,
-    z: i32,
-    start_y: i32,
-) -> Option<i32> {
-    if x < 0 || x >= CX as i32 || z < 0 || z >= CZ as i32 {
-        return None;
-    }
-    let mut y = start_y.clamp(0, CY as i32 - 1);
-    loop {
-        let id = chunk.get(x as usize, y as usize, z as usize);
-        if id != 0 && !reg.stats(id).foliage {
-            return Some(y);
-        }
-        if y == 0 {
-            break;
-        }
-        y -= 1;
-    }
-    None
 }
 
 #[inline]

@@ -195,6 +195,15 @@ fn handle_inventory_drag_and_drop(
         return;
     }
 
+    if mouse.just_pressed(MouseButton::Left)
+        && is_button_hovered(&button_states, INVENTORY_TRASH_BUTTON_ID)
+    {
+        if !cursor_item.slot.is_empty() {
+            cursor_item.slot = InventorySlot::default();
+        }
+        return;
+    }
+
     if mouse.just_pressed(MouseButton::Left) && recipe_preview.open {
         if is_button_hovered(&button_states, RECIPE_PREVIEW_FILL_ID) {
             fill_hand_crafted_from_recipe_preview(

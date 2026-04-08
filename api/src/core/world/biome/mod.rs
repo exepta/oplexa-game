@@ -9,6 +9,8 @@ use serde::*;
 pub struct Biome {
     pub localized_name: String,
     pub name: String,
+    #[serde(default)]
+    pub climate: Vec<String>,
     #[serde(default = "default_true")]
     pub stand_alone: bool,
     #[serde(default)]

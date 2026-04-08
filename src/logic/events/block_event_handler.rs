@@ -6,7 +6,8 @@ use crate::core::events::block::block_player_events::{
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
 use crate::core::inventory::items::{
-    ItemRegistry, block_requirement_for_id, can_drop_from_block, spawn_world_item_for_block_break,
+    ItemRegistry, block_requirement_for_id, can_drop_from_block, mining_speed_multiplier,
+    spawn_world_item_for_block_break,
 };
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
@@ -92,7 +93,7 @@ fn block_break_handler(
     if game_mode.0.eq(&GameMode::Spectator) {
         return;
     }
-    if !buttons.just_pressed(MouseButton::Left) {
+    if !buttons.pressed(MouseButton::Left) {
         state.target = None;
         return;
     }
@@ -108,6 +109,47 @@ fn block_break_handler(
         return;
     }
 
+    let creative_mode = matches!(game_mode.0, GameMode::Creative);
+    let prop_block = registry.is_prop(id_now);
+    let now = time.elapsed_secs();
+    let held_tool = selected_hotbar_tool(&inventory, hotbar_selection.as_deref(), &item_registry);
+    let requirement = block_requirement_for_id(id_now, &registry);
+
+    if creative_mode {
+        if !buttons.just_pressed(MouseButton::Left) {
+            return;
+        }
+        state.target = None;
+    } else if prop_block {
+        // Props (e.g. tall grass) break instantly in survival.
+        state.target = None;
+    } else {
+        let duration =
+            (break_time_for(id_now, &registry) / mining_speed_multiplier(requirement, held_tool))
+                .max(0.05);
+        let target_matches = state
+            .target
+            .is_some_and(|target| target.loc == hit.block_pos && target.id == id_now);
+
+        if !target_matches {
+            state.target = Some(MiningTarget {
+                loc: hit.block_pos,
+                id: id_now,
+                started_at: now,
+                duration,
+            });
+            return;
+        }
+
+        if let Some(target) = state.target {
+            if mining_progress(now, &target) < 1.0 {
+                return;
+            }
+        } else {
+            return;
+        }
+    }
+
     let world_loc = hit.block_pos;
     if let Some(mut access) = world_access_mut(&mut chunk_map, world_loc) {
         access.set(0);
@@ -118,14 +160,9 @@ fn block_break_handler(
     let lx = l.x as u8;
     let lz = l.y as u8;
     let ly = (world_loc.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
-    let creative_mode = matches!(game_mode.0, GameMode::Creative);
-    let now = time.elapsed_secs();
     let (drop_item_id, drops_item) = if creative_mode {
         (0, false)
     } else {
-        let held_tool =
-            selected_hotbar_tool(&inventory, hotbar_selection.as_deref(), &item_registry);
-        let requirement = block_requirement_for_id(id_now, &registry);
         let can_drop = can_drop_from_block(requirement, held_tool);
         let drop_item_id = if can_drop {
             item_registry.item_for_block(id_now).unwrap_or(0)

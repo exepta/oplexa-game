@@ -443,7 +443,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                             ));
                             box_node.spawn((
                                 InputField {
-                                    label: "Server Name".to_string(),
+                                    label: String::new(),
                                     placeholder: "My Server".to_string(),
                                     input_type: InputType::Text,
                                     ..default()
@@ -459,7 +459,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                             ));
                             box_node.spawn((
                                 InputField {
-                                    label: "Server Address".to_string(),
+                                    label: String::new(),
                                     placeholder: "192.168.0.10:14191".to_string(),
                                     input_type: InputType::Text,
                                     ..default()
@@ -716,41 +716,70 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
         .with_children(|root| {
             root.spawn((
                 Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(10.0),
-                    padding: UiRect::all(Val::Px(10.0)),
-                    border: UiRect::all(Val::Px(1.0)),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(8.0),
                     ..default()
                 },
-                BackgroundColor(color_background().into()),
-                BorderColor::all(color_background_hover()),
+                BackgroundColor::DEFAULT,
             ))
-            .with_children(|bar| {
-                for i in 1..=HOTBAR_SLOTS {
-                    let idx = format!("{i:02}");
-                    bar.spawn((
-                        Button {
-                            text: String::new(),
-                            ..default()
-                        },
-                        Visibility::Inherited,
-                        CssID(format!("{HUD_SLOT_PREFIX}{idx}")),
-                        UiButtonKind::InventorySlot,
-                        UiButtonTone::Normal,
-                    ))
-                    .with_children(|slot| {
-                        slot.spawn((
-                            Paragraph {
+            .with_children(|hud| {
+                hud.spawn((
+                    Paragraph {
+                        text: String::new(),
+                        ..default()
+                    },
+                    Node {
+                        padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.06, 0.08, 0.11, 0.58)),
+                    BorderColor::all(Color::srgba(0.22, 0.28, 0.33, 0.58)),
+                    CssID(HUD_SELECTED_TOOLTIP_ID.to_string()),
+                    HotbarSelectionTooltipText,
+                    UiTextTone::HotbarTooltip,
+                    Visibility::Hidden,
+                    Pickable::IGNORE,
+                ));
+                hud.spawn((
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(10.0),
+                        padding: UiRect::all(Val::Px(10.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    BackgroundColor(color_background().into()),
+                    BorderColor::all(color_background_hover()),
+                ))
+                .with_children(|bar| {
+                    for i in 1..=HOTBAR_SLOTS {
+                        let idx = format!("{i:02}");
+                        bar.spawn((
+                            Button {
                                 text: String::new(),
                                 ..default()
                             },
-                            CssID(format!("{HUD_SLOT_BADGE_PREFIX}{idx}")),
-                            BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
-                            Visibility::Hidden,
-                            Pickable::IGNORE,
-                        ));
-                    });
-                }
+                            Visibility::Inherited,
+                            CssID(format!("{HUD_SLOT_PREFIX}{idx}")),
+                            UiButtonKind::InventorySlot,
+                            UiButtonTone::Normal,
+                        ))
+                        .with_children(|slot| {
+                            slot.spawn((
+                                Paragraph {
+                                    text: String::new(),
+                                    ..default()
+                                },
+                                CssID(format!("{HUD_SLOT_BADGE_PREFIX}{idx}")),
+                                BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                Visibility::Hidden,
+                                Pickable::IGNORE,
+                            ));
+                        });
+                    }
+                });
             });
         })
         .id();
@@ -1094,6 +1123,15 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         }
                     });
                     right.spawn((
+                        Button {
+                            text: "Trash".to_string(),
+                            ..default()
+                        },
+                        CssID(INVENTORY_TRASH_BUTTON_ID.to_string()),
+                        UiButtonKind::ActionRow,
+                        UiButtonTone::Normal,
+                    ));
+                    right.spawn((
                         Node {
                             width: Val::Percent(100.0),
                             min_height: Val::Px(84.0),
@@ -1376,7 +1414,7 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
         .with_children(|root| {
             root.spawn((
                 Node {
-                    width: Val::Px(420.0),
+                    width: Val::Px(460.0),
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(4.0),
                     padding: UiRect::all(Val::Px(8.0)),
@@ -1388,22 +1426,114 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
+                panel.spawn((
+                    Paragraph {
+                        text: "System".to_string(),
+                        ..default()
+                    },
+                    UiTextTone::Heading,
+                    Pickable::IGNORE,
+                ));
+                panel.spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(2.0),
+                        ..default()
+                    },
+                    BackgroundColor(color_accent().into()),
+                    Pickable::IGNORE,
+                ));
                 for id in [
                     ID_BUILD,
-                    ID_CPU_NAME,
-                    ID_GPU_NAME,
-                    ID_VRAM,
-                    ID_BIOME,
-                    ID_GLOBAL_CPU,
-                    ID_APP_CPU,
-                    ID_APP_MEM,
                     ID_FPS,
                     ID_TICK_SPEED,
-                    ID_PLAYER_POS,
+                    ID_CPU_NAME,
+                    ID_APP_CPU,
+                    ID_APP_MEM,
+                    ID_GPU_NAME,
+                    ID_GPU_LOAD,
+                    ID_VRAM,
+                ] {
+                    panel.spawn((
+                        Paragraph {
+                            text: String::new(),
+                            ..default()
+                        },
+                        CssID(id.to_string()),
+                        Pickable::IGNORE,
+                    ));
+                }
+
+                panel.spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(6.0),
+                        ..default()
+                    },
+                    BackgroundColor::DEFAULT,
+                    Pickable::IGNORE,
+                ));
+                panel.spawn((
+                    Paragraph {
+                        text: "World".to_string(),
+                        ..default()
+                    },
+                    UiTextTone::Heading,
+                    Pickable::IGNORE,
+                ));
+                panel.spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(2.0),
+                        ..default()
+                    },
+                    BackgroundColor(color_accent().into()),
+                    Pickable::IGNORE,
+                ));
+                for id in [
+                    ID_BIOME,
+                    ID_BIOME_CLIMATE,
+                    ID_LOOK_BLOCK,
                     ID_CHUNK_COORD,
-                    ID_CHUNK_LOADING,
-                    ID_CHUNK_STAGE,
-                    ID_CHUNK_LATENCY,
+                    ID_PLAYER_POS,
+                ] {
+                    panel.spawn((
+                        Paragraph {
+                            text: String::new(),
+                            ..default()
+                        },
+                        CssID(id.to_string()),
+                        Pickable::IGNORE,
+                    ));
+                }
+
+                panel.spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(6.0),
+                        ..default()
+                    },
+                    BackgroundColor::DEFAULT,
+                    Pickable::IGNORE,
+                ));
+                panel.spawn((
+                    Paragraph {
+                        text: "Debug".to_string(),
+                        ..default()
+                    },
+                    UiTextTone::Heading,
+                    Pickable::IGNORE,
+                ));
+                panel.spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(2.0),
+                        ..default()
+                    },
+                    BackgroundColor(color_accent().into()),
+                    Pickable::IGNORE,
+                ));
+                for id in [
                     ID_GRID,
                     ID_INSPECTOR,
                     ID_OVERLAY,

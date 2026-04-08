@@ -11,6 +11,7 @@ const PROP_WIND_STRENGTH: f32 = 0.055;
 const PROP_WIND_FREQUENCY: f32 = 1.75;
 const LEAF_WIND_STRENGTH: f32 = 0.040;
 const LEAF_WIND_FREQUENCY: f32 = 1.25;
+const CUTOUT_ALPHA_THRESHOLD: f32 = 0.5;
 
 impl Plugin for TerrainChunkGfxPlugin {
     fn build(&self, app: &mut App) {
@@ -48,6 +49,20 @@ fn material_cfg_for_block(reg: &BlockRegistry, id: u16) -> Vec4 {
     Vec4::ZERO
 }
 
+#[inline]
+fn terrain_alpha_mode_for_block(reg: &BlockRegistry, id: u16) -> AlphaMode {
+    if reg.is_opaque(id) {
+        return AlphaMode::Opaque;
+    }
+
+    if reg.stats(id).foliage || reg.is_prop(id) {
+        // Cutout rendering keeps depth stable for dense overlapping leaves/props.
+        return AlphaMode::Mask(CUTOUT_ALPHA_THRESHOLD);
+    }
+
+    AlphaMode::Blend
+}
+
 fn setup_chunk_terrain_materials(
     reg: Res<BlockRegistry>,
     mut mats: ResMut<Assets<TerrainChunkMaterial>>,
@@ -56,11 +71,7 @@ fn setup_chunk_terrain_materials(
     let mut index = HashMap::new();
 
     for id in 1..(reg.defs.len() as u16) {
-        let alpha_mode = if reg.is_opaque(id) {
-            AlphaMode::Opaque
-        } else {
-            AlphaMode::Blend
-        };
+        let alpha_mode = terrain_alpha_mode_for_block(&reg, id);
 
         let params = TerrainChunkParams {
             leaf_cfg: Vec4::ZERO,
@@ -100,11 +111,7 @@ fn ensure_chunk_terrain_materials(
 
     let mut index = HashMap::new();
     for id in 1..(reg.defs.len() as u16) {
-        let alpha_mode = if reg.is_opaque(id) {
-            AlphaMode::Opaque
-        } else {
-            AlphaMode::Blend
-        };
+        let alpha_mode = terrain_alpha_mode_for_block(&reg, id);
 
         let params = TerrainChunkParams {
             leaf_cfg: Vec4::ZERO,

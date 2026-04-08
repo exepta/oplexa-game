@@ -341,6 +341,30 @@ pub struct InputConfig {
     #[serde(default = "default_inventory_recipe_open_key")]
     pub inventory_recipe_open: String,
 
+    /// Key or button mapping to select hotbar slot 1.
+    #[serde(default = "default_hotbar_slot_1_key")]
+    pub hotbar_slot_1: String,
+
+    /// Key or button mapping to select hotbar slot 2.
+    #[serde(default = "default_hotbar_slot_2_key")]
+    pub hotbar_slot_2: String,
+
+    /// Key or button mapping to select hotbar slot 3.
+    #[serde(default = "default_hotbar_slot_3_key")]
+    pub hotbar_slot_3: String,
+
+    /// Key or button mapping to select hotbar slot 4.
+    #[serde(default = "default_hotbar_slot_4_key")]
+    pub hotbar_slot_4: String,
+
+    /// Key or button mapping to select hotbar slot 5.
+    #[serde(default = "default_hotbar_slot_5_key")]
+    pub hotbar_slot_5: String,
+
+    /// Key or button mapping to select hotbar slot 6.
+    #[serde(default = "default_hotbar_slot_6_key")]
+    pub hotbar_slot_6: String,
+
     // Debug
     /// Shows system stats
     pub debug_overlay: String,
@@ -372,6 +396,12 @@ impl Default for InputConfig {
             ui_close_back: String::from("Escape"),
             open_chat: default_open_chat_key(),
             inventory_recipe_open: default_inventory_recipe_open_key(),
+            hotbar_slot_1: default_hotbar_slot_1_key(),
+            hotbar_slot_2: default_hotbar_slot_2_key(),
+            hotbar_slot_3: default_hotbar_slot_3_key(),
+            hotbar_slot_4: default_hotbar_slot_4_key(),
+            hotbar_slot_5: default_hotbar_slot_5_key(),
+            hotbar_slot_6: default_hotbar_slot_6_key(),
 
             debug_overlay: String::from("F3"),
             chunk_grid: String::from("F9"),
@@ -393,6 +423,36 @@ fn default_open_chat_key() -> String {
 /// Runs the `default_inventory_recipe_open_key` routine for default inventory recipe open key in the `core::config` module.
 fn default_inventory_recipe_open_key() -> String {
     String::from("R")
+}
+
+/// Runs the `default_hotbar_slot_1_key` routine for default hotbar slot 1 key in the `core::config` module.
+fn default_hotbar_slot_1_key() -> String {
+    String::from("1")
+}
+
+/// Runs the `default_hotbar_slot_2_key` routine for default hotbar slot 2 key in the `core::config` module.
+fn default_hotbar_slot_2_key() -> String {
+    String::from("2")
+}
+
+/// Runs the `default_hotbar_slot_3_key` routine for default hotbar slot 3 key in the `core::config` module.
+fn default_hotbar_slot_3_key() -> String {
+    String::from("3")
+}
+
+/// Runs the `default_hotbar_slot_4_key` routine for default hotbar slot 4 key in the `core::config` module.
+fn default_hotbar_slot_4_key() -> String {
+    String::from("4")
+}
+
+/// Runs the `default_hotbar_slot_5_key` routine for default hotbar slot 5 key in the `core::config` module.
+fn default_hotbar_slot_5_key() -> String {
+    String::from("5")
+}
+
+/// Runs the `default_hotbar_slot_6_key` routine for default hotbar slot 6 key in the `core::config` module.
+fn default_hotbar_slot_6_key() -> String {
+    String::from("6")
 }
 
 /// Runs the `default_window_width` routine for default window width in the `core::config` module.
@@ -477,17 +537,17 @@ fn default_fog_color() -> [f32; 3] {
 
 /// Runs the `default_fog_start_factor` routine for default fog start factor in the `core::config` module.
 fn default_fog_start_factor() -> f32 {
-    0.72
+    0.80
 }
 
 /// Runs the `default_fog_end_factor` routine for default fog end factor in the `core::config` module.
 fn default_fog_end_factor() -> f32 {
-    0.96
+    1.08
 }
 
 /// Runs the `default_far_clip_extra` routine for default far clip extra in the `core::config` module.
 fn default_far_clip_extra() -> f32 {
-    10.0
+    14.0
 }
 
 /// Runs the `default_chat_max_space` routine for default chat max space in the `core::config` module.

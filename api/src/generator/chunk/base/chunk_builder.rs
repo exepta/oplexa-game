@@ -1371,7 +1371,6 @@ fn collect_meshed_subchunks(
                             collider,
                             Transform::from_translation(origin + local_offset),
                             ChunkColliderProxy { coord },
-                            ColliderDisabled,
                             Name::new(format!(
                                 "collider chunk({},{}) sub{}",
                                 coord.x, coord.y, sub
@@ -1418,7 +1417,6 @@ fn collect_meshed_subchunks(
                                 collider,
                                 Transform::from_translation(origin + local_offset),
                                 ChunkColliderProxy { coord },
-                                ColliderDisabled,
                                 Name::new(format!(
                                     "collider chunk({},{}) sub{}",
                                     coord.x, coord.y, sub
@@ -1677,7 +1675,6 @@ fn collect_finished_collider_builds(
                 collider,
                 Transform::from_translation(build.origin),
                 ChunkColliderProxy { coord },
-                ColliderDisabled,
                 Name::new(format!(
                     "collider chunk({},{}) sub{}",
                     coord.x, coord.y, sub
@@ -1739,6 +1736,9 @@ fn update_chunk_collider_activation(
             (t.translation().x / VOXEL_SIZE).floor() as i32,
             (t.translation().z / VOXEL_SIZE).floor() as i32,
         ));
+    }
+    if centers_xz_blocks.is_empty() {
+        return;
     }
 
     for (entity, proxy, disabled) in q_colliders.iter() {

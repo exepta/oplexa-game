@@ -56,6 +56,43 @@ fn cycle_hotbar_with_scroll(
     }
 }
 
+/// Runs the `select_hotbar_with_number_keys` routine for select hotbar with number keys in the `graphic::components::hud` module.
+fn select_hotbar_with_number_keys(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    global_config: Res<GlobalConfig>,
+    ui_interaction: Res<UiInteractionState>,
+    mut hotbar_state: ResMut<HotbarSelectionState>,
+) {
+    if ui_interaction.blocks_game_input() {
+        return;
+    }
+
+    for slot_index in 0..HOTBAR_SLOTS {
+        let key_name = match slot_index {
+            0 => global_config.input.hotbar_slot_1.as_str(),
+            1 => global_config.input.hotbar_slot_2.as_str(),
+            2 => global_config.input.hotbar_slot_3.as_str(),
+            3 => global_config.input.hotbar_slot_4.as_str(),
+            4 => global_config.input.hotbar_slot_5.as_str(),
+            _ => global_config.input.hotbar_slot_6.as_str(),
+        };
+        let fallback = match slot_index {
+            0 => KeyCode::Digit1,
+            1 => KeyCode::Digit2,
+            2 => KeyCode::Digit3,
+            3 => KeyCode::Digit4,
+            4 => KeyCode::Digit5,
+            _ => KeyCode::Digit6,
+        };
+        let key = convert(key_name).unwrap_or(fallback);
+
+        if keyboard.just_pressed(key) {
+            hotbar_state.selected_index = slot_index;
+            return;
+        }
+    }
+}
+
 /// Runs the `drop_selected_hotbar_item` routine for drop selected hotbar item in the `graphic::components::hud` module.
 fn drop_selected_hotbar_item(
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -170,6 +207,7 @@ fn sync_hotbar_selected_block(
 /// Synchronizes hud hotbar ui for the `graphic::components::hud` module.
 fn sync_hud_hotbar_ui(
     hotbar_state: Res<HotbarSelectionState>,
+    hotbar_tooltip: Res<HotbarSelectionTooltipState>,
     inventory: Res<PlayerInventory>,
     item_registry: Res<ItemRegistry>,
     block_registry: Res<BlockRegistry>,
@@ -177,7 +215,11 @@ fn sync_hud_hotbar_ui(
     mut image_cache: ResMut<ImageCache>,
     mut images: ResMut<Assets<Image>>,
     mut buttons: Query<(&CssID, &mut Button, &mut BorderColor, &mut BackgroundColor)>,
-    mut badges: Query<(&CssID, &mut Paragraph, &mut Visibility)>,
+    mut badges: Query<
+        (&CssID, &mut Paragraph, &mut Visibility),
+        Without<HotbarSelectionTooltipText>,
+    >,
+    mut tooltip_text: Query<(&mut Paragraph, &mut Visibility), With<HotbarSelectionTooltipText>>,
 ) {
     for (css_id, mut button, mut border, mut background) in &mut buttons {
         if let Some(slot_number) = css_id.0.strip_prefix(HUD_SLOT_PREFIX) {
@@ -249,6 +291,55 @@ fn sync_hud_hotbar_ui(
             paragraph.text = count_text;
         }
         *visibility = Visibility::Inherited;
+    }
+
+    if let Ok((mut text, mut visibility)) = tooltip_text.single_mut() {
+        if hotbar_tooltip.visible {
+            if text.text != hotbar_tooltip.text {
+                text.text = hotbar_tooltip.text.clone();
+            }
+            *visibility = Visibility::Inherited;
+        } else {
+            if !text.text.is_empty() {
+                text.text.clear();
+            }
+            *visibility = Visibility::Hidden;
+        }
+    }
+}
+
+/// Tracks selected hotbar item tooltip state for the `graphic::components::hud` module.
+fn track_hotbar_selection_tooltip(
+    time: Res<Time>,
+    hotbar_state: Res<HotbarSelectionState>,
+    inventory: Res<PlayerInventory>,
+    item_registry: Res<ItemRegistry>,
+    mut tooltip: ResMut<HotbarSelectionTooltipState>,
+) {
+    tooltip.timer.tick(time.delta());
+    if tooltip.timer.is_finished() {
+        tooltip.visible = false;
+    }
+
+    if hotbar_state.selected_index == tooltip.last_selected_index {
+        return;
+    }
+
+    tooltip.last_selected_index = hotbar_state.selected_index;
+    let selected_item_name = inventory
+        .slots
+        .get(hotbar_state.selected_index)
+        .filter(|slot| !slot.is_empty())
+        .and_then(|slot| item_registry.def_opt(slot.item_id))
+        .map(|item| item.name.clone());
+
+    if let Some(name) = selected_item_name {
+        tooltip.timer.reset();
+        tooltip.visible = true;
+        tooltip.text = name;
+    } else {
+        tooltip.visible = false;
+        tooltip.text.clear();
     }
 }
 

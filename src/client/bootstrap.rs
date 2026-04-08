@@ -47,8 +47,8 @@ pub(super) fn init_bevy_app(
                     }),
                     ..default()
                 })
-                .set(bevy::app::TaskPoolPlugin {
-                    task_pool_options: bevy::app::TaskPoolOptions {
+                .set(TaskPoolPlugin {
+                    task_pool_options: TaskPoolOptions {
                         io: bevy::app::TaskPoolThreadAssignmentPolicy {
                             min_threads: 1,
                             max_threads: io_pool_max.clamp(1, 4),

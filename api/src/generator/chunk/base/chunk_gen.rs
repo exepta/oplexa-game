@@ -556,6 +556,7 @@ pub(crate) async fn generate_chunk_async_biome(
                 pick(&ocean_biome.surface.under_zero, wx, wz, pick_seed ^ 0x77);
             let id_ocean_upper_zero = reg.id_or_air(ocean_upper_zero_name);
             let id_ocean_under_zero = reg.id_or_air(ocean_under_zero_name);
+            let id_deep_stone = reg.id_opt("deep_stone_block").unwrap_or(0);
 
             // Beach cap width with detail noise
             let bw_noise = map01(coast_d.get_noise_2d(wxf, wzf));
@@ -611,7 +612,7 @@ pub(crate) async fn generate_chunk_async_biome(
 
                 let underwater = h_final < SEA_LEVEL;
 
-                let id: BlockId = if underwater {
+                let mut id: BlockId = if underwater {
                     // OCEAN: seabed is at h_final; enforce ≥3 blocks of sea_floor.
                     let depth_from_seabed = (h_final - wy).max(0);
                     if depth_from_seabed <= 2 {
@@ -666,6 +667,31 @@ pub(crate) async fn generate_chunk_async_biome(
                         }
                     }
                 };
+
+                // Enforce deep_stone only below Y -20.
+                if id_deep_stone != 0 && id == id_deep_stone && wy > -20 {
+                    id = if underwater {
+                        if id_ocean_under_zero != 0 && id_ocean_under_zero != id_deep_stone {
+                            id_ocean_under_zero
+                        } else if id_sea_floor != 0 && id_sea_floor != id_deep_stone {
+                            id_sea_floor
+                        } else if id_sand != 0 {
+                            id_sand
+                        } else {
+                            id_gravel
+                        }
+                    } else if id_under_zero != 0 && id_under_zero != id_deep_stone {
+                        id_under_zero
+                    } else if id_bottom != 0 && id_bottom != id_deep_stone {
+                        id_bottom
+                    } else if id_upper_zero != 0 && id_upper_zero != id_deep_stone {
+                        id_upper_zero
+                    } else if id_dirt != 0 {
+                        id_dirt
+                    } else {
+                        id_gravel
+                    };
+                }
 
                 if id != 0 {
                     chunk.set(lx, ly, lz, id);

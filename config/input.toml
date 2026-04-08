@@ -18,6 +18,12 @@ ui_inventory = "Tab"
 ui_close_back = "Escape"
 open_chat = "C"
 inventory_recipe_open = "R"
+hotbar_slot_1 = "1"
+hotbar_slot_2 = "2"
+hotbar_slot_3 = "3"
+hotbar_slot_4 = "4"
+hotbar_slot_5 = "5"
+hotbar_slot_6 = "6"
 
 # Debug
 debug_overlay = "F3"

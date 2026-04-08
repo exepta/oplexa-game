@@ -181,6 +181,7 @@ fn render_chat_overlay(
     mut egui_contexts: EguiContexts,
     chat_log: Res<ChatLog>,
     mut chat_ui: ResMut<ChatUiState>,
+    mut submit: MessageWriter<ChatSubmitRequest>,
 ) {
     if !chat_ui.open && chat_ui.alpha <= 0.01 {
         return;
@@ -234,13 +235,30 @@ fn render_chat_overlay(
                         .stick_to_bottom(true)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
+                            let mut clicked_location = None;
                             for line in lines.iter().skip(start) {
-                                render_chat_line_with_mentions(
-                                    ui,
-                                    line.formatted().as_str(),
-                                    text_color,
-                                    mention_color,
-                                );
+                                if clicked_location.is_none() {
+                                    clicked_location = render_chat_line_with_mentions(
+                                        ui,
+                                        line.formatted().as_str(),
+                                        text_color,
+                                        mention_color,
+                                        accent_color,
+                                    );
+                                } else {
+                                    let _ = render_chat_line_with_mentions(
+                                        ui,
+                                        line.formatted().as_str(),
+                                        text_color,
+                                        mention_color,
+                                        accent_color,
+                                    );
+                                }
+                            }
+                            if let Some([x, y, z]) = clicked_location {
+                                submit.write(ChatSubmitRequest {
+                                    text: format!("/tp {x} {y} {z}"),
+                                });
                             }
                         });
 
@@ -312,12 +330,21 @@ fn render_chat_line_with_mentions(
     text: &str,
     base_color: egui::Color32,
     mention_color: egui::Color32,
-) {
+    location_color: egui::Color32,
+) -> Option<[f32; 3]> {
+    let mut clicked_location = None;
     ui.horizontal_wrapped(|ui| {
         let mut cursor = 0usize;
         while cursor < text.len() {
-            let next = next_mention_span(text, cursor);
-            let Some((start, end)) = next else {
+            let next_mention = next_mention_span(text, cursor).map(|(start, end)| {
+                ChatSpecialSpan::Mention { start, end }
+            });
+            let next_location = next_location_span(text, cursor).map(|(start, end, coords)| {
+                ChatSpecialSpan::Location { start, end, coords }
+            });
+            let next = earliest_special_span(next_mention, next_location);
+
+            let Some(next_span) = next else {
                 if cursor < text.len() {
                     ui.label(
                         egui::RichText::new(&text[cursor..])
@@ -329,25 +356,78 @@ fn render_chat_line_with_mentions(
                 break;
             };
 
+            let (start, end) = next_span.range();
             if start > cursor {
                 ui.label(
                     egui::RichText::new(&text[cursor..start])
                         .color(base_color)
                         .monospace()
-                        .size(CHAT_FONT_SIZE),
+                    .size(CHAT_FONT_SIZE),
                 );
             }
 
-            ui.label(
-                egui::RichText::new(&text[start..end])
-                    .color(mention_color)
-                    .strong()
-                    .monospace()
-                    .size(CHAT_FONT_SIZE),
-            );
+            match next_span {
+                ChatSpecialSpan::Mention { .. } => {
+                    ui.label(
+                        egui::RichText::new(&text[start..end])
+                            .color(mention_color)
+                            .strong()
+                            .monospace()
+                            .size(CHAT_FONT_SIZE),
+                    );
+                }
+                ChatSpecialSpan::Location { coords, .. } => {
+                    let response = ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&text[start..end])
+                                .color(location_color)
+                                .strong()
+                                .underline()
+                                .monospace()
+                                .size(CHAT_FONT_SIZE),
+                        )
+                        .sense(egui::Sense::click()),
+                    );
+                    if response.clicked() {
+                        clicked_location = Some(coords);
+                    }
+                }
+            }
             cursor = end;
         }
     });
+    clicked_location
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ChatSpecialSpan {
+    Mention { start: usize, end: usize },
+    Location { start: usize, end: usize, coords: [f32; 3] },
+}
+
+impl ChatSpecialSpan {
+    #[inline]
+    fn range(self) -> (usize, usize) {
+        match self {
+            Self::Mention { start, end } => (start, end),
+            Self::Location { start, end, .. } => (start, end),
+        }
+    }
+}
+
+fn earliest_special_span(
+    mention: Option<ChatSpecialSpan>,
+    location: Option<ChatSpecialSpan>,
+) -> Option<ChatSpecialSpan> {
+    match (mention, location) {
+        (Some(a), Some(b)) => {
+            let a_start = a.range().0;
+            let b_start = b.range().0;
+            if a_start <= b_start { Some(a) } else { Some(b) }
+        }
+        (Some(span), None) | (None, Some(span)) => Some(span),
+        (None, None) => None,
+    }
 }
 
 fn next_mention_span(text: &str, from: usize) -> Option<(usize, usize)> {
@@ -387,4 +467,88 @@ fn parse_mention_end(text: &str, at: usize) -> Option<usize> {
         }
     }
     if end <= at + 1 { None } else { Some(end) }
+}
+
+fn next_location_span(text: &str, from: usize) -> Option<(usize, usize, [f32; 3])> {
+    let mut cursor = from;
+    while cursor < text.len() {
+        let rel = text[cursor..].find("&:[")?;
+        let start = cursor + rel;
+        if let Some((end, coords)) = parse_location_token(text, start) {
+            return Some((start, end, coords));
+        }
+        cursor = start.saturating_add(3);
+    }
+    None
+}
+
+fn parse_location_token(text: &str, start: usize) -> Option<(usize, [f32; 3])> {
+    let bytes = text.as_bytes();
+    if start + 3 > bytes.len() || &text[start..start + 3] != "&:[" {
+        return None;
+    }
+
+    let mut idx = start + 3;
+    idx = skip_ascii_whitespace(bytes, idx);
+    let (x, next_idx) = parse_ascii_f32(text, idx)?;
+    idx = skip_ascii_whitespace(bytes, next_idx);
+    if bytes.get(idx).copied()? != b',' {
+        return None;
+    }
+
+    idx = skip_ascii_whitespace(bytes, idx + 1);
+    let (y, next_idx) = parse_ascii_f32(text, idx)?;
+    idx = skip_ascii_whitespace(bytes, next_idx);
+    if bytes.get(idx).copied()? != b',' {
+        return None;
+    }
+
+    idx = skip_ascii_whitespace(bytes, idx + 1);
+    let (z, next_idx) = parse_ascii_f32(text, idx)?;
+    idx = skip_ascii_whitespace(bytes, next_idx);
+    if bytes.get(idx).copied()? != b']' {
+        return None;
+    }
+
+    Some((idx + 1, [x, y, z]))
+}
+
+#[inline]
+fn skip_ascii_whitespace(bytes: &[u8], mut idx: usize) -> usize {
+    while let Some(ch) = bytes.get(idx).copied() {
+        if !ch.is_ascii_whitespace() {
+            break;
+        }
+        idx += 1;
+    }
+    idx
+}
+
+fn parse_ascii_f32(text: &str, start: usize) -> Option<(f32, usize)> {
+    let bytes = text.as_bytes();
+    let mut idx = start;
+    if matches!(bytes.get(idx).copied(), Some(b'+') | Some(b'-')) {
+        idx += 1;
+    }
+
+    let mut has_digit = false;
+    while matches!(bytes.get(idx).copied(), Some(b'0'..=b'9')) {
+        has_digit = true;
+        idx += 1;
+    }
+
+    if matches!(bytes.get(idx).copied(), Some(b'.')) {
+        idx += 1;
+        while matches!(bytes.get(idx).copied(), Some(b'0'..=b'9')) {
+            has_digit = true;
+            idx += 1;
+        }
+    }
+
+    if !has_digit {
+        return None;
+    }
+
+    let value = text[start..idx].parse::<f32>().ok()?;
+    Some((value, idx))
 }
