@@ -1,4 +1,5 @@
 use crate::core::config::{GlobalConfig, WorldGenConfig};
+use crate::core::entities::player::Player;
 use crate::core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent};
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::shader::terrain_shader::{TerrainChunkMatIndex, TerrainChunkMaterial};
@@ -16,7 +17,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy::tasks::futures_lite::future;
-use bevy_rapier3d::prelude::{Collider, RigidBody, TriMeshFlags};
+use bevy_rapier3d::prelude::{Collider, ColliderDisabled, RigidBody, TriMeshFlags};
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -54,6 +55,11 @@ struct ColliderBuild {
 /// Represents chunk collider index used by the `generator::chunk::chunk_builder` module.
 #[derive(Resource, Default)]
 struct ChunkColliderIndex(pub HashMap<(IVec2, u8), Entity>);
+
+#[derive(Component, Clone, Copy)]
+struct ChunkColliderProxy {
+    coord: IVec2,
+}
 
 /// Represents pending collider build used by the `generator::chunk::chunk_builder` module.
 #[derive(Resource, Default)]
@@ -101,7 +107,6 @@ struct QueuedOnce(HashSet<(IVec2, u8)>);
 
 const HIGH_RANGE_PRELOAD_THRESHOLD: i32 = 10;
 const HIDDEN_PRELOAD_RING: i32 = 4;
-const NEAR_COLLIDER_RADIUS: i32 = 2;
 
 #[derive(Resource, Default)]
 struct StreamLookaheadState {
@@ -117,6 +122,15 @@ struct RingDeadlineState {
 
 #[derive(Resource, Default)]
 struct MeshBacklogSet(HashSet<(IVec2, usize)>);
+
+struct ReadyMeshItem {
+    key: (IVec2, usize),
+    builds: Vec<(BlockId, MeshBuild)>,
+    immediate: bool,
+}
+
+#[derive(Resource, Default)]
+struct ImmediateMeshReadyQueue(VecDeque<ReadyMeshItem>);
 
 #[derive(Resource, Default)]
 struct ChunkReadySet(HashSet<IVec2>);
@@ -215,6 +229,7 @@ impl Plugin for ChunkBuilder {
             .init_resource::<StreamLookaheadState>()
             .init_resource::<RingDeadlineState>()
             .init_resource::<MeshBacklogSet>()
+            .init_resource::<ImmediateMeshReadyQueue>()
             .init_resource::<ChunkReadySet>()
             .init_resource::<ChunkStageTelemetry>()
             .init_resource::<ChunkReadyLatencyState>()
@@ -234,20 +249,20 @@ impl Plugin for ChunkBuilder {
                         in_state(AppState::Loading(LoadingStates::BaseGen))
                             .or(in_state(AppState::InGame(InGameStates::Game))),
                     ),
-                    (
-                        collect_meshed_subchunks,
-                        enqueue_kick_for_new_subchunks,
-                        process_kick_queue,
-                    )
-                        .chain()
+                    schedule_remesh_tasks_from_events
+                        .in_set(VoxelStage::Meshing)
                         .run_if(
                             in_state(AppState::Loading(LoadingStates::BaseGen))
                                 .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
                                 .or(in_state(AppState::Loading(LoadingStates::WaterGen)))
                                 .or(in_state(AppState::InGame(InGameStates::Game))),
                         ),
-                    schedule_remesh_tasks_from_events
-                        .in_set(VoxelStage::Meshing)
+                    (
+                        collect_meshed_subchunks,
+                        enqueue_kick_for_new_subchunks,
+                        process_kick_queue,
+                    )
+                        .chain()
                         .run_if(
                             in_state(AppState::Loading(LoadingStates::BaseGen))
                                 .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
@@ -271,6 +286,8 @@ impl Plugin for ChunkBuilder {
                                 .or(in_state(AppState::Loading(LoadingStates::WaterGen)))
                                 .or(in_state(AppState::InGame(InGameStates::Game))),
                         ),
+                    update_chunk_collider_activation
+                        .run_if(in_state(AppState::InGame(InGameStates::Game))),
                     unload_far_chunks.run_if(
                         in_state(AppState::Loading(LoadingStates::BaseGen))
                             .or(in_state(AppState::InGame(InGameStates::Game))),
@@ -1063,6 +1080,7 @@ fn collect_generated_chunks(
 fn collect_meshed_subchunks(
     mut commands: Commands,
     mut apply_state: ChunkMeshApplyState,
+    mut immediate_ready: ResMut<ImmediateMeshReadyQueue>,
     reg: Res<BlockRegistry>,
     terrain_mats: Res<TerrainChunkMatIndex>,
     q_mesh: Query<&Mesh3d>,
@@ -1083,9 +1101,6 @@ fn collect_meshed_subchunks(
     } else {
         game_config.graphics.chunk_mesh_apply_per_frame.max(1)
     };
-    let mut done_keys = Vec::new();
-    let mut applied = 0usize;
-    let mut near_sync_budget = if waiting { 16usize } else { 4usize };
     let center_c = if let Ok(t) = q_cam.single() {
         let (c, _) = world_to_chunk_xz(
             (t.translation().x / VOXEL_SIZE).floor() as i32,
@@ -1097,92 +1112,178 @@ fn collect_meshed_subchunks(
     } else {
         IVec2::ZERO
     };
-
+    let poll_scan_limit = if waiting {
+        BIG
+    } else {
+        (apply_cap.saturating_mul(4)).clamp(16, 96)
+    };
+    let mut polled_done_keys: Vec<(IVec2, usize)> = Vec::new();
+    let mut scanned = 0usize;
     for (key, task) in apply_state.pending_mesh.0.iter_mut() {
-        if applied >= apply_cap {
+        if scanned >= poll_scan_limit {
             break;
         }
+        scanned += 1;
+        if let Some((ready_key, builds)) = future::block_on(future::poll_once(task)) {
+            polled_done_keys.push(*key);
+            immediate_ready.0.retain(|item| item.key != ready_key);
+            immediate_ready.0.push_back(ReadyMeshItem {
+                key: ready_key,
+                builds,
+                immediate: false,
+            });
+        }
+    }
+    for key in polled_done_keys {
+        apply_state.pending_mesh.0.remove(&key);
+    }
 
-        if let Some(((coord, sub), builds)) = future::block_on(future::poll_once(task)) {
-            // Despawn render meshes for this (coord,sub) first (safe).
-            let old_keys: Vec<_> = apply_state
-                .mesh_index
-                .map
-                .keys()
-                .cloned()
-                .filter(|(c, s, _)| c == &coord && *s as usize == sub)
-                .collect();
-            despawn_mesh_set(
-                old_keys,
-                &mut apply_state.mesh_index,
-                &mut commands,
-                &q_mesh,
-                &mut apply_state.meshes,
-            );
+    let mut ready_results: Vec<ReadyMeshItem> = Vec::new();
+    while ready_results.len() < apply_cap {
+        let next = if waiting {
+            immediate_ready.0.pop_front()
+        } else {
+            let best = immediate_ready
+                .0
+                .iter()
+                .take(512)
+                .enumerate()
+                .min_by_key(|(_, item)| {
+                    let dx = item.key.0.x - center_c.x;
+                    let dz = item.key.0.y - center_c.y;
+                    (dx * dx + dz * dz, item.key.1)
+                })
+                .map(|(idx, _)| idx);
+            best.and_then(|idx| immediate_ready.0.remove(idx))
+                .or_else(|| immediate_ready.0.pop_front())
+        };
+        let Some(item) = next else {
+            break;
+        };
+        ready_results.push(item);
+    }
 
-            let s = VOXEL_SIZE;
-            let origin = Vec3::new(
-                (coord.x * CX as i32) as f32 * s,
-                (Y_MIN as f32) * s,
-                (coord.y * CZ as i32) as f32 * s,
-            );
+    for item in ready_results {
+        let ((coord, sub), builds, immediate) = (item.key, item.builds, item.immediate);
+        // Despawn render meshes for this (coord,sub) first (safe).
+        let old_keys: Vec<_> = apply_state
+            .mesh_index
+            .map
+            .keys()
+            .cloned()
+            .filter(|(c, s, _)| c == &coord && *s as usize == sub)
+            .collect();
+        despawn_mesh_set(
+            old_keys,
+            &mut apply_state.mesh_index,
+            &mut commands,
+            &q_mesh,
+            &mut apply_state.meshes,
+        );
 
-            // Build, render meshes, collect physics arrays.
-            let mut phys_positions: Vec<[f32; 3]> = Vec::new();
-            let mut phys_indices: Vec<u32> = Vec::new();
+        let s = VOXEL_SIZE;
+        let origin = Vec3::new(
+            (coord.x * CX as i32) as f32 * s,
+            (Y_MIN as f32) * s,
+            (coord.y * CZ as i32) as f32 * s,
+        );
 
-            for (bid, mb) in builds {
-                if mb.pos.is_empty() {
-                    continue;
-                }
+        // Build, render meshes, collect physics arrays.
+        let mut phys_positions: Vec<[f32; 3]> = Vec::new();
+        let mut phys_indices: Vec<u32> = Vec::new();
 
-                // Fluids (e.g. water) are rendered but must not become solid colliders.
-                if !reg.is_fluid(bid) {
-                    let base = phys_positions.len() as u32;
-                    phys_positions.extend_from_slice(&mb.pos);
-                    phys_indices.extend(mb.idx.iter().map(|i| base + *i));
-                }
-
-                let mesh = mb.into_mesh();
-
-                let Some(handle) = terrain_mats.0.get(&bid).cloned() else {
-                    continue;
-                };
-                let ent = commands
-                    .spawn((
-                        Mesh3d(apply_state.meshes.add(mesh)),
-                        MeshMaterial3d::<TerrainChunkMaterial>(handle),
-                        Transform::from_translation(origin),
-                        SubchunkMesh {
-                            coord,
-                            sub: sub as u8,
-                            block: bid,
-                        },
-                        Name::new(format!(
-                            "chunk({},{}) sub{} block{}",
-                            coord.x, coord.y, sub, bid
-                        )),
-                    ))
-                    .id();
-                apply_state
-                    .mesh_index
-                    .map
-                    .insert((coord, sub as u8, bid), ent);
+        for (bid, mb) in builds {
+            if mb.pos.is_empty() {
+                continue;
             }
 
-            // ----- Physics collider handling -----
-            let need_collider = !phys_positions.is_empty();
-            let collider_key = (coord, sub as u8);
-            let near_player = (coord.x - center_c.x).abs() <= NEAR_COLLIDER_RADIUS
-                && (coord.y - center_c.y).abs() <= NEAR_COLLIDER_RADIUS;
-            let has_existing_collider = apply_state.collider_index.0.contains_key(&collider_key);
+            // Fluids (e.g. water) are rendered but must not become solid colliders.
+            if reg.is_solid_for_collision(bid) {
+                let base = phys_positions.len() as u32;
+                phys_positions.extend_from_slice(&mb.pos);
+                phys_indices.extend(mb.idx.iter().map(|i| base + *i));
+            }
 
-            if need_collider {
-                let can_spend_near_budget = near_player && near_sync_budget > 0;
-                if can_spend_near_budget {
-                    near_sync_budget -= 1;
+            let mesh = mb.into_mesh();
+
+            let Some(handle) = terrain_mats.0.get(&bid).cloned() else {
+                continue;
+            };
+            let ent = commands
+                .spawn((
+                    Mesh3d(apply_state.meshes.add(mesh)),
+                    MeshMaterial3d::<TerrainChunkMaterial>(handle),
+                    Transform::from_translation(origin),
+                    SubchunkMesh {
+                        coord,
+                        sub: sub as u8,
+                        block: bid,
+                    },
+                    Name::new(format!(
+                        "chunk({},{}) sub{} block{}",
+                        coord.x, coord.y, sub, bid
+                    )),
+                ))
+                .id();
+            apply_state
+                .mesh_index
+                .map
+                .insert((coord, sub as u8, bid), ent);
+        }
+
+        // ----- Physics collider handling -----
+        let need_collider = !phys_positions.is_empty();
+        let collider_key = (coord, sub as u8);
+
+        if need_collider {
+            if immediate {
+                // For local player edits: update physics immediately in the same frame.
+                apply_state.coll_backlog.0.remove(&collider_key);
+                apply_state.pending_collider.0.remove(&collider_key);
+                if let Some(ent) = apply_state.collider_index.0.remove(&collider_key) {
+                    safe_despawn_entity(&mut commands, ent);
                 }
-                let should_place_placeholder_now = !has_existing_collider || can_spend_near_budget;
+
+                // Use a cheap placeholder immediately and build exact collider async.
+                let placeholder = apply_state
+                    .chunk_map
+                    .chunks
+                    .get(&coord)
+                    .and_then(|chunk| build_surface_placeholder_collider(chunk, &reg, sub))
+                    .or_else(|| build_bounds_collider(&phys_positions));
+                if let Some((collider, local_offset)) = placeholder {
+                    let ent = commands
+                        .spawn((
+                            RigidBody::Fixed,
+                            collider,
+                            Transform::from_translation(origin + local_offset),
+                            ChunkColliderProxy { coord },
+                            ColliderDisabled,
+                            Name::new(format!(
+                                "collider chunk({},{}) sub{}",
+                                coord.x, coord.y, sub
+                            )),
+                        ))
+                        .id();
+                    apply_state.collider_index.0.insert(collider_key, ent);
+                }
+
+                apply_state.coll_backlog.0.insert(
+                    collider_key,
+                    ColliderTodo {
+                        coord,
+                        sub: sub as u8,
+                        origin,
+                        positions: phys_positions,
+                        indices: phys_indices,
+                    },
+                );
+            } else {
+                let has_existing_collider =
+                    apply_state.collider_index.0.contains_key(&collider_key);
+                // Keep old collider until the new async collider is ready.
+                // Replacing an existing collider with a coarse placeholder can open temporary holes.
+                let should_place_placeholder_now = !has_existing_collider;
 
                 if should_place_placeholder_now {
                     apply_state.pending_collider.0.remove(&collider_key);
@@ -1203,6 +1304,8 @@ fn collect_meshed_subchunks(
                                 RigidBody::Fixed,
                                 collider,
                                 Transform::from_translation(origin + local_offset),
+                                ChunkColliderProxy { coord },
+                                ColliderDisabled,
                                 Name::new(format!(
                                     "collider chunk({},{}) sub{}",
                                     coord.x, coord.y, sub
@@ -1223,35 +1326,28 @@ fn collect_meshed_subchunks(
                         indices: phys_indices,
                     },
                 );
-            } else {
-                // No geometry → ensure collider is removed (solid gone).
-                apply_state.coll_backlog.0.remove(&collider_key);
-                apply_state.pending_collider.0.remove(&collider_key);
-                if let Some(ent) = apply_state.collider_index.0.remove(&collider_key) {
-                    safe_despawn_entity(&mut commands, ent);
-                }
             }
-
-            if let Some(chunk) = apply_state.chunk_map.chunks.get_mut(&coord) {
-                chunk.clear_dirty(sub);
-                if chunk.dirty_mask == 0 {
-                    apply_state.ready_set.0.insert(coord);
-                    telemetry_mark_chunk_ready(
-                        coord,
-                        time.elapsed_secs_f64(),
-                        &mut apply_state.ready_latency,
-                        &mut apply_state.stage_telemetry,
-                    );
-                }
+        } else {
+            // No geometry → ensure collider is removed (solid gone).
+            apply_state.coll_backlog.0.remove(&collider_key);
+            apply_state.pending_collider.0.remove(&collider_key);
+            if let Some(ent) = apply_state.collider_index.0.remove(&collider_key) {
+                safe_despawn_entity(&mut commands, ent);
             }
-
-            applied += 1;
-            done_keys.push(*key);
         }
-    }
 
-    for k in done_keys {
-        apply_state.pending_mesh.0.remove(&k);
+        if let Some(chunk) = apply_state.chunk_map.chunks.get_mut(&coord) {
+            chunk.clear_dirty(sub);
+            if chunk.dirty_mask == 0 {
+                apply_state.ready_set.0.insert(coord);
+                telemetry_mark_chunk_ready(
+                    coord,
+                    time.elapsed_secs_f64(),
+                    &mut apply_state.ready_latency,
+                    &mut apply_state.stage_telemetry,
+                );
+            }
+        }
     }
 
     apply_state.stage_telemetry.stage_mesh_apply_ms = smooth_stage_ms(
@@ -1424,6 +1520,8 @@ fn collect_finished_collider_builds(
                 RigidBody::Fixed,
                 collider,
                 Transform::from_translation(build.origin),
+                ChunkColliderProxy { coord },
+                ColliderDisabled,
                 Name::new(format!(
                     "collider chunk({},{}) sub{}",
                     coord.x, coord.y, sub
@@ -1444,6 +1542,68 @@ fn collect_finished_collider_builds(
     );
 }
 
+/// Enables/disables chunk colliders based on nearby gameplay entities.
+fn update_chunk_collider_activation(
+    mut commands: Commands,
+    game_config: Res<GlobalConfig>,
+    q_players: Query<&GlobalTransform, With<Player>>,
+    q_mobs: Query<
+        (&GlobalTransform, &Name),
+        (
+            With<RigidBody>,
+            Without<Player>,
+            Without<ChunkColliderProxy>,
+        ),
+    >,
+    q_colliders: Query<(Entity, &ChunkColliderProxy, Option<&ColliderDisabled>)>,
+) {
+    if q_colliders.is_empty() {
+        return;
+    }
+
+    let radius_blocks = game_config
+        .graphics
+        .chunk_collider_activation_radius_blocks
+        .max(1);
+    let radius_sq = i64::from(radius_blocks) * i64::from(radius_blocks);
+
+    let mut centers_xz_blocks: Vec<IVec2> = Vec::new();
+    for t in q_players.iter() {
+        centers_xz_blocks.push(IVec2::new(
+            (t.translation().x / VOXEL_SIZE).floor() as i32,
+            (t.translation().z / VOXEL_SIZE).floor() as i32,
+        ));
+    }
+    for (t, name) in q_mobs.iter() {
+        let lowered = name.as_str().to_ascii_lowercase();
+        if !(lowered.contains("monster") || lowered.contains("mob")) {
+            continue;
+        }
+        centers_xz_blocks.push(IVec2::new(
+            (t.translation().x / VOXEL_SIZE).floor() as i32,
+            (t.translation().z / VOXEL_SIZE).floor() as i32,
+        ));
+    }
+
+    for (entity, proxy, disabled) in q_colliders.iter() {
+        let center_x = proxy.coord.x * CX as i32 + (CX as i32 / 2);
+        let center_z = proxy.coord.y * CZ as i32 + (CZ as i32 / 2);
+        let should_enable = centers_xz_blocks.iter().any(|p| {
+            let dx = i64::from(center_x - p.x);
+            let dz = i64::from(center_z - p.y);
+            dx * dx + dz * dz <= radius_sq
+        });
+
+        if should_enable {
+            if disabled.is_some() {
+                commands.entity(entity).remove::<ColliderDisabled>();
+            }
+        } else if disabled.is_none() {
+            commands.entity(entity).insert(ColliderDisabled);
+        }
+    }
+}
+
 //System
 /// Runs the `schedule_remesh_tasks_from_events` routine for schedule remesh tasks from events in the `generator::chunk::chunk_builder` module.
 fn schedule_remesh_tasks_from_events(
@@ -1452,9 +1612,12 @@ fn schedule_remesh_tasks_from_events(
     reg: Res<BlockRegistry>,
     mut backlog: ResMut<MeshBacklog>,
     mut backlog_set: ResMut<MeshBacklogSet>,
+    mut immediate_ready: ResMut<ImmediateMeshReadyQueue>,
     mut ev_dirty: MessageReader<SubChunkNeedRemeshEvent>,
     game_config: Res<GlobalConfig>,
     app_state: Res<State<AppState>>,
+    q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    load_center: Option<Res<LoadCenter>>,
 ) {
     if chunk_map.chunks.is_empty() {
         ev_dirty.clear();
@@ -1462,15 +1625,33 @@ fn schedule_remesh_tasks_from_events(
     }
 
     let waiting = is_waiting(&app_state);
+    let in_game_immediate = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
     let max_inflight_mesh = if waiting {
         BIG
     } else {
         game_config.graphics.chunk_mesh_max_inflight.max(1)
     };
+    let immediate_budget = if in_game_immediate {
+        game_config.graphics.chunk_mesh_apply_per_frame.clamp(1, 6)
+    } else {
+        0
+    };
+    let mut immediate_used = 0usize;
 
     let reg_lite = RegLite::from_reg(&reg);
     let pool = AsyncComputeTaskPool::get();
     let mut by_chunk: HashMap<IVec2, Vec<usize>> = HashMap::new();
+    let center_c = if let Ok(t) = q_cam.single() {
+        let (c, _) = world_to_chunk_xz(
+            (t.translation().x / VOXEL_SIZE).floor() as i32,
+            (t.translation().z / VOXEL_SIZE).floor() as i32,
+        );
+        c
+    } else if let Some(lc) = load_center {
+        lc.world_xz
+    } else {
+        IVec2::ZERO
+    };
 
     for e in ev_dirty.read().copied() {
         if e.sub < SEC_COUNT {
@@ -1485,6 +1666,7 @@ fn schedule_remesh_tasks_from_events(
         let Some(chunk) = chunk_map.chunks.get(&coord) else {
             for sub in subs {
                 let key = (coord, sub);
+                immediate_ready.0.retain(|item| item.key != key);
                 enqueue_mesh_fast(&mut backlog, &mut backlog_set, &pending_mesh, key);
             }
             continue;
@@ -1493,6 +1675,7 @@ fn schedule_remesh_tasks_from_events(
         let chunk_shared = Arc::new(chunk.clone());
         for sub in subs {
             let key = (coord, sub);
+            immediate_ready.0.retain(|item| item.key != key);
             if pending_mesh.0.remove(&key).is_some() {
                 // Replace stale in-flight mesh task with a fresh one that includes
                 // the newest block edits, instead of waiting for old results first.
@@ -1503,11 +1686,38 @@ fn schedule_remesh_tasks_from_events(
             let y0 = sub * SEC_H;
             let y1 = (y0 + SEC_H).min(CY);
             let borders = snapshot_borders(&chunk_map, coord, y0, y1);
-
-            if pending_mesh.0.len() < max_inflight_mesh {
+            if in_game_immediate && immediate_used < immediate_budget {
+                // Apply player edits immediately in the current frame path.
                 let chunk_copy = Arc::clone(&chunk_shared);
                 let reg_copy = reg_lite.clone();
+                let builds = future::block_on(mesh_subchunk_async(
+                    &chunk_copy,
+                    &reg_copy,
+                    sub,
+                    VOXEL_SIZE,
+                    Some(borders),
+                ));
+                immediate_ready.0.push_back(ReadyMeshItem {
+                    key,
+                    builds,
+                    immediate: true,
+                });
+                immediate_used += 1;
+                continue;
+            }
 
+            let has_slot = pending_mesh.0.len() < max_inflight_mesh
+                || (!waiting
+                    && reserve_pending_mesh_slot_for_priority(
+                        &mut pending_mesh,
+                        &mut backlog,
+                        &mut backlog_set,
+                        center_c,
+                    ));
+
+            if has_slot {
+                let chunk_copy = Arc::clone(&chunk_shared);
+                let reg_copy = reg_lite.clone();
                 let t = pool.spawn(async move {
                     let builds =
                         mesh_subchunk_async(&chunk_copy, &reg_copy, sub, VOXEL_SIZE, Some(borders))
@@ -1520,6 +1730,35 @@ fn schedule_remesh_tasks_from_events(
                 enqueue_mesh_fast(&mut backlog, &mut backlog_set, &pending_mesh, key);
             }
         }
+    }
+}
+
+#[inline]
+fn reserve_pending_mesh_slot_for_priority(
+    pending_mesh: &mut PendingMesh,
+    backlog: &mut MeshBacklog,
+    backlog_set: &mut MeshBacklogSet,
+    center_c: IVec2,
+) -> bool {
+    let Some(victim) = pending_mesh
+        .0
+        .keys()
+        .take(1024)
+        .copied()
+        .max_by_key(|(coord, sub)| {
+            let dx = coord.x - center_c.x;
+            let dz = coord.y - center_c.y;
+            (dx * dx + dz * dz, *sub)
+        })
+    else {
+        return false;
+    };
+
+    if pending_mesh.0.remove(&victim).is_some() {
+        enqueue_mesh_fast(backlog, backlog_set, pending_mesh, victim);
+        true
+    } else {
+        false
     }
 }
 
@@ -1539,6 +1778,7 @@ fn unload_far_chunks(
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
     mut ev_water_unload: MessageWriter<ChunkUnloadEvent>,
     mut ready_latency: ResMut<ChunkReadyLatencyState>,
+    mut immediate_ready: ResMut<ImmediateMeshReadyQueue>,
 ) {
     let cam = if let Ok(t) = q_cam.single() {
         t
@@ -1629,6 +1869,7 @@ fn unload_far_chunks(
         unload_state.backlog.0.retain(|(c, _)| c != coord);
         unload_state.backlog_set.0.retain(|(c, _)| c != coord);
         unload_state.coll_backlog.0.retain(|(c, _), _| *c != *coord);
+        immediate_ready.0.retain(|item| item.key.0 != *coord);
         unload_state.ready_set.0.remove(coord);
         ready_latency.requested_at.remove(coord);
     }
@@ -1647,6 +1888,7 @@ fn cleanup_chunk_runtime_on_exit(
     mut stream_lookahead: ResMut<StreamLookaheadState>,
     mut ready_latency: ResMut<ChunkReadyLatencyState>,
     mut stage_telemetry: ResMut<ChunkStageTelemetry>,
+    mut immediate_ready: ResMut<ImmediateMeshReadyQueue>,
     q_mesh: Query<&Mesh3d>,
 ) {
     let should_save = ws.is_some() && multiplayer_connection.uses_local_save_data();
@@ -1680,6 +1922,7 @@ fn cleanup_chunk_runtime_on_exit(
     cleanup.collider_ready.0.clear();
     cleanup.pending_save.0.clear();
     cleanup.coll_backlog.0.clear();
+    immediate_ready.0.clear();
     cleanup.kick_queue.0.clear();
     cleanup.kicked.0.clear();
     cleanup.queued.0.clear();
@@ -1764,7 +2007,7 @@ fn build_surface_placeholder_collider(
 
             for ly in (y0..y1).rev() {
                 let bid = chunk.get(x, ly, z);
-                if bid == 0 || reg.is_fluid(bid) {
+                if !reg.is_solid_for_collision(bid) {
                     continue;
                 }
 
@@ -1774,7 +2017,7 @@ fn build_surface_placeholder_collider(
 
                 let exposed_top = if ly + 1 < CY {
                     let above = chunk.get(x, ly + 1, z);
-                    above == 0 || reg.is_fluid(above)
+                    !reg.is_solid_for_collision(above)
                 } else {
                     true
                 };

@@ -76,6 +76,7 @@ pub fn load_bootstrap() -> BootstrapResult {
             chunk_stream_inflight_per_client: server_settings.chunk_stream_inflight_per_client,
             chunk_flight_timeout_ms: server_settings.chunk_flight_timeout_ms,
             max_stream_radius: server_settings.max_stream_radius,
+            locate_search_radius: server_settings.locate_search_radius,
             dead_entity_check_interval_secs: server_settings.dead_entity_check_interval_secs,
         },
         world_root,

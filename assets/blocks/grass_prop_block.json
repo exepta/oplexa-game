@@ -1,0 +1,26 @@
+{
+  "name": "tal_grass_block",
+  "texture_dir": "textures/blocks/tal_grass",
+  "texture": {
+    "all": "tal_grass"
+  },
+  "stats": {
+    "hardness": 0.0,
+    "blast_resistance": 0.0,
+    "level": "0",
+    "opaque": false,
+    "foliage": true,
+    "solid": false,
+    "emissive": 0.0
+  },
+  "prop": {
+    "render": "crossed_planes",
+    "height_m": 0.8,
+    "width_m": 1.0,
+    "plane_count": 2,
+    "allowed_ground": [
+      "dirt_block",
+      "grass_block"
+    ]
+  }
+}

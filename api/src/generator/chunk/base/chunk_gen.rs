@@ -9,6 +9,7 @@ use crate::generator::chunk::chunk_utils::map01;
 use crate::generator::chunk::river_utils::RiverSystem;
 use crate::generator::chunk::trees::registry::TreeRegistry;
 use crate::generator::chunk::trees::tree_gen::populate_trees_in_chunk;
+use crate::generator::chunk::vegetation::prop_gen::populate_vegetation_props_in_chunk;
 use bevy::prelude::*;
 use fastnoise_lite::*;
 /* ========================= Generator =================================== */
@@ -117,9 +118,9 @@ pub(crate) async fn generate_chunk_async_biome(
         let s_site = p_chunks.distance(site_pos) / site_r.max(1.0);
 
         if site_biome.stand_alone && s_site.is_finite() && s_site < SUB_COAST_LIMIT {
-            if let Some((sub_b, s_sub)) =
-                pick_sub_biome_in_host(biomes, site_biome, site_pos, site_r, p_chunks, cfg_seed)
-            {
+            if let Some((sub_b, s_sub)) = pick_relief_sub_biome_in_host(
+                biomes, site_biome, site_pos, site_r, p_chunks, cfg_seed,
+            ) {
                 // core weight with a little edge noise
                 let edge_jit =
                     (map01(sub_edge_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0 * SUB_EDGE_NOISE_AMP;
@@ -678,6 +679,7 @@ pub(crate) async fn generate_chunk_async_biome(
 
     carve_caves_into_chunk(&mut chunk, coord, cfg_seed, id_air, id_water, id_border);
     populate_trees_in_chunk(&mut chunk, coord, reg, biomes, trees, cfg_seed);
+    populate_vegetation_props_in_chunk(&mut chunk, coord, reg, biomes, cfg_seed);
     chunk
 }
 

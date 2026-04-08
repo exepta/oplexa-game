@@ -120,6 +120,8 @@ pub struct BiomeGeneration {
     pub river_size_between: (i32, i32),
     #[serde(default)]
     pub trees: Vec<BiomeTreeSpawn>,
+    #[serde(default)]
+    pub vegetation: BiomeVegetation,
 }
 
 /// Tree spawn config entry in `biome.generation.trees`.
@@ -129,6 +131,32 @@ pub struct BiomeTreeSpawn {
     pub tree_type: String,
     #[serde(default)]
     pub density: f32,
+}
+
+/// Vegetation spawn config in `biome.generation.vegetation`.
+#[derive(Debug, Deserialize, PartialEq, Clone, Default)]
+pub struct BiomeVegetation {
+    /// Per-column spawn chance [0..1].
+    #[serde(default)]
+    pub density: f32,
+    /// Weighted prop list.
+    #[serde(default)]
+    pub items: Vec<BiomeVegetationSpawn>,
+}
+
+/// Weighted prop entry for biome vegetation spawning.
+#[derive(Debug, Deserialize, PartialEq, Clone, Default)]
+pub struct BiomeVegetationSpawn {
+    #[serde(
+        rename = "block",
+        alias = "prop",
+        alias = "type",
+        alias = "name",
+        default
+    )]
+    pub block: String,
+    #[serde(default = "default_vegetation_weight")]
+    pub weight: f32,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -275,6 +303,10 @@ fn default_rarity() -> f32 {
 /// Runs the `default_river_chance` routine for default river chance in the `core::world::biome` module.
 fn default_river_chance() -> f32 {
     0.1
+}
+
+fn default_vegetation_weight() -> f32 {
+    1.0
 }
 
 fn default_river_control() -> RiverControl {

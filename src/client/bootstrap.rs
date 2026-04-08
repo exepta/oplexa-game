@@ -36,7 +36,7 @@ pub(super) fn init_bevy_app(
                         present_mode: if config.graphics.vsync {
                             PresentMode::AutoVsync
                         } else {
-                            PresentMode::Immediate
+                            PresentMode::Mailbox
                         },
                         ..default()
                     }),
@@ -141,15 +141,15 @@ fn check_world_inspector_state(world_inspector_state: Res<WorldInspectorState>) 
     world_inspector_state.0
 }
 
-/// Runs the `log_file_appender` routine for log file appender in the `client` module.
+/// Runs the `log_file_appender` routine for oak_log file appender in the `client` module.
 fn log_file_appender(_app: &mut App) -> Option<BoxedLayer> {
     let log_dir = PathBuf::from("logs");
     if let Err(error) = std::fs::create_dir_all(&log_dir) {
-        eprintln!("Failed to create log directory: {}", error);
+        eprintln!("Failed to create oak_log directory: {}", error);
         return None;
     }
 
-    let timestamp = Utc::now().format("bevy-%d-%m-%Y.log").to_string();
+    let timestamp = Utc::now().format("bevy-%d-%m-%Y.oak_log").to_string();
     let log_path = log_dir.join(timestamp);
     let file = OpenOptions::new()
         .create(true)
@@ -167,7 +167,7 @@ fn log_file_appender(_app: &mut App) -> Option<BoxedLayer> {
             .lock()
             .unwrap()
             .try_clone()
-            .expect("Failed to clone log file handle");
+            .expect("Failed to clone oak_log file handle");
         Box::new(file) as Box<dyn Write + Send>
     });
 
@@ -179,7 +179,7 @@ fn log_file_appender(_app: &mut App) -> Option<BoxedLayer> {
     ))
 }
 
-/// Loads log env filter for the `client` module.
+/// Loads oak_log env filter for the `client` module.
 fn load_log_env_filter() -> String {
     dotenv().ok();
     let base = env::var("LOG_ENV_FILTER").unwrap_or_else(|_| "error".to_string());
@@ -190,7 +190,7 @@ fn load_log_env_filter() -> String {
     }
 }
 
-/// Represents start log text used by the `client` module.
+/// Represents start oak_log text used by the `client` module.
 struct StartLogText {
     file: std::sync::Arc<std::sync::Mutex<File>>,
 }

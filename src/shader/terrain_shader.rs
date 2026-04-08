@@ -7,6 +7,10 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 pub struct TerrainChunkGfxPlugin;
+const PROP_WIND_STRENGTH: f32 = 0.055;
+const PROP_WIND_FREQUENCY: f32 = 1.75;
+const LEAF_WIND_STRENGTH: f32 = 0.040;
+const LEAF_WIND_FREQUENCY: f32 = 1.25;
 
 impl Plugin for TerrainChunkGfxPlugin {
     fn build(&self, app: &mut App) {
@@ -21,8 +25,27 @@ impl Plugin for TerrainChunkGfxPlugin {
                 ensure_chunk_terrain_materials
                     .run_if(resource_exists::<BlockRegistry>)
                     .run_if(resource_exists::<State<AppState>>),
+            )
+            .add_systems(
+                Update,
+                tick_terrain_material_time
+                    .run_if(resource_exists::<TerrainChunkMatIndex>)
+                    .run_if(resource_exists::<State<AppState>>),
             );
     }
+}
+
+#[inline]
+fn material_cfg_for_block(reg: &BlockRegistry, id: u16) -> Vec4 {
+    if reg.is_prop(id) {
+        return Vec4::new(1.0, PROP_WIND_STRENGTH, PROP_WIND_FREQUENCY, 0.0);
+    }
+
+    if reg.stats(id).foliage {
+        return Vec4::new(0.0, LEAF_WIND_STRENGTH, LEAF_WIND_FREQUENCY, 0.0);
+    }
+
+    Vec4::ZERO
 }
 
 fn setup_chunk_terrain_materials(
@@ -42,6 +65,7 @@ fn setup_chunk_terrain_materials(
         let params = TerrainChunkParams {
             leaf_cfg: Vec4::ZERO,
             leaf_tint: Vec4::new(1.0, 1.0, 1.0, 0.0),
+            material_cfg: material_cfg_for_block(&reg, id),
         };
 
         let handle = mats.add(TerrainChunkMaterial {
@@ -85,6 +109,7 @@ fn ensure_chunk_terrain_materials(
         let params = TerrainChunkParams {
             leaf_cfg: Vec4::ZERO,
             leaf_tint: Vec4::new(1.0, 1.0, 1.0, 0.0),
+            material_cfg: material_cfg_for_block(&reg, id),
         };
 
         let handle = mats.add(TerrainChunkMaterial {
@@ -96,4 +121,17 @@ fn ensure_chunk_terrain_materials(
     }
 
     index_res.0 = index;
+}
+
+fn tick_terrain_material_time(
+    time: Res<Time>,
+    index: Res<TerrainChunkMatIndex>,
+    mut mats: ResMut<Assets<TerrainChunkMaterial>>,
+) {
+    let now = time.elapsed_secs();
+    for handle in index.0.values() {
+        if let Some(material) = mats.get_mut(handle) {
+            material.params.material_cfg.w = now;
+        }
+    }
 }

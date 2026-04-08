@@ -8,7 +8,7 @@
     "hardness": 0.2,
     "blast_resistance": 0.2,
     "level": "0",
-    "opaque": true,
+    "opaque": false,
     "foliage": true,
     "emissive": 0.0
   }

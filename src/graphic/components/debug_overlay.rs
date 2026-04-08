@@ -93,12 +93,40 @@ fn sample_runtime_perf_stats(time: Res<Time>, mut perf: ResMut<RuntimePerfStats>
     } else {
         perf.fps += (raw - perf.fps) * alpha;
     }
+}
 
-    if perf.tick_speed <= 0.0 {
-        perf.tick_speed = raw;
-    } else {
-        perf.tick_speed += (raw - perf.tick_speed) * alpha;
+/// Runs the `reset_runtime_perf_log_timer` routine for reset runtime perf log timer in the `graphic::components::debug_overlay` module.
+fn reset_runtime_perf_log_timer(
+    local_timeline: Option<Res<LocalTimeline>>,
+    mut perf_log_state: ResMut<RuntimePerfLogState>,
+) {
+    perf_log_state.timer.reset();
+    perf_log_state.last_local_tick = local_timeline.map(|timeline| timeline.tick());
+}
+
+/// Runs the `log_runtime_perf_every_two_seconds` routine for runtime perf logging in the `graphic::components::debug_overlay` module.
+fn log_runtime_perf_every_two_seconds(
+    time: Res<Time>,
+    local_timeline: Option<Res<LocalTimeline>>,
+    mut perf: ResMut<RuntimePerfStats>,
+    mut perf_log_state: ResMut<RuntimePerfLogState>,
+) {
+    perf_log_state.timer.tick(time.delta());
+    if !perf_log_state.timer.just_finished() {
+        return;
     }
+
+    if let Some(local_timeline) = local_timeline {
+        let current_tick = local_timeline.tick();
+        if let Some(last_tick) = perf_log_state.last_local_tick {
+            let elapsed = perf_log_state.timer.duration().as_secs_f32().max(0.001);
+            let delta_ticks = (current_tick - last_tick).max(0) as f32;
+            perf.tick_speed = delta_ticks / elapsed;
+        }
+        perf_log_state.last_local_tick = Some(current_tick);
+    }
+
+    info!("[PERF] ticks: {:.1} t/s | fps: {:.1}", perf.tick_speed, perf.fps);
 }
 
 fn sample_chunk_debug_stats(

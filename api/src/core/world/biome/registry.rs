@@ -61,10 +61,8 @@ impl BiomeRegistry {
 
     /// Registers the requested data for the `core::world::biome::registry` module.
     pub fn register(&mut self, mut biome: Biome) {
-        biome.localized_name = normalize_biome_localized_name(
-            biome.localized_name.as_str(),
-            biome.name.as_str(),
-        );
+        biome.localized_name =
+            normalize_biome_localized_name(biome.localized_name.as_str(), biome.name.as_str());
         let key = biome.name.clone();
         self.by_name.insert(key, biome);
         self.rebuild_cache();

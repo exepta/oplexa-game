@@ -221,7 +221,8 @@ pub(crate) fn generate_water_for_chunk(
             let wx = coord.x * CX as i32 + x as i32;
             let wz = coord.y * CZ as i32 + z as i32;
 
-            let top = column_top_world_y(chunk, x, z);
+            // Ignore overhangs above sea level (e.g. tree canopy) for ocean fill.
+            let top = column_top_world_y_at_or_below(chunk, x, z, sea_level);
 
             if top < sea_level {
                 w.fill_column(x, z, top + 1, sea_level);
@@ -620,6 +621,27 @@ pub fn water_mask_with_solids(fc: &mut FluidChunk, chunk: &ChunkData) {
     }
 }
 
+/// Ensure ocean columns are filled up to `sea_level` using current solids.
+/// This repairs stale water chunks after terrain/tree generation changes.
+pub fn water_reconcile_ocean_with_solids(fc: &mut FluidChunk, chunk: &ChunkData, sea_level: i32) {
+    let sea_ly = (sea_level - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+    for z in 0..CZ {
+        for x in 0..CX {
+            let top = column_top_world_y_at_or_below(chunk, x, z, sea_level);
+            let start_world_y = (top + 1).max(Y_MIN);
+            if start_world_y > sea_level {
+                continue;
+            }
+            let start_ly = (start_world_y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+            for y in start_ly..=sea_ly {
+                if chunk.get(x, y, z) == 0 {
+                    fc.set(x, y, z, true);
+                }
+            }
+        }
+    }
+}
+
 /// Despawn the water mesh entity for a `(coord, sub)` key and free its GPU mesh.
 pub(crate) fn despawn_water_mesh(
     key: (IVec2, u8),
@@ -649,6 +671,17 @@ fn col_rand_f01(x: i32, z: i32, seed: u32) -> f32 {
 /// Find the topmost solid Y in a column (world Y), or `Y_MIN - 1` if empty.
 fn column_top_world_y(chunk: &ChunkData, x: usize, z: usize) -> i32 {
     for ly in (0..CY).rev() {
+        if chunk.get(x, ly, z) != 0 {
+            return Y_MIN + ly as i32;
+        }
+    }
+    Y_MIN - 1
+}
+
+/// Find the topmost solid Y at or below `max_world_y` (world Y), or `Y_MIN - 1` if empty.
+fn column_top_world_y_at_or_below(chunk: &ChunkData, x: usize, z: usize, max_world_y: i32) -> i32 {
+    let max_ly = (max_world_y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+    for ly in (0..=max_ly).rev() {
         if chunk.get(x, ly, z) != 0 {
             return Y_MIN + ly as i32;
         }

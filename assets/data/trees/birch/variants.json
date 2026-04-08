@@ -1,0 +1,35 @@
+{
+  "name": "birch",
+  "variants": [
+    {
+      "id": "birch_classic",
+      "weight": 1.0,
+      "trunk_block": "birch_log_block",
+      "leaves_block": "birch_leaves_block",
+      "trunk_height": [11, 14],
+      "canopy_radius": [3, 4],
+      "canopy_height": [6, 8],
+      "canopy_density": 0.82
+    },
+    {
+      "id": "birch_tall",
+      "weight": 0.9,
+      "trunk_block": "birch_log_block",
+      "leaves_block": "birch_leaves_block",
+      "trunk_height": [13, 17],
+      "canopy_radius": [3, 4],
+      "canopy_height": [7, 9],
+      "canopy_density": 0.80
+    },
+    {
+      "id": "birch_wide",
+      "weight": 0.8,
+      "trunk_block": "birch_log_block",
+      "leaves_block": "birch_leaves_block",
+      "trunk_height": [12, 16],
+      "canopy_radius": [4, 5],
+      "canopy_height": [6, 8],
+      "canopy_density": 0.78
+    }
+  ]
+}

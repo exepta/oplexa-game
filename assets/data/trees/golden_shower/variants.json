@@ -1,0 +1,35 @@
+{
+  "name": "golden_shower",
+  "variants": [
+    {
+      "id": "golden_shower_classic",
+      "weight": 1.0,
+      "trunk_block": "golden_shower_log_block",
+      "leaves_block": "golden_shower_leaves_block",
+      "trunk_height": [17, 21],
+      "canopy_radius": [5, 6],
+      "canopy_height": [8, 10],
+      "canopy_density": 0.90
+    },
+    {
+      "id": "golden_shower_tall",
+      "weight": 0.9,
+      "trunk_block": "golden_shower_log_block",
+      "leaves_block": "golden_shower_leaves_block",
+      "trunk_height": [19, 24],
+      "canopy_radius": [5, 6],
+      "canopy_height": [9, 11],
+      "canopy_density": 0.88
+    },
+    {
+      "id": "golden_shower_wide",
+      "weight": 0.8,
+      "trunk_block": "golden_shower_log_block",
+      "leaves_block": "golden_shower_leaves_block",
+      "trunk_height": [18, 22],
+      "canopy_radius": [6, 7],
+      "canopy_height": [8, 11],
+      "canopy_density": 0.86
+    }
+  ]
+}

@@ -782,6 +782,7 @@ fn collect_water_generation_jobs(
             if chunk_map.chunks.contains_key(&c) {
                 if let Some(chunk) = chunk_map.chunks.get(&c) {
                     let mut wc2 = wc;
+                    water_reconcile_ocean_with_solids(&mut wc2, chunk, SEA_LEVEL);
                     water_mask_with_solids(&mut wc2, chunk);
                     water.0.insert(c, wc2);
                 } else {

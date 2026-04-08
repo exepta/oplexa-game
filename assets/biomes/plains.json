@@ -2,7 +2,7 @@
   "localized_name": "oplexa:plains",
   "name": "Plains",
   "stand_alone": true,
-  "subs": ["mountains"],
+  "subs": ["mountains", "forest"],
   "climate": ["normal"],
   "rarity": 0.15,
   "sizes": [ "Large", "Huge" ],
@@ -22,6 +22,19 @@
     "rivers": true,
     "river_chance": 0.5,
     "river_size_between": "24:24",
-    "trees": [ ]
+    "trees": [ ],
+    "vegetation": {
+      "density": 0.24,
+      "items": [
+        {
+          "block": "tal_grass_block",
+          "weight": 1.0
+        },
+        {
+          "block": "flower_tulip_pink_block",
+          "weight": 0.05
+        }
+      ]
+    }
   }
 }

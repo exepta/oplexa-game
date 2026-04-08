@@ -18,10 +18,10 @@ use crate::core::events::ui_events::{
 use crate::core::inventory::items::{ItemRegistry, build_world_item_drop_visual};
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
 use crate::core::states::states::{AppState, BeforeUiState, LoadingStates};
-use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, get_block_world};
 use crate::core::world::biome::func::locate_biome_chunk_by_localized_name;
 use crate::core::world::biome::registry::BiomeRegistry;
-use crate::core::world::chunk::{ChunkMap, LoadCenter, SEA_LEVEL};
+use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, get_block_world};
+use crate::core::world::chunk::{ChunkMap, LoadCenter, SEA_LEVEL, VoxelStage};
 use crate::core::world::chunk_dimension::{
     CX, CY, CZ, SEC_COUNT, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local,
 };
@@ -288,12 +288,19 @@ const REMOTE_PLAYER_INTERP_BACK_TIME_SECS: f32 = 0.10;
 const REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS: f32 = 0.08;
 const REMOTE_PLAYER_MAX_SNAPSHOT_POINTS: usize = 24;
 const REMOTE_PLAYER_SMOOTHING_HZ: f32 = 18.0;
-const LOCATE_MAX_RADIUS_CHUNKS: i32 = 256;
+const LOCATE_MAX_RADIUS_BLOCKS_CAP: i32 = 1000;
 const NETWORK_CONFIG_PATH: &str = "config/network.toml";
 const CTRL_C_GRACEFUL_EXIT_DELAY_SECS: f64 = 0.25;
 const SERVER_TIMEOUT_ERROR_TEXT: &str = "Server time out!";
 
 static TERMINAL_INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Converts locate radius from blocks into chunks and clamps it to safe bounds.
+fn locate_radius_chunks_from_blocks(radius_blocks: i32) -> i32 {
+    let clamped_blocks = radius_blocks.clamp(1, LOCATE_MAX_RADIUS_BLOCKS_CAP);
+    let chunk_span = (CX as i32).max(CZ as i32);
+    (clamped_blocks + (chunk_span - 1)) / chunk_span
+}
 
 /// Runs the main routine for the `client` module.
 pub fn run() {
@@ -354,7 +361,7 @@ impl Plugin for MultiplayerClientPlugin {
                     send_client_keepalive,
                     receive_player_messages,
                     receive_chat_messages,
-                    receive_world_messages,
+                    receive_world_messages.in_set(VoxelStage::WorldEdit),
                     receive_drop_messages,
                     update_connection_state,
                     simulate_multiplayer_drop_items,
@@ -1057,10 +1064,14 @@ fn handle_chat_submit_requests(
     mut chat_log: ResMut<ChatLog>,
     mut game_mode: ResMut<GameModeState>,
     mut flight_state: Query<&mut FlightState>,
+    global_config: Res<GlobalConfig>,
     world_gen_config: Res<WorldGenConfig>,
     biomes: Res<BiomeRegistry>,
     mut q_player: Query<&mut Transform, With<Player>>,
 ) {
+    let locate_max_radius_chunks =
+        locate_radius_chunks_from_blocks(global_config.interface.locate_search_radius);
+
     for request in submit_requests.read() {
         let text = request.text.trim();
         if text.is_empty() {
@@ -1193,13 +1204,27 @@ fn handle_chat_submit_requests(
                     let world_z = player_transform.translation.z.floor() as i32;
                     let (origin_chunk, _) = world_to_chunk_xz(world_x, world_z);
 
-                    let Some(found_chunk) = locate_biome_chunk_by_localized_name(
-                        &biomes,
-                        world_gen_config.seed,
-                        origin_chunk,
-                        target,
-                        LOCATE_MAX_RADIUS_CHUNKS,
-                    ) else {
+                    let locate_result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            locate_biome_chunk_by_localized_name(
+                                &biomes,
+                                world_gen_config.seed,
+                                origin_chunk,
+                                target,
+                                locate_max_radius_chunks,
+                            )
+                        }));
+                    let Some(found_chunk) = (match locate_result {
+                        Ok(found) => found,
+                        Err(_) => {
+                            push_system_chat(
+                                &mut chat_log,
+                                SystemMessageLevel::Warn,
+                                "Locate failed due to an internal error.".to_string(),
+                            );
+                            continue;
+                        }
+                    }) else {
                         push_system_chat(
                             &mut chat_log,
                             SystemMessageLevel::Warn,
@@ -1246,7 +1271,8 @@ fn handle_chat_submit_requests(
                                 );
                                 continue;
                             };
-                            player_transform.translation = Vec3::new(target[0], target[1], target[2]);
+                            player_transform.translation =
+                                Vec3::new(target[0], target[1], target[2]);
                             push_system_chat(
                                 &mut chat_log,
                                 SystemMessageLevel::Info,

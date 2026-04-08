@@ -1,4 +1,4 @@
-use crate::state::ServerState;
+use crate::state::{ServerRuntimeConfig, ServerState};
 use api::core::commands::{
     CommandRegistry, CommandSender, EntitySender, GameModeKind, SystemMessageLevel, SystemSender,
     default_chat_command_registry, parse_chat_command,
@@ -17,7 +17,14 @@ use std::sync::Mutex;
 use std::sync::mpsc;
 use std::time::Instant;
 
-const LOCATE_MAX_RADIUS_CHUNKS: i32 = 256;
+const LOCATE_MAX_RADIUS_BLOCKS_CAP: i32 = 1000;
+
+/// Converts locate radius from blocks into chunks and clamps it to safe bounds.
+fn locate_radius_chunks_from_blocks(radius_blocks: i32) -> i32 {
+    let clamped_blocks = radius_blocks.clamp(1, LOCATE_MAX_RADIUS_BLOCKS_CAP);
+    let chunk_span = (CX as i32).max(CZ as i32);
+    (clamped_blocks + (chunk_span - 1)) / chunk_span
+}
 
 /// Shared server command registry resource.
 #[derive(Resource, Clone, Debug)]
@@ -69,7 +76,11 @@ pub fn handle_chat_messages(
     mut multi_sender: ServerMultiMessageSender,
     server: Single<&Server>,
     registry: Res<ServerCommandRegistry>,
+    runtime_config: Res<ServerRuntimeConfig>,
 ) {
+    let locate_max_radius_chunks =
+        locate_radius_chunks_from_blocks(runtime_config.locate_search_radius);
+
     let mut buffered = Vec::<(Entity, ClientChatMessage)>::new();
     for (entity, mut receiver) in q.iter_mut() {
         for message in receiver.receive() {
@@ -88,7 +99,11 @@ pub fn handle_chat_messages(
                 continue;
             };
             player.last_seen = Instant::now();
-            (player.player_id, player.username.clone(), player.translation)
+            (
+                player.player_id,
+                player.username.clone(),
+                player.translation,
+            )
         };
 
         if let Some(command) = parse_chat_command(text) {
@@ -245,13 +260,30 @@ pub fn handle_chat_messages(
                     let world_z = player_translation[2].floor() as i32;
                     let (origin_chunk, _) = world_to_chunk_xz(world_x, world_z);
 
-                    let Some(found_chunk) = locate_biome_chunk_by_localized_name(
-                        &state.biome_registry,
-                        state.world_gen_config.seed,
-                        origin_chunk,
-                        target,
-                        LOCATE_MAX_RADIUS_CHUNKS,
-                    ) else {
+                    let locate_result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            locate_biome_chunk_by_localized_name(
+                                &state.biome_registry,
+                                state.world_gen_config.seed,
+                                origin_chunk,
+                                target,
+                                locate_max_radius_chunks,
+                            )
+                        }));
+                    let Some(found_chunk) = (match locate_result {
+                        Ok(found) => found,
+                        Err(_) => {
+                            send_system_to_single(
+                                &mut multi_sender,
+                                *server,
+                                &q_remote_id,
+                                entity,
+                                SystemMessageLevel::Warn,
+                                "Locate failed due to an internal error.".to_string(),
+                            );
+                            continue;
+                        }
+                    }) else {
                         send_system_to_single(
                             &mut multi_sender,
                             *server,
@@ -479,10 +511,12 @@ fn find_player_entity_by_name(state: &ServerState, raw_name: &str) -> Option<Ent
     if needle.is_empty() {
         return None;
     }
-    state
-        .players
-        .iter()
-        .find_map(|(entity, player)| player.username.eq_ignore_ascii_case(needle).then_some(*entity))
+    state.players.iter().find_map(|(entity, player)| {
+        player
+            .username
+            .eq_ignore_ascii_case(needle)
+            .then_some(*entity)
+    })
 }
 
 fn parse_xyz_args(args: &[String]) -> Result<[f32; 3], String> {

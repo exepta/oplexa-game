@@ -57,7 +57,9 @@ impl Material for WaterMaterial {
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
-            ds.depth_write_enabled = true;
+            // Water is transparent; writing depth here causes incorrect layering
+            // against other transparent/cutout geometry (e.g. foliage).
+            ds.depth_write_enabled = false;
         }
         if let Some(fragment) = descriptor.fragment.as_mut() {
             if let Some(Some(tgt)) = fragment.targets.get_mut(0) {

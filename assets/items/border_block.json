@@ -1,6 +1,6 @@
 {
   "localized_name": "oplexa:border_block",
-  "name": "Border Block",
+  "name": "Border",
   "max_stack_size": -1,
   "category": "block",
   "block_item": true,

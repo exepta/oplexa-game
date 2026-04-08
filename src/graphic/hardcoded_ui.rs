@@ -30,16 +30,17 @@ use crate::core::ui::{HOTBAR_SLOTS, HotbarSelectionState, UiInteractionState};
 use crate::core::world::biome::func::dominant_biome_at_p_chunks;
 use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::{BlockRegistry, SelectedBlock, VOXEL_SIZE};
-use crate::core::world::chunk::ChunkMap;
+use crate::core::world::chunk::{CaveTracker, ChunkMap, LoadCenter};
 use crate::core::world::chunk_dimension::{CX, CZ, SEC_COUNT, world_to_chunk_xz};
 use crate::core::world::fluid::{FluidMap, WaterMeshIndex};
 use crate::core::world::save::{RegionCache, WorldSave, default_saves_root};
+use crate::generator::chunk::cave::cave_builder::CaveJobs;
 use crate::generator::chunk::chunk_builder::{
     ChunkStageTelemetry, ColliderBacklog, PendingColliderBuild,
 };
 use crate::generator::chunk::chunk_struct::{MeshBacklog, PendingGen, PendingMesh};
 use crate::generator::chunk::water_builder::{
-    PendingWaterLoad, PendingWaterMesh, WaterMeshBacklog,
+    PendingWaterLoad, PendingWaterMesh, WaterMeshBacklog, WaterMeshingTodo, WaterReadySet,
 };
 use crate::utils::key_utils::convert;
 use api::core::network::config::NetworkSettings;
@@ -48,6 +49,7 @@ use api::utils::v_ram_utils;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::render::renderer::RenderAdapterInfo;
+use bevy::tasks::{AsyncComputeTaskPool, ComputeTaskPool, IoTaskPool};
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy_extended_ui::styles::CssID;
 use bevy_extended_ui::widgets::{
@@ -55,6 +57,7 @@ use bevy_extended_ui::widgets::{
     Scrollbar, UIGenID, UIWidgetState,
 };
 use bevy_extended_ui::{ExtendedUiConfiguration, ExtendedUiPlugin, ImageCache};
+use lightyear::prelude::{LocalTimeline, Tick};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -319,6 +322,46 @@ impl Default for WorldGenUiAnimation {
     /// Runs the `default` routine for default in the `graphic::hardcoded_ui` module.
     fn default() -> Self {
         Self { displayed_pct: 0.0 }
+    }
+}
+
+/// Represents world generation progress log state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Clone)]
+struct WorldGenProgressLogState {
+    world_sequence: u32,
+    last_logged_percent: Option<u8>,
+    last_phase: LoadingPhase,
+    phase_peak_percent: f32,
+    timer: Timer,
+}
+
+impl Default for WorldGenProgressLogState {
+    /// Runs the `default` routine for default in the `graphic::hardcoded_ui` module.
+    fn default() -> Self {
+        Self {
+            world_sequence: 0,
+            last_logged_percent: None,
+            last_phase: LoadingPhase::BaseGen,
+            phase_peak_percent: 0.0,
+            timer: Timer::from_seconds(0.5, TimerMode::Repeating),
+        }
+    }
+}
+
+/// Represents runtime performance log state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Clone)]
+struct RuntimePerfLogState {
+    timer: Timer,
+    last_local_tick: Option<Tick>,
+}
+
+impl Default for RuntimePerfLogState {
+    /// Runs the `default` routine for default in the `graphic::hardcoded_ui` module.
+    fn default() -> Self {
+        Self {
+            timer: Timer::from_seconds(2.0, TimerMode::Repeating),
+            last_local_tick: None,
+        }
     }
 }
 
@@ -605,7 +648,9 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<DebugGridState>()
             .init_resource::<SysStats>()
             .init_resource::<RuntimePerfStats>()
+            .init_resource::<RuntimePerfLogState>()
             .init_resource::<ChunkDebugStats>()
+            .init_resource::<WorldGenProgressLogState>()
             .init_resource::<ActiveInventorySavePath>()
             .insert_non_send_resource(ServerProbeRuntime::default())
             .add_plugins(ExtendedUiPlugin)
@@ -712,6 +757,7 @@ impl Plugin for HardcodedUiPlugin {
                     load_inventory_for_world_entry,
                     reset_world_gen_ui_animation,
                     show_world_gen_ui,
+                    log_task_pool_worker_counts_on_world_start,
                 )
                     .chain(),
             )
@@ -726,6 +772,10 @@ impl Plugin for HardcodedUiPlugin {
             .add_systems(
                 OnEnter(AppState::InGame(InGameStates::Game)),
                 hide_menu_roots_for_ingame,
+            )
+            .add_systems(
+                OnEnter(AppState::InGame(InGameStates::Game)),
+                reset_runtime_perf_log_timer,
             )
             .add_systems(
                 OnEnter(AppState::Loading(LoadingStates::BaseGen)),
@@ -845,6 +895,12 @@ impl Plugin for HardcodedUiPlugin {
                 )
                     .run_if(in_state(AppState::InGame(InGameStates::Game))),
             );
+        app.add_systems(
+            Update,
+            log_runtime_perf_every_two_seconds
+                .after(sample_runtime_perf_stats)
+                .run_if(in_state(AppState::InGame(InGameStates::Game))),
+        );
         app.add_systems(
             OnExit(AppState::InGame(InGameStates::Game)),
             close_system_last_ui,

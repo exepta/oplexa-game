@@ -43,6 +43,7 @@ pub struct ServerRuntimeConfig {
     pub chunk_stream_inflight_per_client: usize,
     pub chunk_flight_timeout_ms: u64,
     pub max_stream_radius: i32,
+    pub locate_search_radius: i32,
     pub dead_entity_check_interval_secs: u64,
 }
 

@@ -23,9 +23,34 @@
     "river_size_between": "20:30",
     "trees": [
       {
+        "type": "birch",
+        "density": 0.010
+      },
+      {
+        "type": "golden_shower",
+        "density": 0.075
+      },
+      {
         "type": "oak",
-        "density": 0.012
+        "density": 0.090
       }
-    ]
+    ],
+    "vegetation": {
+      "density": 0.20,
+      "items": [
+        {
+          "block": "flower_tulip_pink_block",
+          "weight": 0.05
+        },
+        {
+          "block": "flower_rose_block",
+          "weight": 0.065
+        },
+        {
+          "block": "tal_grass_block",
+          "weight": 0.95
+        }
+      ]
+    }
   }
 }

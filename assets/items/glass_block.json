@@ -1,6 +1,6 @@
 {
   "localized_name": "oplexa:glass_block",
-  "name": "Glass Block",
+  "name": "Glass",
   "max_stack_size": -1,
   "category": "block",
   "block_item": true,

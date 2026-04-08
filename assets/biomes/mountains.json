@@ -26,6 +26,19 @@
         "type": "oak",
         "density": 0.012
       }
-    ]
+    ],
+    "vegetation": {
+      "density": 0.08,
+      "items": [
+        {
+          "block": "tal_grass_block",
+          "weight": 1.0
+        },
+        {
+          "block": "flower_tulip_pink_block",
+          "weight": 0.1
+        }
+      ]
+    }
   }
 }

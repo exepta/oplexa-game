@@ -2,11 +2,13 @@ pub mod base;
 pub mod cave;
 pub mod fluid;
 pub mod trees;
+pub mod vegetation;
 
 pub use base::{chunk_builder, chunk_gen, chunk_struct, chunk_utils, river_utils};
 pub use cave::{cave_builder, cave_utils};
 pub use fluid::{water_builder, water_utils};
 pub use trees::{registry as tree_registry, tree_gen};
+pub use vegetation::prop_gen as vegetation_prop_gen;
 
 use crate::core::world::chunk::ChunkMap;
 use crate::generator::chunk::chunk_builder::ChunkBuilder;

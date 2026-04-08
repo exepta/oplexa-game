@@ -142,6 +142,7 @@ pub async fn mesh_subchunk_async(
 
         !reg.opaque(neigh_id)
     };
+    let is_cube_voxel = |id: BlockId| id != 0 && !reg.is_crossed_prop(id);
 
     // +Y (Top): greedy in XZ plane for each Y slice.
     let mut top_mask = vec![0u16; CX * CZ];
@@ -150,7 +151,7 @@ pub async fn mesh_subchunk_async(
         for z in 0..CZ {
             for x in 0..CX {
                 let id = chunk.get(x, y, z);
-                if id == 0 {
+                if !is_cube_voxel(id) {
                     continue;
                 }
                 let n_up = get(x as isize, y as isize + 1, z as isize);
@@ -183,7 +184,7 @@ pub async fn mesh_subchunk_async(
         for z in 0..CZ {
             for x in 0..CX {
                 let id = chunk.get(x, y, z);
-                if id == 0 {
+                if !is_cube_voxel(id) {
                     continue;
                 }
                 let n_down = get(x as isize, y as isize - 1, z as isize);
@@ -217,7 +218,7 @@ pub async fn mesh_subchunk_async(
             let yr = y - y0;
             for z in 0..CZ {
                 let id = chunk.get(x, y, z);
-                if id == 0 {
+                if !is_cube_voxel(id) {
                     continue;
                 }
                 let n_east = if x + 1 < CX {
@@ -257,7 +258,7 @@ pub async fn mesh_subchunk_async(
             let yr = y - y0;
             for z in 0..CZ {
                 let id = chunk.get(x, y, z);
-                if id == 0 {
+                if !is_cube_voxel(id) {
                     continue;
                 }
                 let n_west = if x > 0 {
@@ -297,7 +298,7 @@ pub async fn mesh_subchunk_async(
             let yr = y - y0;
             for x in 0..CX {
                 let id = chunk.get(x, y, z);
-                if id == 0 {
+                if !is_cube_voxel(id) {
                     continue;
                 }
                 let n_south = if z + 1 < CZ {
@@ -337,7 +338,7 @@ pub async fn mesh_subchunk_async(
             let yr = y - y0;
             for x in 0..CX {
                 let id = chunk.get(x, y, z);
-                if id == 0 {
+                if !is_cube_voxel(id) {
                     continue;
                 }
                 let n_north = if z > 0 {
@@ -367,6 +368,48 @@ pub async fn mesh_subchunk_async(
                 [u.u0, u.v0, u.u1, u.v1],
             );
         });
+    }
+
+    // Prop pass: crossed planes (Minecraft/Hytale style plants).
+    for y in y0..y1 {
+        for z in 0..CZ {
+            for x in 0..CX {
+                let id = chunk.get(x, y, z);
+                let Some(prop) = reg.prop(id) else {
+                    continue;
+                };
+                if !prop.is_crossed_planes() {
+                    continue;
+                }
+
+                let u = reg.uv(id, Face::North);
+                let tile_rect = [u.u0, u.v0, u.u1, u.v1];
+                let b = by_block.entry(id).or_insert_with(MeshBuild::new);
+
+                let cx = (x as f32 + 0.5) * s;
+                let cy0 = y as f32 * s;
+                let cy1 = cy0 + prop.height_m * s;
+                let cz = (z as f32 + 0.5) * s;
+                let half_w = 0.5 * prop.width_m * s;
+                let plane_count = prop.plane_count.max(2) as usize;
+                let uv = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+
+                for i in 0..plane_count {
+                    let angle = (i as f32) * std::f32::consts::PI / (plane_count as f32);
+                    let dir = Vec2::new(angle.cos(), angle.sin());
+                    let nx = dir.y;
+                    let nz = -dir.x;
+
+                    let p0 = [cx - dir.x * half_w, cy0, cz - dir.y * half_w];
+                    let p1 = [cx + dir.x * half_w, cy0, cz + dir.y * half_w];
+                    let p2 = [cx + dir.x * half_w, cy1, cz + dir.y * half_w];
+                    let p3 = [cx - dir.x * half_w, cy1, cz - dir.y * half_w];
+
+                    b.quad([p0, p1, p2, p3], [nx, 0.0, nz], uv, tile_rect);
+                    b.quad([p1, p0, p3, p2], [-nx, 0.0, -nz], uv, tile_rect);
+                }
+            }
+        }
     }
 
     by_block.into_iter().map(|(k, b)| (k, b)).collect()

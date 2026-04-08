@@ -6,8 +6,7 @@ use crate::core::events::block::block_player_events::{
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
 use crate::core::inventory::items::{
-    ItemRegistry, block_requirement_for_id, can_drop_from_block, mining_speed_multiplier,
-    spawn_world_item_for_block_break,
+    ItemRegistry, block_requirement_for_id, can_drop_from_block, spawn_world_item_for_block_break,
 };
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
@@ -48,8 +47,10 @@ impl Plugin for BlockEventHandler {
         app.add_systems(
             Update,
             (
-                (block_break_handler, sync_mining_overlay).chain(),
-                block_place_handler,
+                (block_break_handler, sync_mining_overlay)
+                    .chain()
+                    .in_set(VoxelStage::WorldEdit),
+                block_place_handler.in_set(VoxelStage::WorldEdit),
             )
                 .run_if(in_state(AppState::InGame(InGameStates::Game))),
         );
@@ -91,53 +92,7 @@ fn block_break_handler(
     if game_mode.0.eq(&GameMode::Spectator) {
         return;
     }
-    // --- Creative: instant break on click ---
-    if matches!(game_mode.0, GameMode::Creative) {
-        if !buttons.just_pressed(MouseButton::Left) {
-            state.target = None;
-            return;
-        }
-
-        let Some(hit) = selection.hit else {
-            state.target = None;
-            return;
-        };
-
-        let id_now = get_block_world(&chunk_map, hit.block_pos);
-        if id_now == 0 {
-            state.target = None;
-            return;
-        }
-
-        // remove the block immediately
-        if let Some(mut access) = world_access_mut(&mut chunk_map, hit.block_pos) {
-            access.set(0);
-        }
-        mark_dirty_block_and_neighbors(&mut chunk_map, hit.block_pos, &mut ev_dirty);
-
-        let (chunk_coord, l) = world_to_chunk_xz(hit.block_pos.x, hit.block_pos.z);
-        let lx = l.x as u8;
-        let lz = l.y as u8;
-        let ly = (hit.block_pos.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
-
-        break_ev.write(BlockBreakByPlayerEvent {
-            chunk_coord,
-            location: hit.block_pos,
-            chunk_x: lx,
-            chunk_y: ly as u16,
-            chunk_z: lz,
-            block_id: id_now,
-            drop_item_id: 0,
-            block_name: registry.name_opt(id_now).unwrap_or("").to_string(),
-            drops_item: false,
-        });
-
-        state.target = None;
-        return; // done for creative
-    }
-
-    // --- Survival: timed mining as before ---
-    if !buttons.pressed(MouseButton::Left) {
+    if !buttons.just_pressed(MouseButton::Left) {
         state.target = None;
         return;
     }
@@ -153,37 +108,7 @@ fn block_break_handler(
         return;
     }
 
-    let now = time.elapsed_secs();
-
-    let restart = match state.target {
-        None => true,
-        Some(target) => target.loc != hit.block_pos || target.id != id_now,
-    };
-
-    if restart {
-        let held_tool =
-            selected_hotbar_tool(&inventory, hotbar_selection.as_deref(), &item_registry);
-        let requirement = block_requirement_for_id(id_now, &registry);
-        let speed_multiplier = mining_speed_multiplier(requirement, held_tool);
-        let duration = (break_time_for(id_now, &registry) / speed_multiplier)
-            .clamp(MIN_BREAK_TIME, MAX_BREAK_TIME);
-
-        state.target = Some(MiningTarget {
-            loc: hit.block_pos,
-            id: id_now,
-            started_at: now,
-            duration,
-        });
-    }
-
-    let target = state.target.as_ref().unwrap();
-    let progress = (now - target.started_at) / target.duration;
-
-    if progress < 1.0 {
-        return;
-    }
-
-    let world_loc = target.loc;
+    let world_loc = hit.block_pos;
     if let Some(mut access) = world_access_mut(&mut chunk_map, world_loc) {
         access.set(0);
     }
@@ -193,15 +118,23 @@ fn block_break_handler(
     let lx = l.x as u8;
     let lz = l.y as u8;
     let ly = (world_loc.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
-    let held_tool = selected_hotbar_tool(&inventory, hotbar_selection.as_deref(), &item_registry);
-    let requirement = block_requirement_for_id(target.id, &registry);
-    let can_drop = can_drop_from_block(requirement, held_tool);
-    let drop_item_id = if can_drop {
-        item_registry.item_for_block(target.id).unwrap_or(0)
+    let creative_mode = matches!(game_mode.0, GameMode::Creative);
+    let now = time.elapsed_secs();
+    let (drop_item_id, drops_item) = if creative_mode {
+        (0, false)
     } else {
-        0
+        let held_tool =
+            selected_hotbar_tool(&inventory, hotbar_selection.as_deref(), &item_registry);
+        let requirement = block_requirement_for_id(id_now, &registry);
+        let can_drop = can_drop_from_block(requirement, held_tool);
+        let drop_item_id = if can_drop {
+            item_registry.item_for_block(id_now).unwrap_or(0)
+        } else {
+            0
+        };
+        let drops_item = !registry.is_fluid(id_now) && drop_item_id != 0;
+        (drop_item_id, drops_item)
     };
-    let drops_item = !registry.is_fluid(target.id) && drop_item_id != 0;
 
     break_ev.write(BlockBreakByPlayerEvent {
         chunk_coord,
@@ -209,9 +142,9 @@ fn block_break_handler(
         chunk_x: lx,
         chunk_y: ly as u16,
         chunk_z: lz,
-        block_id: target.id,
+        block_id: id_now,
         drop_item_id,
-        block_name: registry.name_opt(target.id).unwrap_or("").to_string(),
+        block_name: registry.name_opt(id_now).unwrap_or("").to_string(),
         drops_item,
     });
 
@@ -221,7 +154,7 @@ fn block_break_handler(
             &mut meshes,
             &registry,
             &item_registry,
-            target.id,
+            id_now,
             world_loc,
             now,
         );
@@ -292,6 +225,14 @@ fn block_place_handler(
         .unwrap_or(false);
     if !can_place {
         return;
+    }
+
+    if registry.is_prop(id) {
+        let ground_pos = world_pos + IVec3::NEG_Y;
+        let ground_id = get_block_world(&chunk_map, ground_pos);
+        if !registry.prop_allows_ground(id, ground_id) {
+            return;
+        }
     }
 
     if let Some(fc) = fluids.0.get_mut(&chunk_coord) {

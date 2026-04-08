@@ -269,6 +269,7 @@ fn resolve_item_icon_path(
         images,
         path.as_str(),
     );
+    ensure_item_icon_nearest_sampler(asset_server, image_cache, images, path.as_str());
     Some(path)
 }
 
@@ -290,5 +291,46 @@ fn ensure_block_icon_cached(
         return;
     };
     let handle = images.add(image);
+    apply_nearest_sampler_to_image(images, handle.id());
     image_cache.map.insert(path.to_string(), handle);
+}
+
+/// Ensures item icons from `textures/items/*` are sampled with nearest filtering.
+fn ensure_item_icon_nearest_sampler(
+    asset_server: &AssetServer,
+    image_cache: &ImageCache,
+    images: &mut Assets<Image>,
+    path: &str,
+) {
+    if parse_block_icon_cache_key(path).is_some() {
+        if let Some(handle) = image_cache.map.get(path) {
+            apply_nearest_sampler_to_image(images, handle.id());
+        }
+        return;
+    }
+
+    if !path.starts_with("textures/items/") {
+        return;
+    }
+
+    let handle: Handle<Image> = asset_server.load(path.to_string());
+    apply_nearest_sampler_to_image(images, handle.id());
+}
+
+#[inline]
+fn apply_nearest_sampler_to_image(images: &mut Assets<Image>, image_id: AssetId<Image>) {
+    let Some(image) = images.get_mut(image_id) else {
+        return;
+    };
+
+    image.sampler = bevy::image::ImageSampler::Descriptor(bevy::image::ImageSamplerDescriptor {
+        address_mode_u: bevy::image::ImageAddressMode::ClampToEdge,
+        address_mode_v: bevy::image::ImageAddressMode::ClampToEdge,
+        address_mode_w: bevy::image::ImageAddressMode::ClampToEdge,
+        mag_filter: bevy::image::ImageFilterMode::Nearest,
+        min_filter: bevy::image::ImageFilterMode::Nearest,
+        mipmap_filter: bevy::image::ImageFilterMode::Nearest,
+        anisotropy_clamp: 1,
+        ..default()
+    });
 }

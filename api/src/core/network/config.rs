@@ -108,6 +108,8 @@ pub struct DedicatedServerSettings {
     pub chunk_flight_timeout_ms: u64,
     #[serde(default = "default_max_stream_radius")]
     pub max_stream_radius: i32,
+    #[serde(default = "default_locate_search_radius")]
+    pub locate_search_radius: i32,
     #[serde(default = "default_dead_entity_check_interval_secs")]
     pub dead_entity_check_interval_secs: u64,
 }
@@ -131,6 +133,7 @@ impl Default for DedicatedServerSettings {
             chunk_stream_inflight_per_client: default_chunk_stream_inflight_per_client(),
             chunk_flight_timeout_ms: default_chunk_flight_timeout_ms(),
             max_stream_radius: default_max_stream_radius(),
+            locate_search_radius: default_locate_search_radius(),
             dead_entity_check_interval_secs: default_dead_entity_check_interval_secs(),
         }
     }
@@ -242,6 +245,11 @@ fn default_chunk_flight_timeout_ms() -> u64 {
 /// Runs the `default_max_stream_radius` routine for default max stream radius in the `core::network::config` module.
 fn default_max_stream_radius() -> i32 {
     12
+}
+
+/// Runs the `default_locate_search_radius` routine for default locate search radius in the `core::network::config` module.
+fn default_locate_search_radius() -> i32 {
+    1000
 }
 
 /// Runs the `default_dead_entity_check_interval_secs` routine for default dead entity check interval secs in the `core::network::config` module.

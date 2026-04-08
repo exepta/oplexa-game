@@ -20,6 +20,7 @@ const TREE_LEAF_DENSITY_SCALE: f32 = 0.82;
 enum TreeStyle {
     Oak,
     Spruce,
+    GoldenShower,
     Generic,
 }
 
@@ -145,6 +146,10 @@ fn style_for_family(family: &TreeFamily) -> TreeStyle {
     let key = family.key.as_str();
     if key.contains("spruce") || key.contains("tanne") || key.contains("fichte") {
         TreeStyle::Spruce
+    } else if key.contains("golden_shower") || key.contains("golden") || key.contains("cassia") {
+        TreeStyle::GoldenShower
+    } else if key.contains("birch") || key.contains("birke") {
+        TreeStyle::Oak
     } else if key.contains("oak") || key.contains("eiche") {
         TreeStyle::Oak
     } else {
@@ -172,7 +177,7 @@ fn try_place_tree(
     }
 
     let ground_id = chunk.get(lx, ground_ly, lz);
-    if ground_id == 0 || reg.is_fluid(ground_id) || reg.stats(ground_id).foliage {
+    if !is_valid_tree_ground(reg, ground_id) {
         return false;
     }
 
@@ -190,12 +195,14 @@ fn try_place_tree(
         variant.canopy_height,
     );
 
-    let edge_margin = match style {
+    let trunk_base_r = trunk_base_radius(style, trunk_h);
+    let edge_margin = (match style {
         TreeStyle::Oak => canopy_r + 3,
         TreeStyle::Spruce => canopy_r + 2,
+        TreeStyle::GoldenShower => canopy_r + 5,
         TreeStyle::Generic => canopy_r + 1,
-    }
-    .max(1) as usize;
+    } + trunk_base_r)
+        .max(1) as usize;
     if lx < edge_margin || lz < edge_margin || lx + edge_margin >= CX || lz + edge_margin >= CZ {
         return false;
     }
@@ -209,11 +216,13 @@ fn try_place_tree(
     let canopy_extra_top = match style {
         TreeStyle::Oak => 3,
         TreeStyle::Spruce => 2,
+        TreeStyle::GoldenShower => 5,
         TreeStyle::Generic => 1,
     };
     let canopy_floor_pad = match style {
         TreeStyle::Oak => 2,
         TreeStyle::Spruce => 1,
+        TreeStyle::GoldenShower => 3,
         TreeStyle::Generic => 0,
     };
     let canopy_top = trunk_top + canopy_extra_top;
@@ -222,21 +231,21 @@ fn try_place_tree(
         return false;
     }
 
-    for y in base_ly as i32..=trunk_top {
-        if chunk.get(lx, y as usize, lz) != 0 {
-            return false;
-        }
-    }
-
     let trunk_id = reg.id_or_air(&variant.trunk_block);
     let leaves_id = reg.id_or_air(&variant.leaves_block);
     if trunk_id == 0 || leaves_id == 0 {
         return false;
     }
 
-    for y in base_ly as i32..=trunk_top {
-        chunk.set(lx, y as usize, lz, trunk_id);
+    let base_y = base_ly as i32;
+    if !can_place_trunk(
+        chunk, reg, style, lx as i32, lz as i32, base_y, trunk_top, wx, wz, seed,
+    ) {
+        return false;
     }
+    place_trunk(
+        chunk, reg, style, trunk_id, lx as i32, lz as i32, base_y, trunk_top, wx, wz, seed,
+    );
 
     match style {
         TreeStyle::Oak => place_oak_canopy(
@@ -268,6 +277,21 @@ fn try_place_tree(
             canopy_h,
             variant.canopy_density,
         ),
+        TreeStyle::GoldenShower => place_golden_shower_canopy(
+            chunk,
+            reg,
+            leaves_id,
+            lx,
+            lz,
+            wx,
+            wz,
+            seed,
+            trunk_top,
+            base_y,
+            canopy_r,
+            canopy_h,
+            variant.canopy_density,
+        ),
         TreeStyle::Generic => place_generic_canopy(
             chunk,
             reg,
@@ -285,6 +309,156 @@ fn try_place_tree(
     }
 
     true
+}
+
+#[inline]
+fn is_valid_tree_ground(reg: &BlockRegistry, ground_id: u16) -> bool {
+    if ground_id == 0
+        || reg.is_fluid(ground_id)
+        || reg.stats(ground_id).foliage
+        || reg.is_prop(ground_id)
+    {
+        return false;
+    }
+
+    // Prevent recursive tree-on-tree stacking.
+    let name = reg.name(ground_id);
+    !name.contains("log")
+        && !name.contains("leaves")
+        && !name.contains("planks")
+        && !name.contains("wood")
+}
+
+#[inline]
+fn trunk_base_radius(style: TreeStyle, trunk_h: i32) -> i32 {
+    let _ = (style, trunk_h);
+    0
+}
+
+#[inline]
+fn trunk_layer_radius(style: TreeStyle, layer: i32, trunk_h: i32) -> i32 {
+    let _ = (style, layer, trunk_h);
+    0
+}
+
+#[inline]
+fn can_replace_for_trunk(chunk: &ChunkData, reg: &BlockRegistry, x: i32, y: i32, z: i32) -> bool {
+    if !in_bounds_local(x, y, z) {
+        return false;
+    }
+    let id = chunk.get(x as usize, y as usize, z as usize);
+    id == 0 || reg.stats(id).foliage
+}
+
+#[allow(clippy::too_many_arguments)]
+fn can_place_trunk(
+    chunk: &ChunkData,
+    reg: &BlockRegistry,
+    style: TreeStyle,
+    x: i32,
+    z: i32,
+    base_y: i32,
+    trunk_top: i32,
+    wx: i32,
+    wz: i32,
+    seed: u32,
+) -> bool {
+    const CARD: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    const DIAG: [(i32, i32); 4] = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+
+    let trunk_h = (trunk_top - base_y + 1).max(1);
+    for y in base_y..=trunk_top {
+        let layer = y - base_y;
+        let radius = trunk_layer_radius(style, layer, trunk_h);
+        if !can_replace_for_trunk(chunk, reg, x, y, z) {
+            return false;
+        }
+        if radius > 0 {
+            for (dx, dz) in CARD {
+                if !can_replace_for_trunk(chunk, reg, x + dx, y, z + dz) {
+                    return false;
+                }
+            }
+            if matches!(style, TreeStyle::GoldenShower) && layer <= 1 {
+                for (dx, dz) in DIAG {
+                    if !can_replace_for_trunk(chunk, reg, x + dx, y, z + dz) {
+                        return false;
+                    }
+                }
+            } else if matches!(style, TreeStyle::Oak) && layer == 0 {
+                let idx = (col_rand_u32(wx, wz, seed ^ 0x5511_A100) % DIAG.len() as u32) as usize;
+                let (dx, dz) = DIAG[idx];
+                if !can_replace_for_trunk(chunk, reg, x + dx, y, z + dz) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn place_trunk(
+    chunk: &mut ChunkData,
+    reg: &BlockRegistry,
+    style: TreeStyle,
+    trunk_id: u16,
+    x: i32,
+    z: i32,
+    base_y: i32,
+    trunk_top: i32,
+    wx: i32,
+    wz: i32,
+    seed: u32,
+) {
+    const CARD: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    const DIAG: [(i32, i32); 4] = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+    const MAX_ROOT_DROP: i32 = 6;
+
+    let trunk_h = (trunk_top - base_y + 1).max(1);
+    let mut base_cells: Vec<(i32, i32)> = Vec::with_capacity(9);
+    let mut push_base_cell = |bx: i32, bz: i32| {
+        if !base_cells.contains(&(bx, bz)) {
+            base_cells.push((bx, bz));
+        }
+    };
+
+    for y in base_y..=trunk_top {
+        let layer = y - base_y;
+        set_log_if_replaceable(chunk, reg, x, y, z, trunk_id);
+        if y == base_y {
+            push_base_cell(x, z);
+        }
+        let radius = trunk_layer_radius(style, layer, trunk_h);
+        if radius > 0 {
+            for (dx, dz) in CARD {
+                set_log_if_replaceable(chunk, reg, x + dx, y, z + dz, trunk_id);
+                if y == base_y {
+                    push_base_cell(x + dx, z + dz);
+                }
+            }
+            if matches!(style, TreeStyle::GoldenShower) && layer <= 1 {
+                for (dx, dz) in DIAG {
+                    set_log_if_replaceable(chunk, reg, x + dx, y, z + dz, trunk_id);
+                    if y == base_y {
+                        push_base_cell(x + dx, z + dz);
+                    }
+                }
+            } else if matches!(style, TreeStyle::Oak) && layer == 0 {
+                let idx = (col_rand_u32(wx, wz, seed ^ 0x5511_A100) % DIAG.len() as u32) as usize;
+                let (dx, dz) = DIAG[idx];
+                set_log_if_replaceable(chunk, reg, x + dx, y, z + dz, trunk_id);
+                if y == base_y {
+                    push_base_cell(x + dx, z + dz);
+                }
+            }
+        }
+    }
+
+    // Prevent floating root blocks on uneven terrain by extending trunk base down to support.
+    for (bx, bz) in base_cells {
+        stabilize_log_column_down(chunk, reg, bx, base_y, bz, trunk_id, MAX_ROOT_DROP);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -352,6 +526,7 @@ fn place_oak_canopy(
 ) {
     let x = lx as i32;
     let z = lz as i32;
+    let base_density = (base_density - 0.10).clamp(0.42, 0.92);
     let crown_top = trunk_top + 1;
     let crown_mid = trunk_top - (canopy_h / 3).max(1);
     let crown_low = trunk_top - ((canopy_h * 2) / 3).max(2);
@@ -374,10 +549,10 @@ fn place_oak_canopy(
         x,
         crown_mid,
         z,
-        canopy_r + 1,
+        canopy_r.max(2),
         (canopy_h / 2).max(3),
-        canopy_r + 1,
-        (base_density + 0.09).clamp(0.66, 0.99),
+        canopy_r.max(2),
+        (base_density + 0.05).clamp(0.58, 0.94),
         wx,
         wz,
         seed ^ SALT_TREE_LEAF_SHAPE,
@@ -390,10 +565,10 @@ fn place_oak_canopy(
         x,
         crown_low,
         z,
-        canopy_r + 1,
+        canopy_r.max(2),
         (canopy_h / 3).max(2),
-        canopy_r + 1,
-        (base_density + 0.04).clamp(0.60, 0.97),
+        canopy_r.max(2),
+        (base_density + 0.02).clamp(0.54, 0.90),
         wx,
         wz,
         seed ^ 0x51A7_0888,
@@ -406,16 +581,16 @@ fn place_oak_canopy(
         x,
         crown_top + 1,
         z,
-        (canopy_r - 1).max(2),
-        2,
-        (canopy_r - 1).max(2),
-        (base_density + 0.14).clamp(0.72, 1.0),
+        (canopy_r - 1).max(1),
+        1,
+        (canopy_r - 1).max(1),
+        (base_density + 0.09).clamp(0.60, 0.94),
         wx,
         wz,
         seed ^ 0x51A7_0999,
     );
 
-    let side_blob_count = 3 + (col_rand_u32(wx, wz, seed ^ 0x51A7_1001) % 2) as i32;
+    let side_blob_count = 2 + (col_rand_u32(wx, wz, seed ^ 0x51A7_1001) % 2) as i32;
     let blob_spread = (canopy_r - 1).max(2);
     let side_start = (col_rand_u32(wx, wz, seed ^ 0x51A7_1111) % DIRS.len() as u32) as usize;
     for i in 0..side_blob_count {
@@ -434,17 +609,17 @@ fn place_oak_canopy(
             x + off_x,
             crown_mid + off_y,
             z + off_z,
-            canopy_r.max(2),
+            (canopy_r - 1).max(2),
             (canopy_h / 3).max(2),
-            canopy_r.max(2),
-            (base_density + 0.05).clamp(0.62, 0.98),
+            (canopy_r - 1).max(2),
+            (base_density + 0.02).clamp(0.56, 0.90),
             wx + off_x,
             wz + off_z,
             seed ^ 0x51A7_6006,
         );
     }
 
-    let hanging_count = 1 + (col_rand_u32(wx, wz, seed ^ 0x51A7_6111) % 2) as i32;
+    let hanging_count = (col_rand_u32(wx, wz, seed ^ 0x51A7_6111) % 2) as i32;
     for i in 0..hanging_count {
         let (dx, dz) = DIRS[(side_start + (i as usize) * 3 + 1) % DIRS.len()];
         let dist = (canopy_r - 1).max(2);
@@ -463,16 +638,16 @@ fn place_oak_canopy(
             hy,
             hz,
             tuft_r,
-            2,
+            1,
             tuft_r,
-            (base_density + 0.04).clamp(0.58, 0.96),
+            (base_density + 0.01).clamp(0.50, 0.88),
             wx + dx * dist,
             wz + dz * dist,
             seed ^ 0x51A7_6555,
         );
     }
 
-    let branch_count = 2 + (col_rand_u32(wx, wz, seed ^ SALT_TREE_OAK_BRANCH) % 3) as i32;
+    let branch_count = 1 + (col_rand_u32(wx, wz, seed ^ SALT_TREE_OAK_BRANCH) % 2) as i32;
     let dir_start = (col_rand_u32(wx, wz, seed ^ 0x51A7_6666) % DIRS.len() as u32) as usize;
 
     for i in 0..branch_count {
@@ -503,7 +678,7 @@ fn place_oak_canopy(
             2 + (i % 2),
             2,
             2 + (i % 2),
-            (base_density + 0.07).clamp(0.66, 0.99),
+            (base_density + 0.04).clamp(0.58, 0.92),
             wx + dx * len,
             wz + dz * len,
             seed ^ 0x51A7_6888,
@@ -536,7 +711,7 @@ fn place_oak_canopy(
             2,
             2,
             2,
-            (base_density + 0.02).clamp(0.58, 0.95),
+            (base_density - 0.02).clamp(0.50, 0.86),
             wx + dx * len,
             wz + dz * len,
             seed ^ 0x51A7_7111,
@@ -565,21 +740,25 @@ fn place_spruce_canopy(
 ) {
     let x = lx as i32;
     let z = lz as i32;
-    let branch_bottom = trunk_top - canopy_h + 1;
+    let branch_bottom = trunk_top - canopy_h - 1;
     let denom = (trunk_top - branch_bottom).max(1) as f32;
 
     for y in branch_bottom..=trunk_top {
         let t = (y - branch_bottom) as f32 / denom;
-        let mut layer_r = (1.0 - t) * canopy_r as f32 + 1.15;
-        if (y + (seed as i32 & 0x3)) % 2 == 0 {
-            layer_r -= 0.45;
+        let cone = (1.0 - t).powf(1.15);
+        let mut layer_r = 0.90 + cone * (canopy_r as f32 + 1.40);
+        if (y - branch_bottom + (seed as i32 & 0x1)) % 2 == 1 {
+            layer_r -= 0.55;
         }
-        layer_r = layer_r.clamp(1.0, (canopy_r + 1) as f32);
+        if y >= trunk_top - 1 {
+            layer_r = 1.0;
+        }
+        layer_r = layer_r.clamp(0.9, (canopy_r + 2) as f32);
 
-        let density = if y == trunk_top {
+        let density = if y >= trunk_top - 1 {
             1.0
         } else {
-            (base_density + 0.08).clamp(0.68, 0.98)
+            (base_density + 0.05 - t * 0.10).clamp(0.58, 0.96)
         };
 
         fill_leaf_disk(
@@ -604,8 +783,8 @@ fn place_spruce_canopy(
         x,
         branch_bottom - 1,
         z,
-        canopy_r.max(2) as f32 + 0.25,
-        (base_density - 0.10).clamp(0.48, 0.92),
+        canopy_r.max(2) as f32 + 1.10,
+        (base_density - 0.08).clamp(0.44, 0.88),
         wx,
         wz,
         seed ^ 0x7331_0001,
@@ -613,6 +792,197 @@ fn place_spruce_canopy(
 
     place_leaf_if_replaceable(chunk, reg, x, trunk_top + 1, z, leaves_id);
     place_leaf_if_replaceable(chunk, reg, x, trunk_top + 2, z, leaves_id);
+    place_leaf_if_replaceable(chunk, reg, x, trunk_top + 3, z, leaves_id);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn place_golden_shower_canopy(
+    chunk: &mut ChunkData,
+    reg: &BlockRegistry,
+    leaves_id: u16,
+    lx: usize,
+    lz: usize,
+    wx: i32,
+    wz: i32,
+    seed: u32,
+    trunk_top: i32,
+    trunk_base_y: i32,
+    canopy_r: i32,
+    canopy_h: i32,
+    base_density: f32,
+) {
+    let x = lx as i32;
+    let z = lz as i32;
+    let crown_top = trunk_top + 2;
+    let crown_mid = trunk_top - (canopy_h / 3).max(2);
+    let crown_low = trunk_top - ((canopy_h * 2) / 3).max(3);
+    let top_radius = canopy_r + 2;
+
+    const DIRS: [(i32, i32); 8] = [
+        (1, 0),
+        (1, 1),
+        (0, 1),
+        (-1, 1),
+        (-1, 0),
+        (-1, -1),
+        (0, -1),
+        (1, -1),
+    ];
+
+    fill_leaf_blob(
+        chunk,
+        reg,
+        leaves_id,
+        x,
+        crown_top,
+        z,
+        top_radius,
+        (canopy_h / 2).max(3),
+        top_radius,
+        (base_density + 0.12).clamp(0.74, 1.0),
+        wx,
+        wz,
+        seed ^ SALT_TREE_LEAF_SHAPE,
+    );
+    fill_leaf_blob(
+        chunk,
+        reg,
+        leaves_id,
+        x,
+        crown_mid,
+        z,
+        canopy_r + 1,
+        (canopy_h / 2).max(3),
+        canopy_r + 1,
+        (base_density + 0.08).clamp(0.66, 0.98),
+        wx,
+        wz,
+        seed ^ 0xD00D_1001,
+    );
+    fill_leaf_blob(
+        chunk,
+        reg,
+        leaves_id,
+        x,
+        crown_low,
+        z,
+        canopy_r.max(3),
+        (canopy_h / 3).max(2),
+        canopy_r.max(3),
+        (base_density + 0.02).clamp(0.58, 0.94),
+        wx,
+        wz,
+        seed ^ 0xD00D_1002,
+    );
+    fill_leaf_disk(
+        chunk,
+        reg,
+        leaves_id,
+        x,
+        crown_top + 2,
+        z,
+        top_radius as f32,
+        (base_density + 0.15).clamp(0.78, 1.0),
+        wx,
+        wz,
+        seed ^ 0xD00D_1003,
+    );
+
+    let lobe_start = (col_rand_u32(wx, wz, seed ^ 0xD00D_1200) % DIRS.len() as u32) as usize;
+    let lobe_count = 4 + (col_rand_u32(wx, wz, seed ^ 0xD00D_1201) % 3) as i32;
+    for i in 0..lobe_count {
+        let (dx, dz) = DIRS[(lobe_start + i as usize) % DIRS.len()];
+        let dist =
+            canopy_r + 1 + (col_rand_u32(wx + i * 13, wz - i * 17, seed ^ 0xD00D_1202) % 2) as i32;
+        let lx =
+            x + dx * dist + rand_signed_offset(wx + i * 19, wz - i * 23, seed ^ 0xD00D_1203, 1);
+        let lz =
+            z + dz * dist + rand_signed_offset(wx - i * 29, wz + i * 31, seed ^ 0xD00D_1204, 1);
+        let ly = crown_mid + rand_signed_offset(wx + i * 7, wz - i * 11, seed ^ 0xD00D_1205, 2);
+        let rr = (canopy_r - 1).max(2);
+
+        fill_leaf_blob(
+            chunk,
+            reg,
+            leaves_id,
+            lx,
+            ly,
+            lz,
+            rr,
+            2,
+            rr,
+            (base_density + 0.04).clamp(0.62, 0.96),
+            wx + dx * dist,
+            wz + dz * dist,
+            seed ^ 0xD00D_1206,
+        );
+    }
+
+    let hanging_count = 6 + (col_rand_u32(wx, wz, seed ^ 0xD00D_1300) % 5) as i32;
+    let hang_start = (col_rand_u32(wx, wz, seed ^ 0xD00D_1301) % DIRS.len() as u32) as usize;
+    for i in 0..hanging_count {
+        let (dx, dz) = DIRS[(hang_start + i as usize * 2) % DIRS.len()];
+        let dist =
+            canopy_r + 1 + (col_rand_u32(wx + i * 5, wz - i * 7, seed ^ 0xD00D_1302) % 2) as i32;
+        let hx =
+            x + dx * dist + rand_signed_offset(wx + i * 37, wz - i * 41, seed ^ 0xD00D_1303, 1);
+        let hz =
+            z + dz * dist + rand_signed_offset(wx - i * 43, wz + i * 47, seed ^ 0xD00D_1304, 1);
+        if !in_bounds_local(hx, crown_mid, hz) {
+            continue;
+        }
+
+        let vertical_span = (crown_top - crown_low).max(2);
+        let anchor_y = crown_low
+            + (col_rand_u32(wx + i * 11, wz - i * 13, seed ^ 0xD00D_1305) % vertical_span as u32)
+                as i32;
+        let Some(ground_y) = find_ground_y_below(chunk, reg, hx, hz, anchor_y - 1) else {
+            continue;
+        };
+        let min_tip_y = (ground_y + 4).max(trunk_base_y - 1);
+        let desired_len =
+            3 + (col_rand_u32(wx + i * 17, wz - i * 19, seed ^ 0xD00D_1306) % 7) as i32;
+        let tip_y = (anchor_y - desired_len).max(min_tip_y);
+        if tip_y >= anchor_y {
+            continue;
+        }
+
+        for y in tip_y..=anchor_y {
+            place_leaf_if_replaceable(chunk, reg, hx, y, hz, leaves_id);
+            if (anchor_y - y) % 2 == 0
+                && col_rand_f32(wx + i * 59 + y * 3, wz - i * 61 - y * 5, seed ^ 0xD00D_1307) > 0.45
+            {
+                place_leaf_if_replaceable(
+                    chunk,
+                    reg,
+                    hx + dx.signum(),
+                    y,
+                    hz + dz.signum(),
+                    leaves_id,
+                );
+            }
+        }
+
+        fill_leaf_blob(
+            chunk,
+            reg,
+            leaves_id,
+            hx,
+            tip_y,
+            hz,
+            1,
+            1,
+            1,
+            (base_density + 0.01).clamp(0.54, 0.90),
+            wx + dx * dist,
+            wz + dz * dist,
+            seed ^ 0xD00D_1308,
+        );
+    }
+
+    place_leaf_if_replaceable(chunk, reg, x, crown_top + 2, z, leaves_id);
+    place_leaf_if_replaceable(chunk, reg, x, crown_top + 3, z, leaves_id);
+    place_leaf_if_replaceable(chunk, reg, x, crown_top + 4, z, leaves_id);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -762,8 +1132,60 @@ fn set_log_if_replaceable(
 }
 
 #[inline]
+fn stabilize_log_column_down(
+    chunk: &mut ChunkData,
+    reg: &BlockRegistry,
+    x: i32,
+    start_y: i32,
+    z: i32,
+    log_id: u16,
+    max_drop: i32,
+) {
+    if max_drop <= 0 {
+        return;
+    }
+
+    let mut y = start_y - 1;
+    let mut remaining = max_drop;
+    while remaining > 0 && in_bounds_local(x, y, z) {
+        let id = chunk.get(x as usize, y as usize, z as usize);
+        if id != 0 && !reg.stats(id).foliage {
+            break;
+        }
+        chunk.set(x as usize, y as usize, z as usize, log_id);
+        y -= 1;
+        remaining -= 1;
+    }
+}
+
+#[inline]
 fn in_bounds_local(x: i32, y: i32, z: i32) -> bool {
     x >= 0 && x < CX as i32 && y >= 0 && y < CY as i32 && z >= 0 && z < CZ as i32
+}
+
+#[inline]
+fn find_ground_y_below(
+    chunk: &ChunkData,
+    reg: &BlockRegistry,
+    x: i32,
+    z: i32,
+    start_y: i32,
+) -> Option<i32> {
+    if x < 0 || x >= CX as i32 || z < 0 || z >= CZ as i32 {
+        return None;
+    }
+    let mut y = start_y.clamp(0, CY as i32 - 1);
+    loop {
+        let id = chunk.get(x as usize, y as usize, z as usize);
+        if id != 0 && !reg.stats(id).foliage {
+            return Some(y);
+        }
+        if y == 0 {
+            break;
+        }
+        y -= 1;
+    }
+    None
 }
 
 #[inline]

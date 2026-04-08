@@ -117,6 +117,13 @@ pub struct InterfaceConfig {
     /// Maximum number of chat lines kept in local history.
     #[serde(default = "default_chat_max_space")]
     pub chat_max_space: usize,
+    /// Max block distance used by local `/locate` biome search.
+    #[serde(
+        default = "default_locate_search_radius",
+        rename = "locate-search-radius",
+        alias = "locate_search_radius"
+    )]
+    pub locate_search_radius: i32,
 }
 
 impl Default for InterfaceConfig {
@@ -124,6 +131,7 @@ impl Default for InterfaceConfig {
     fn default() -> Self {
         Self {
             chat_max_space: default_chat_max_space(),
+            locate_search_radius: default_locate_search_radius(),
         }
     }
 }
@@ -189,6 +197,10 @@ pub struct GraphicsConfig {
     #[serde(default = "default_chunk_collider_apply_per_frame")]
     pub chunk_collider_apply_per_frame: usize,
 
+    /// Activation radius for chunk colliders around entities (in blocks).
+    #[serde(default = "default_chunk_collider_activation_radius_blocks")]
+    pub chunk_collider_activation_radius_blocks: i32,
+
     /// Maximum number of chunks unloaded per frame.
     #[serde(default = "default_chunk_unload_budget_per_frame")]
     pub chunk_unload_budget_per_frame: usize,
@@ -230,6 +242,8 @@ impl Default for GraphicsConfig {
             chunk_mesh_apply_per_frame: default_chunk_mesh_apply_per_frame(),
             chunk_collider_max_inflight: default_chunk_collider_max_inflight(),
             chunk_collider_apply_per_frame: default_chunk_collider_apply_per_frame(),
+            chunk_collider_activation_radius_blocks:
+                default_chunk_collider_activation_radius_blocks(),
             chunk_unload_budget_per_frame: default_chunk_unload_budget_per_frame(),
             fog_enabled: default_fog_enabled(),
             fog_color: default_fog_color(),
@@ -441,6 +455,11 @@ fn default_chunk_collider_apply_per_frame() -> usize {
     12
 }
 
+/// Runs the `default_chunk_collider_activation_radius_blocks` routine for default chunk collider activation radius blocks in the `core::config` module.
+fn default_chunk_collider_activation_radius_blocks() -> i32 {
+    50
+}
+
 /// Runs the `default_chunk_unload_budget_per_frame` routine for default chunk unload budget per frame in the `core::config` module.
 fn default_chunk_unload_budget_per_frame() -> usize {
     10
@@ -474,6 +493,11 @@ fn default_far_clip_extra() -> f32 {
 /// Runs the `default_chat_max_space` routine for default chat max space in the `core::config` module.
 fn default_chat_max_space() -> usize {
     140
+}
+
+/// Runs the `default_locate_search_radius` routine for default locate search radius in the `core::config` module.
+fn default_locate_search_radius() -> i32 {
+    1000
 }
 
 // =======================================================
