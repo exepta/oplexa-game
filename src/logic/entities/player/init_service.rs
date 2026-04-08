@@ -10,7 +10,6 @@ use crate::core::world::chunk_dimension::CX;
 use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use crate::utils::key_utils::convert;
 use bevy::camera::visibility::RenderLayers;
-use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::input::mouse::MouseMotion;
 use bevy::light::{CascadeShadowConfigBuilder, GlobalAmbientLight};
 use bevy::prelude::*;
@@ -211,7 +210,6 @@ fn spawn_player(
             PlayerCamera,
             RenderLayers::from_layers(&[0, 1, 2]),
             Camera3d::default(),
-            DepthPrepass,
             Projection::Perspective(PerspectiveProjection {
                 fov: fov_deg.to_radians(),
                 near: 0.05,

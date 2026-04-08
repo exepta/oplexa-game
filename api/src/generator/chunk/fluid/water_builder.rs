@@ -5,7 +5,7 @@ use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::shader::water_shader::{WaterMatHandle, WaterMaterial};
 use crate::core::states::states::{AppState, InGameStates, LoadingStates};
 use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, id_any};
-use crate::core::world::chunk::{BIG, ChunkMap, LoadCenter, MAX_UPDATE_FRAMES, SEA_LEVEL};
+use crate::core::world::chunk::{ChunkMap, LoadCenter, MAX_UPDATE_FRAMES, SEA_LEVEL};
 use crate::core::world::chunk_dimension::*;
 use crate::core::world::fluid::*;
 use crate::core::world::save::{RegionCache, WorldSave};
@@ -16,6 +16,7 @@ use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
 use futures_lite::future;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Instant;
 
 const WATER_GEN_BUDGET_PER_FRAME: usize = 24;
 const MAX_INFLIGHT_WATER_LOAD: usize = 16;
@@ -658,14 +659,33 @@ fn schedule_water_generation_jobs(
     load_center: Option<Res<LoadCenter>>,
     game_config: Res<GlobalConfig>,
     app_state: Res<State<AppState>>,
+    time: Res<Time>,
 ) {
+    let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
+    let frame_ms = time.delta_secs() * 1000.0;
+    let dynamic_divisor = if frame_ms > 30.0 {
+        4
+    } else if frame_ms > 22.0 {
+        3
+    } else if frame_ms > 17.0 {
+        2
+    } else {
+        1
+    };
+    let async_threads = AsyncComputeTaskPool::get().thread_num().max(1);
+    let loading_max_inflight = (async_threads * 4).clamp(16, 96);
+    let loading_submit = (async_threads * 3).clamp(8, 64);
     let max_inflight = if in_water_gen(&app_state) {
-        BIG
+        loading_max_inflight
+    } else if in_game {
+        (MAX_INFLIGHT_WATER_LOAD / dynamic_divisor).clamp(2, 6)
     } else {
         MAX_INFLIGHT_WATER_LOAD
     };
     let per_frame = if in_water_gen(&app_state) {
-        BIG
+        loading_submit
+    } else if in_game {
+        (WATER_GEN_BUDGET_PER_FRAME / dynamic_divisor).clamp(1, 3)
     } else {
         WATER_GEN_BUDGET_PER_FRAME
     };
@@ -694,7 +714,13 @@ fn schedule_water_generation_jobs(
         IVec2::ZERO
     };
     let visible = game_config.graphics.chunk_range.max(0);
-    let loaded = if visible >= 10 { visible + 4 } else { visible };
+    let loaded = if in_game {
+        visible + 1
+    } else if visible >= 10 {
+        visible + 4
+    } else {
+        visible
+    };
 
     while budget > 0 {
         let next = if in_water_gen(&app_state) {
@@ -764,10 +790,24 @@ fn collect_water_generation_jobs(
     mut water: ResMut<FluidMap>,
     mut to_mesh: ResMut<WaterMeshingTodo>,
     app_state: Res<State<AppState>>,
+    time: Res<Time>,
 ) {
     let mut done: Vec<IVec2> = Vec::new();
+    let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
+    let frame_ms = time.delta_secs() * 1000.0;
+    let dynamic_divisor = if frame_ms > 30.0 {
+        4
+    } else if frame_ms > 22.0 {
+        3
+    } else if frame_ms > 17.0 {
+        2
+    } else {
+        1
+    };
     let apply_cap = if in_water_gen(&app_state) {
-        BIG
+        (AsyncComputeTaskPool::get().thread_num().max(1) * 4).clamp(16, 96)
+    } else if in_game {
+        (WATER_GEN_BUDGET_PER_FRAME / dynamic_divisor).clamp(1, 2)
     } else {
         WATER_GEN_BUDGET_PER_FRAME
     };
@@ -1060,9 +1100,23 @@ fn water_drain_mesh_backlog(
     load_center: Option<Res<LoadCenter>>,
     game_config: Res<GlobalConfig>,
     app_state: Res<State<AppState>>,
+    time: Res<Time>,
 ) {
+    let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
+    let frame_ms = time.delta_secs() * 1000.0;
+    let dynamic_divisor = if frame_ms > 30.0 {
+        4
+    } else if frame_ms > 22.0 {
+        3
+    } else if frame_ms > 17.0 {
+        2
+    } else {
+        1
+    };
     let max_inflight = if in_water_gen(&app_state) {
-        BIG
+        (AsyncComputeTaskPool::get().thread_num().max(1) * 6).clamp(24, 144)
+    } else if in_game {
+        (MAX_INFLIGHT_WATER_MESH / dynamic_divisor).clamp(2, 6)
     } else {
         MAX_INFLIGHT_WATER_MESH
     };
@@ -1164,6 +1218,7 @@ fn water_collect_meshed_subchunks(
     app_state: Res<State<AppState>>,
     chunk_map: Res<ChunkMap>,
     water: Res<FluidMap>,
+    time: Res<Time>,
 ) {
     let water_mat = id_any(&reg, &["water_block", "water"]);
     if water_mat == 0 {
@@ -1171,16 +1226,32 @@ fn water_collect_meshed_subchunks(
         return;
     }
 
-    let apply_cap = if in_water_gen(&app_state) {
-        BIG
+    let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
+    let frame_ms = time.delta_secs() * 1000.0;
+    let dynamic_divisor = if frame_ms > 30.0 {
+        4
+    } else if frame_ms > 22.0 {
+        3
+    } else if frame_ms > 17.0 {
+        2
     } else {
-        MAX_WATER_MESH_APPLY_PER_FRAME
+        1
     };
+    let apply_cap = if in_water_gen(&app_state) {
+        (AsyncComputeTaskPool::get().thread_num().max(1) * 6).clamp(24, 144)
+    } else {
+        (MAX_WATER_MESH_APPLY_PER_FRAME / dynamic_divisor).max(1)
+    };
+    let apply_budget_ms = if in_game { 1.6 } else { 4.0 };
+    let stage_start = Instant::now();
     let mut done = Vec::new();
     let mut applied = 0usize;
 
     for (key, task) in pending.0.iter_mut() {
         if applied >= apply_cap {
+            break;
+        }
+        if applied > 0 && stage_start.elapsed().as_secs_f32() * 1000.0 >= apply_budget_ms {
             break;
         }
 
@@ -1341,11 +1412,7 @@ fn sync_water_mesh_visibility(
         IVec2::ZERO
     };
 
-    let visible = if game_config.graphics.chunk_range.max(0) >= 10 {
-        game_config.graphics.chunk_range.max(0) + 4
-    } else {
-        game_config.graphics.chunk_range.max(0)
-    };
+    let visible = game_config.graphics.chunk_range.max(0);
     let hide_radius = visible + 1;
     let require_water_ready = multiplayer_connection.uses_local_save_data()
         && matches!(app_state.get(), AppState::Loading(LoadingStates::WaterGen));
@@ -1362,7 +1429,7 @@ fn sync_water_mesh_visibility(
         } else {
             true
         };
-        *vis = match *vis {
+        let desired = match *vis {
             Visibility::Inherited => {
                 if in_hide_band && ready {
                     Visibility::Inherited
@@ -1378,5 +1445,8 @@ fn sync_water_mesh_visibility(
                 }
             }
         };
+        if *vis != desired {
+            *vis = desired;
+        }
     }
 }

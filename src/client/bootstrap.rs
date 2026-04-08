@@ -7,6 +7,11 @@ pub(super) fn init_bevy_app(
     multiplayer_settings: NetworkSettings,
     client_identity: ClientIdentity,
 ) {
+    let cpu_cores = bevy::tasks::available_parallelism().max(1);
+    let compute_pool_max = ((cpu_cores as f32) * 0.25).round() as usize;
+    let async_pool_max = ((cpu_cores as f32) * 0.40).round() as usize;
+    let io_pool_max = ((cpu_cores as f32) * 0.15).round() as usize;
+
     let client_uuid = client_identity.uuid.clone();
     let build = BuildInfo {
         app_name: "Game Version",
@@ -36,11 +41,37 @@ pub(super) fn init_bevy_app(
                         present_mode: if config.graphics.vsync {
                             PresentMode::AutoVsync
                         } else {
-                            PresentMode::Mailbox
+                            PresentMode::AutoNoVsync
                         },
                         ..default()
                     }),
                     ..default()
+                })
+                .set(bevy::app::TaskPoolPlugin {
+                    task_pool_options: bevy::app::TaskPoolOptions {
+                        io: bevy::app::TaskPoolThreadAssignmentPolicy {
+                            min_threads: 1,
+                            max_threads: io_pool_max.clamp(1, 4),
+                            percent: 0.15,
+                            on_thread_spawn: None,
+                            on_thread_destroy: None,
+                        },
+                        async_compute: bevy::app::TaskPoolThreadAssignmentPolicy {
+                            min_threads: 1,
+                            max_threads: async_pool_max.clamp(2, 10),
+                            percent: 0.40,
+                            on_thread_spawn: None,
+                            on_thread_destroy: None,
+                        },
+                        compute: bevy::app::TaskPoolThreadAssignmentPolicy {
+                            min_threads: 2,
+                            max_threads: compute_pool_max.clamp(2, 6),
+                            percent: 0.25,
+                            on_thread_spawn: None,
+                            on_thread_destroy: None,
+                        },
+                        ..default()
+                    },
                 })
                 .set(RenderPlugin {
                     render_creation: RenderCreation::Automatic(create_gpu_settings(

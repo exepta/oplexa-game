@@ -106,7 +106,7 @@ struct KickedOnce(HashSet<(IVec2, u8)>);
 struct QueuedOnce(HashSet<(IVec2, u8)>);
 
 const HIGH_RANGE_PRELOAD_THRESHOLD: i32 = 10;
-const HIDDEN_PRELOAD_RING: i32 = 4;
+const HIDDEN_PRELOAD_RING: i32 = 2;
 
 #[derive(Resource, Default)]
 struct StreamLookaheadState {
@@ -118,6 +118,16 @@ struct StreamLookaheadState {
 struct RingDeadlineState {
     visible_miss_frames: u32,
     preload_miss_frames: u32,
+}
+
+#[derive(Default)]
+struct GenerationSharedCaches {
+    reg_defs_len: usize,
+    biome_len: usize,
+    tree_family_len: usize,
+    reg: Option<Arc<BlockRegistry>>,
+    biomes: Option<Arc<BiomeRegistry>>,
+    trees: Option<Arc<TreeRegistry>>,
 }
 
 #[derive(Resource, Default)]
@@ -189,6 +199,7 @@ struct ChunkScheduleState<'w, 's> {
     stream_lookahead: ResMut<'w, StreamLookaheadState>,
     ring_deadlines: ResMut<'w, RingDeadlineState>,
     ready_latency: ResMut<'w, ChunkReadyLatencyState>,
+    shared_cache: Local<'s, GenerationSharedCaches>,
     time: Res<'w, Time>,
     _marker: std::marker::PhantomData<&'s ()>,
 }
@@ -516,13 +527,35 @@ fn schedule_chunk_generation(
     };
 
     let waiting = is_waiting(&app_state);
+    let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
+    let frame_ms = schedule_state.time.delta_secs() * 1000.0;
+    let dynamic_divisor = if frame_ms > 30.0 {
+        4
+    } else if frame_ms > 22.0 {
+        3
+    } else if frame_ms > 17.0 {
+        2
+    } else {
+        1
+    };
+    let async_threads = AsyncComputeTaskPool::get().thread_num().max(1);
+    let waiting_max_inflight = (async_threads * 6).clamp(24, 192);
+    let waiting_submit = (async_threads * 3).clamp(8, 96);
+    let ingame_max_inflight =
+        (game_config.graphics.chunk_gen_max_inflight.max(1) / dynamic_divisor).clamp(4, 20);
+    let ingame_submit =
+        (game_config.graphics.chunk_gen_submit_per_frame.max(1) / dynamic_divisor).clamp(1, 4);
     let mut max_inflight = if waiting {
-        BIG
+        waiting_max_inflight
+    } else if in_game {
+        ingame_max_inflight
     } else {
         game_config.graphics.chunk_gen_max_inflight.max(1)
     };
     let mut per_frame_submit = if waiting {
-        BIG
+        waiting_submit
+    } else if in_game {
+        ingame_submit
     } else {
         game_config.graphics.chunk_gen_submit_per_frame.max(1)
     };
@@ -582,7 +615,8 @@ fn schedule_chunk_generation(
             }
         }
         if missing_near > 0 && mesh_pressure < 1_200 {
-            per_frame_submit = per_frame_submit.max(12).min(max_inflight);
+            let near_boost = if in_game { 4 } else { 12 };
+            per_frame_submit = per_frame_submit.max(near_boost).min(max_inflight);
         }
     }
 
@@ -641,10 +675,31 @@ fn schedule_chunk_generation(
         }
     }
 
-    // --- NEW: Arc-wrap registries once per system tick (cheap per task) ---
-    let reg_arc = Arc::new(reg.clone());
-    let biomes_arc = Arc::new(biomes.clone());
-    let trees_arc = Arc::new(trees.clone());
+    let shared_cache = &mut schedule_state.shared_cache;
+    let cache_stale = shared_cache.reg.is_none()
+        || shared_cache.biomes.is_none()
+        || shared_cache.trees.is_none()
+        || shared_cache.reg_defs_len != reg.defs.len()
+        || shared_cache.biome_len != biomes.len()
+        || shared_cache.tree_family_len != trees.family_count();
+    if cache_stale {
+        shared_cache.reg_defs_len = reg.defs.len();
+        shared_cache.biome_len = biomes.len();
+        shared_cache.tree_family_len = trees.family_count();
+        shared_cache.reg = Some(Arc::new(reg.clone()));
+        shared_cache.biomes = Some(Arc::new(biomes.clone()));
+        shared_cache.trees = Some(Arc::new(trees.clone()));
+    }
+
+    let Some(reg_arc) = shared_cache.reg.as_ref().cloned() else {
+        return;
+    };
+    let Some(biomes_arc) = shared_cache.biomes.as_ref().cloned() else {
+        return;
+    };
+    let Some(trees_arc) = shared_cache.trees.as_ref().cloned() else {
+        return;
+    };
 
     let cfg_clone = gen_cfg.clone();
     let ws_root = ws.root.clone();
@@ -703,12 +758,16 @@ fn schedule_chunk_generation(
         && !visible_candidates.is_empty()
         && schedule_state.ring_deadlines.visible_miss_frames >= 2
     {
-        per_frame_submit = per_frame_submit.max(24).min(max_inflight);
+        per_frame_submit = per_frame_submit
+            .max(if in_game { 4 } else { 24 })
+            .min(max_inflight);
     } else if !waiting
         && !preload_candidates.is_empty()
         && schedule_state.ring_deadlines.preload_miss_frames >= 6
     {
-        per_frame_submit = per_frame_submit.max(10).min(max_inflight);
+        per_frame_submit = per_frame_submit
+            .max(if in_game { 2 } else { 10 })
+            .min(max_inflight);
     }
 
     let mut budget = max_inflight
@@ -822,8 +881,9 @@ fn drain_mesh_backlog(
     }
 
     let waiting = is_waiting(&app_state);
+    let waiting_mesh_cap = (AsyncComputeTaskPool::get().thread_num().max(1) * 8).clamp(32, 256);
     let max_inflight_mesh = if waiting {
-        BIG
+        waiting_mesh_cap
     } else {
         game_config.graphics.chunk_mesh_max_inflight.max(1)
     };
@@ -940,14 +1000,30 @@ fn collect_generated_chunks(
 ) {
     let stage_start = Instant::now();
     let waiting = is_waiting(&app_state);
+    let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
+    let frame_ms = time.delta_secs() * 1000.0;
+    let dynamic_divisor = if frame_ms > 30.0 {
+        4
+    } else if frame_ms > 22.0 {
+        3
+    } else if frame_ms > 17.0 {
+        2
+    } else {
+        1
+    };
+    let waiting_mesh_cap = (AsyncComputeTaskPool::get().thread_num().max(1) * 8).clamp(32, 256);
     let max_inflight_mesh = if waiting {
-        BIG
+        waiting_mesh_cap
+    } else if in_game {
+        (game_config.graphics.chunk_mesh_max_inflight.max(1) / dynamic_divisor).clamp(8, 24)
     } else {
         game_config.graphics.chunk_mesh_max_inflight.max(1)
     };
     let mesh_pressure = pending_mesh.0.len() + backlog.0.len();
     let gen_apply_cap = if waiting {
         BIG
+    } else if in_game {
+        (2usize / dynamic_divisor).max(1)
     } else if mesh_pressure > 4_000 {
         1
     } else if mesh_pressure > 2_500 {
@@ -957,7 +1033,7 @@ fn collect_generated_chunks(
     } else {
         6
     };
-    let allow_neighbor_enqueue = waiting || mesh_pressure < 1_200;
+    let allow_neighbor_enqueue = waiting || (!in_game && mesh_pressure < 1_200);
 
     let reg_lite = RegLite::from_reg(&reg);
     let mut finished = Vec::new();
@@ -969,9 +1045,10 @@ fn collect_generated_chunks(
         }
         if let Some((c, mut data)) = future::block_on(future::poll_once(task)) {
             clear_air_only_subchunks_dirty(&mut data);
-            chunk_map.chunks.insert(c, data.clone());
+            let chunk_shared = Arc::new(data);
+            chunk_map.chunks.insert(c, (*chunk_shared).clone());
             ready_set.0.remove(&c);
-            if data.dirty_mask == 0 {
+            if chunk_shared.dirty_mask == 0 {
                 ready_set.0.insert(c);
                 telemetry_mark_chunk_ready(
                     c,
@@ -982,18 +1059,20 @@ fn collect_generated_chunks(
             }
 
             let pool = AsyncComputeTaskPool::get();
-            let chunk_shared = Arc::new(data.clone());
-            let order = sub_priority_order(&data);
+            let order = sub_priority_order(&chunk_shared);
+            let max_spawn_per_chunk = if in_game { 2usize } else { usize::MAX };
+            let mut spawned_for_chunk = 0usize;
             for sub in order {
-                if !data.is_dirty(sub) {
+                if !chunk_shared.is_dirty(sub) {
                     continue;
                 }
                 let key = (c, sub);
-                let y0 = sub * SEC_H;
-                let y1 = (y0 + SEC_H).min(CY);
-                let borders = snapshot_borders(&chunk_map, c, y0, y1);
-
-                if pending_mesh.0.len() < max_inflight_mesh {
+                let should_spawn_now = pending_mesh.0.len() < max_inflight_mesh
+                    && spawned_for_chunk < max_spawn_per_chunk;
+                if should_spawn_now {
+                    let y0 = sub * SEC_H;
+                    let y1 = (y0 + SEC_H).min(CY);
+                    let borders = snapshot_borders(&chunk_map, c, y0, y1);
                     let chunk_copy = Arc::clone(&chunk_shared);
                     let reg_copy = reg_lite.clone();
                     let t = pool.spawn(async move {
@@ -1008,6 +1087,7 @@ fn collect_generated_chunks(
                         ((c, sub), builds)
                     });
                     pending_mesh.0.insert(key, t);
+                    spawned_for_chunk += 1;
                 } else {
                     enqueue_mesh_fast(&mut backlog, &mut backlog_set, &pending_mesh, key);
                 }
@@ -1026,12 +1106,10 @@ fn collect_generated_chunks(
                             if pending_mesh.0.contains_key(&key) {
                                 continue;
                             }
-
-                            let y0 = sub * SEC_H;
-                            let y1 = (y0 + SEC_H).min(CY);
-                            let borders = snapshot_borders(&chunk_map, n_coord, y0, y1);
-
                             if pending_mesh.0.len() < max_inflight_mesh {
+                                let y0 = sub * SEC_H;
+                                let y1 = (y0 + SEC_H).min(CY);
+                                let borders = snapshot_borders(&chunk_map, n_coord, y0, y1);
                                 let pool = AsyncComputeTaskPool::get();
                                 let reg_copy = reg_lite.clone();
                                 let chunk_copy = Arc::clone(&neighbor_shared);
@@ -1096,10 +1174,29 @@ fn collect_meshed_subchunks(
 
     let stage_start = Instant::now();
     let waiting = is_waiting(&app_state);
-    let apply_cap = if waiting {
-        BIG
+    let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
+    let frame_ms = time.delta_secs() * 1000.0;
+    let dynamic_divisor = if frame_ms > 30.0 {
+        4
+    } else if frame_ms > 22.0 {
+        3
+    } else if frame_ms > 17.0 {
+        2
     } else {
-        game_config.graphics.chunk_mesh_apply_per_frame.max(1)
+        1
+    };
+    let ingame_apply_cap = game_config.graphics.chunk_mesh_apply_per_frame.max(1);
+    let ingame_apply_cap = if in_game {
+        (ingame_apply_cap / dynamic_divisor).max(2)
+    } else {
+        ingame_apply_cap
+    };
+    let waiting_mesh_apply_cap =
+        (AsyncComputeTaskPool::get().thread_num().max(1) * 6).clamp(24, 160);
+    let apply_cap = if waiting {
+        waiting_mesh_apply_cap
+    } else {
+        ingame_apply_cap
     };
     let center_c = if let Ok(t) = q_cam.single() {
         let (c, _) = world_to_chunk_xz(
@@ -1113,7 +1210,7 @@ fn collect_meshed_subchunks(
         IVec2::ZERO
     };
     let poll_scan_limit = if waiting {
-        BIG
+        1024usize
     } else {
         (apply_cap.saturating_mul(4)).clamp(16, 96)
     };
@@ -1163,7 +1260,23 @@ fn collect_meshed_subchunks(
         ready_results.push(item);
     }
 
-    for item in ready_results {
+    let apply_budget_ms = if waiting {
+        10.0
+    } else if in_game {
+        2.8
+    } else {
+        6.0
+    };
+    let mut applied_count = 0usize;
+    let mut ready_iter = ready_results.into_iter();
+    while let Some(item) = ready_iter.next() {
+        if applied_count > 0 && stage_start.elapsed().as_secs_f32() * 1000.0 >= apply_budget_ms {
+            immediate_ready.0.push_front(item);
+            for queued in ready_iter {
+                immediate_ready.0.push_back(queued);
+            }
+            break;
+        }
         let ((coord, sub), builds, immediate) = (item.key, item.builds, item.immediate);
         // Despawn render meshes for this (coord,sub) first (safe).
         let old_keys: Vec<_> = apply_state
@@ -1348,6 +1461,7 @@ fn collect_meshed_subchunks(
                 );
             }
         }
+        applied_count += 1;
     }
 
     apply_state.stage_telemetry.stage_mesh_apply_ms = smooth_stage_ms(
@@ -1368,10 +1482,11 @@ fn schedule_collider_build_tasks(
 ) {
     let stage_start = Instant::now();
     let waiting = is_waiting(&app_state);
+    let waiting_collider_cap = (AsyncComputeTaskPool::get().thread_num().max(1) * 4).clamp(16, 96);
     let max_inflight = if waiting {
-        BIG
+        waiting_collider_cap
     } else {
-        game_config.graphics.chunk_collider_max_inflight.max(1)
+        game_config.graphics.chunk_collider_max_inflight.clamp(1, 4)
     };
     let pool = AsyncComputeTaskPool::get();
     let center_c = if let Ok(t) = q_cam.single() {
@@ -1386,12 +1501,23 @@ fn schedule_collider_build_tasks(
         IVec2::ZERO
     };
 
+    let collider_activation_blocks = game_config
+        .graphics
+        .chunk_collider_activation_radius_blocks
+        .max(1);
+    let collider_activation_chunks = (collider_activation_blocks + CX as i32 - 1) / CX as i32 + 1;
+
     while pending.0.len() < max_inflight {
         let Some(key) = backlog
             .0
             .keys()
             .take(1024)
             .copied()
+            .filter(|(coord, _)| {
+                waiting
+                    || ((coord.x - center_c.x).abs() <= collider_activation_chunks
+                        && (coord.y - center_c.y).abs() <= collider_activation_chunks)
+            })
             .min_by_key(|(coord, sub)| {
                 let dx = coord.x - center_c.x;
                 let dz = coord.y - center_c.y;
@@ -1441,16 +1567,36 @@ fn collect_finished_collider_builds(
     mut stage_telemetry: ResMut<ChunkStageTelemetry>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
     load_center: Option<Res<LoadCenter>>,
+    time: Res<Time>,
 ) {
     let stage_start = Instant::now();
     let waiting = is_waiting(&app_state);
-    let apply_cap = if waiting {
-        BIG
+    let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
+    let frame_ms = time.delta_secs() * 1000.0;
+    let dynamic_divisor = if frame_ms > 30.0 {
+        4
+    } else if frame_ms > 22.0 {
+        3
+    } else if frame_ms > 17.0 {
+        2
     } else {
-        game_config.graphics.chunk_collider_apply_per_frame.max(1)
+        1
+    };
+    let ingame_apply_cap = game_config.graphics.chunk_collider_apply_per_frame.max(1);
+    let ingame_apply_cap = if in_game {
+        (ingame_apply_cap / dynamic_divisor).max(1)
+    } else {
+        ingame_apply_cap
+    };
+    let waiting_collider_apply_cap =
+        (AsyncComputeTaskPool::get().thread_num().max(1) * 4).clamp(16, 96);
+    let apply_cap = if waiting {
+        waiting_collider_apply_cap
+    } else {
+        ingame_apply_cap
     };
     let mut done_keys = Vec::new();
-    let poll_scan_limit = if waiting { BIG } else { 256usize };
+    let poll_scan_limit = if waiting { 512usize } else { 256usize };
     let mut scanned = 0usize;
     for (key, task) in pending.0.iter_mut() {
         if scanned >= poll_scan_limit {
@@ -1476,7 +1622,17 @@ fn collect_finished_collider_builds(
         IVec2::ZERO
     };
     let mut applied = 0usize;
+    let apply_budget_ms = if waiting {
+        8.0
+    } else if in_game {
+        1.8
+    } else {
+        5.0
+    };
     while applied < apply_cap {
+        if applied > 0 && stage_start.elapsed().as_secs_f32() * 1000.0 >= apply_budget_ms {
+            break;
+        }
         let next = if waiting {
             ready_queue.0.pop_front()
         } else {
@@ -1628,14 +1784,12 @@ fn schedule_remesh_tasks_from_events(
     let in_game_immediate = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
     let max_inflight_mesh = if waiting {
         BIG
+    } else if in_game_immediate {
+        game_config.graphics.chunk_mesh_max_inflight.clamp(4, 16)
     } else {
         game_config.graphics.chunk_mesh_max_inflight.max(1)
     };
-    let immediate_budget = if in_game_immediate {
-        game_config.graphics.chunk_mesh_apply_per_frame.clamp(1, 6)
-    } else {
-        0
-    };
+    let mut immediate_budget = 0usize;
     let mut immediate_used = 0usize;
 
     let reg_lite = RegLite::from_reg(&reg);
@@ -1657,6 +1811,11 @@ fn schedule_remesh_tasks_from_events(
         if e.sub < SEC_COUNT {
             by_chunk.entry(e.coord).or_default().push(e.sub);
         }
+    }
+    let total_sub_events = by_chunk.values().map(Vec::len).sum::<usize>();
+    let can_run_immediate = in_game_immediate && total_sub_events <= 2 && pending_mesh.0.len() < 4;
+    if can_run_immediate {
+        immediate_budget = 1;
     }
 
     for (coord, mut subs) in by_chunk {
@@ -1683,11 +1842,11 @@ fn schedule_remesh_tasks_from_events(
                 backlog.0.retain(|queued| *queued != key);
             }
 
-            let y0 = sub * SEC_H;
-            let y1 = (y0 + SEC_H).min(CY);
-            let borders = snapshot_borders(&chunk_map, coord, y0, y1);
             if in_game_immediate && immediate_used < immediate_budget {
                 // Apply player edits immediately in the current frame path.
+                let y0 = sub * SEC_H;
+                let y1 = (y0 + SEC_H).min(CY);
+                let borders = snapshot_borders(&chunk_map, coord, y0, y1);
                 let chunk_copy = Arc::clone(&chunk_shared);
                 let reg_copy = reg_lite.clone();
                 let builds = future::block_on(mesh_subchunk_async(
@@ -1716,6 +1875,9 @@ fn schedule_remesh_tasks_from_events(
                     ));
 
             if has_slot {
+                let y0 = sub * SEC_H;
+                let y1 = (y0 + SEC_H).min(CY);
+                let borders = snapshot_borders(&chunk_map, coord, y0, y1);
                 let chunk_copy = Arc::clone(&chunk_shared);
                 let reg_copy = reg_lite.clone();
                 let t = pool.spawn(async move {
@@ -2232,7 +2394,7 @@ fn sync_chunk_mesh_visibility(
         IVec2::ZERO
     };
 
-    let visible = loaded_radius(game_config.graphics.chunk_range);
+    let visible = visible_radius(game_config.graphics.chunk_range);
     let require_chunk_ready = !matches!(app_state.get(), AppState::InGame(InGameStates::Game));
     let require_water_ready = multiplayer_connection.uses_local_save_data()
         && matches!(app_state.get(), AppState::Loading(LoadingStates::WaterGen));
@@ -2252,10 +2414,13 @@ fn sync_chunk_mesh_visibility(
         } else {
             true
         };
-        *vis = if in_visible && ready && water_ready {
+        let desired = if in_visible && ready && water_ready {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
+        if *vis != desired {
+            *vis = desired;
+        }
     }
 }

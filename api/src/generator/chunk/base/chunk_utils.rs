@@ -10,7 +10,7 @@ use crate::generator::chunk::chunk_struct::*;
 use crate::generator::chunk::trees::registry::TreeRegistry;
 use bevy::prelude::*;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 pub const MAX_INFLIGHT_MESH: usize = 32;
@@ -555,6 +555,10 @@ pub fn area_ready(
     pending_mesh: &PendingMesh,
     backlog: &MeshBacklog,
 ) -> bool {
+    let pending_mesh_chunks: HashSet<IVec2> =
+        pending_mesh.0.keys().map(|(coord, _)| *coord).collect();
+    let backlog_chunks: HashSet<IVec2> = backlog.0.iter().map(|(coord, _)| *coord).collect();
+
     for dz in -radius..=radius {
         for dx in -radius..=radius {
             let c = IVec2::new(center.x + dx, center.y + dz);
@@ -564,10 +568,10 @@ pub fn area_ready(
             if pending_gen.0.contains_key(&c) {
                 return false;
             }
-            if pending_mesh.0.keys().any(|(cc, _)| *cc == c) {
+            if pending_mesh_chunks.contains(&c) {
                 return false;
             }
-            if backlog.0.iter().any(|(cc, _)| *cc == c) {
+            if backlog_chunks.contains(&c) {
                 return false;
             }
         }

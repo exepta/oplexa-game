@@ -63,11 +63,16 @@ fn sync_world_gen_progress(
     if metrics.phase != progress_log_state.last_phase {
         progress_log_state.last_phase = metrics.phase;
         progress_log_state.phase_peak_percent = phase_floor;
+        progress_log_state.phase_peak_chunks = 0;
     }
     progress_log_state.phase_peak_percent = progress_log_state
         .phase_peak_percent
         .max(metrics.overall_pct.clamp(phase_floor, phase_cap))
         .min(phase_cap);
+    progress_log_state.phase_peak_chunks = progress_log_state
+        .phase_peak_chunks
+        .max(metrics.progress_chunks)
+        .min(metrics.total_chunks);
 
     loading_progress.phase = metrics.phase;
     animation.displayed_pct = smooth_progress(
@@ -109,7 +114,8 @@ fn sync_world_gen_progress(
         }
         paragraph.text = format!(
             "Chunks Loaded {} / {}",
-            metrics.progress_chunks, metrics.total_chunks
+            progress_log_state.phase_peak_chunks,
+            metrics.total_chunks
         );
     }
 }
@@ -161,8 +167,8 @@ fn compute_loading_progress_metrics(
                 busy_mesh.extend(mesh_backlog.0.iter().map(|(coord, _)| *coord));
             }
 
-            const SCORE_PENDING_GEN: f32 = 0.08;
-            const SCORE_LOADED_GEN: f32 = 0.55;
+            const SCORE_PENDING_GEN: f32 = 0.25;
+            const SCORE_LOADED_GEN: f32 = 0.70;
             const SCORE_READY: f32 = 1.0;
 
             let mut equivalent_done = 0.0f32;
@@ -282,6 +288,7 @@ fn reset_world_gen_ui_animation(
     progress_log_state.last_logged_percent = None;
     progress_log_state.last_phase = LoadingPhase::BaseGen;
     progress_log_state.phase_peak_percent = 0.0;
+    progress_log_state.phase_peak_chunks = 0;
     progress_log_state.timer.reset();
 }
 

@@ -332,6 +332,7 @@ struct WorldGenProgressLogState {
     last_logged_percent: Option<u8>,
     last_phase: LoadingPhase,
     phase_peak_percent: f32,
+    phase_peak_chunks: usize,
     timer: Timer,
 }
 
@@ -343,6 +344,7 @@ impl Default for WorldGenProgressLogState {
             last_logged_percent: None,
             last_phase: LoadingPhase::BaseGen,
             phase_peak_percent: 0.0,
+            phase_peak_chunks: 0,
             timer: Timer::from_seconds(0.5, TimerMode::Repeating),
         }
     }
@@ -353,6 +355,7 @@ impl Default for WorldGenProgressLogState {
 struct RuntimePerfLogState {
     timer: Timer,
     last_local_tick: Option<Tick>,
+    last_sample_real_secs: Option<f64>,
 }
 
 impl Default for RuntimePerfLogState {
@@ -361,6 +364,7 @@ impl Default for RuntimePerfLogState {
         Self {
             timer: Timer::from_seconds(2.0, TimerMode::Repeating),
             last_local_tick: None,
+            last_sample_real_secs: None,
         }
     }
 }

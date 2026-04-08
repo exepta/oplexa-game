@@ -46,7 +46,7 @@ impl Material for WaterMaterial {
     }
     /// Runs the `alpha_mode` routine for alpha mode in the `core::shader::water_shader` module.
     fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Premultiplied
+        AlphaMode::Blend
     }
 
     /// Runs the `specialize` routine for specialize in the `core::shader::water_shader` module.
@@ -57,13 +57,12 @@ impl Material for WaterMaterial {
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
-            // Water is transparent; writing depth here causes incorrect layering
-            // against other transparent/cutout geometry (e.g. foliage).
             ds.depth_write_enabled = false;
         }
+        descriptor.primitive.cull_mode = None;
         if let Some(fragment) = descriptor.fragment.as_mut() {
             if let Some(Some(tgt)) = fragment.targets.get_mut(0) {
-                tgt.blend = Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+                tgt.blend = Some(BlendState::ALPHA_BLENDING);
             }
         }
         Ok(())
