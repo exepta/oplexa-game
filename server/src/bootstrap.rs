@@ -13,6 +13,7 @@ use log::info;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use rand::RngExt;
 
 /// Represents bootstrap result used by the `bootstrap` module.
 pub struct BootstrapResult {
@@ -156,6 +157,10 @@ fn prepare_server_world(settings: &DedicatedServerSettings) -> (PathBuf, i32, [f
 /// Reads world seed for the `bootstrap` module.
 fn read_world_seed(path: &Path) -> Option<i32> {
     let text = fs::read_to_string(path).ok()?;
+    if text.is_empty() {
+        let mut random = rand::rng();
+        return Some(random.random());
+    }
     text.trim().parse::<i32>().ok()
 }
 

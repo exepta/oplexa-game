@@ -13,7 +13,6 @@ use crate::core::events::block::block_player_events::{
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
 use crate::core::events::ui_events::{
     ChatSubmitRequest, ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest,
-    OpenToLanRequest, StopLanHostRequest,
 };
 use crate::core::inventory::items::{ItemRegistry, build_world_item_drop_visual};
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
@@ -30,7 +29,7 @@ use crate::core::world::save::RegionCache;
 use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
 use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use api::core::network::{
-    config::{DedicatedServerSettings, NetworkSettings},
+    config::NetworkSettings,
     discovery::{LanDiscoveryClient, LanServerInfo},
     protocols::{
         Auth, ClientBlockBreak, ClientBlockPlace, ClientChatMessage, ClientChunkInterest,
@@ -68,7 +67,6 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -189,6 +187,18 @@ struct MultiplayerDropIndex {
 struct RemoteChunkStreamState {
     last_requested_center: Option<IVec2>,
     last_requested_radius: Option<i32>,
+    progressive_radius: Option<i32>,
+    next_radius_step_at: f32,
+}
+
+impl RemoteChunkStreamState {
+    /// Runs the `reset` routine for reset in the `client` module.
+    fn reset(&mut self) {
+        self.last_requested_center = None;
+        self.last_requested_radius = None;
+        self.progressive_radius = None;
+        self.next_radius_step_at = 0.0;
+    }
 }
 
 /// Represents block id remap used by the `client` module.
@@ -288,6 +298,8 @@ const REMOTE_PLAYER_INTERP_BACK_TIME_SECS: f32 = 0.10;
 const REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS: f32 = 0.08;
 const REMOTE_PLAYER_MAX_SNAPSHOT_POINTS: usize = 24;
 const REMOTE_PLAYER_SMOOTHING_HZ: f32 = 18.0;
+const MULTIPLAYER_CHUNK_INTEREST_BOOTSTRAP_RADIUS: i32 = 3;
+const MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS: f32 = 0.12;
 const LOCATE_MAX_RADIUS_BLOCKS_CAP: i32 = 1000;
 const NETWORK_CONFIG_PATH: &str = "config/network.toml";
 const CTRL_C_GRACEFUL_EXIT_DELAY_SECS: f64 = 0.25;
@@ -351,9 +363,6 @@ impl Plugin for MultiplayerClientPlugin {
                     poll_lan_servers,
                     connect_to_server_requested,
                     disconnect_from_server_requested,
-                    open_to_lan_requested,
-                    finish_open_to_lan_connect,
-                    stop_lan_host_requested,
                     handle_chat_submit_requests,
                     send_local_block_break_events,
                     send_local_block_place_events,
@@ -370,7 +379,6 @@ impl Plugin for MultiplayerClientPlugin {
                     send_local_player_pose,
                 ),
             )
-            .add_systems(Update, stop_lan_host_after_disconnect)
             .add_systems(Update, smooth_remote_players);
     }
 }
@@ -395,8 +403,7 @@ fn handle_terminal_interrupt_exit(
         runtime.disconnected_remote_players.clear();
         runtime.remote_player_smoothing.clear();
         block_remap.reset();
-        chunk_stream.last_requested_center = None;
-        chunk_stream.last_requested_radius = None;
+        chunk_stream.reset();
         multiplayer_connection.clear_session();
         interrupt_state.started_at = Some(time.elapsed_secs_f64());
         return;
@@ -491,8 +498,7 @@ fn on_server_disconnected(
     runtime.player_names.clear();
     runtime.disconnected_remote_players.clear();
     block_remap.reset();
-    chunk_stream.last_requested_center = None;
-    chunk_stream.last_requested_radius = None;
+    chunk_stream.reset();
 
     // If we disconnect while the world is loading or in-game, reset to the menu.
     // Without this, check_base_gen_world_ready would see uses_local_save_data()=true
@@ -621,8 +627,7 @@ fn connect_to_server_requested(
     multiplayer_connection.spawn_translation = None;
     multiplayer_connection.known_player_names.clear();
     multiplayer_connection.last_error = None;
-    chunk_stream.last_requested_center = None;
-    chunk_stream.last_requested_radius = None;
+    chunk_stream.reset();
 }
 
 /// Runs the `disconnect_from_server_requested` routine for disconnect from server requested in the `client` module.
@@ -641,161 +646,7 @@ fn disconnect_from_server_requested(
     do_disconnect(&mut runtime, &mut commands);
     block_remap.reset();
     multiplayer_connection.clear_session();
-    chunk_stream.last_requested_center = None;
-    chunk_stream.last_requested_radius = None;
-}
-
-/// Runs the `open_to_lan_requested` routine for open to lan requested in the `client` module.
-fn open_to_lan_requested(
-    mut requests: MessageReader<OpenToLanRequest>,
-    q_active: Query<
-        (),
-        Or<(
-            With<Connected>,
-            With<lightyear::prelude::client::Connecting>,
-        )>,
-    >,
-    mut runtime: ResMut<MultiplayerClientRuntime>,
-    mut local_host: NonSendMut<LocalLanHost>,
-) {
-    if requests.read().next().is_none() {
-        return;
-    }
-
-    local_host.refresh();
-
-    if let Some(entity) = runtime.connection_entity {
-        if q_active.get(entity).is_ok() {
-            warn!("Open to LAN ignored because the client is already connected.");
-            return;
-        }
-    }
-
-    let settings = DedicatedServerSettings::load_or_create("server.settings.toml");
-    let session_url = settings.session_url();
-
-    if local_host.child.is_none() {
-        match spawn_lan_host_process() {
-            Ok(child) => {
-                info!("Started LAN host at {}", session_url);
-                local_host.child = Some(child);
-                local_host.stop_pending = false;
-            }
-            Err(error) => {
-                warn!("Failed to start LAN host: {}", error);
-                return;
-            }
-        }
-    }
-
-    local_host.session_url = Some(session_url.clone());
-    local_host.connect_timer = Some(Timer::from_seconds(0.75, TimerMode::Once));
-    runtime.auto_connect_lan = false;
-}
-
-/// Runs the `finish_open_to_lan_connect` routine for finish open to lan connect in the `client` module.
-fn finish_open_to_lan_connect(
-    time: Res<Time>,
-    mut runtime: ResMut<MultiplayerClientRuntime>,
-    mut local_host: NonSendMut<LocalLanHost>,
-    mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
-    mut chunk_stream: ResMut<RemoteChunkStreamState>,
-    mut block_remap: ResMut<BlockIdRemap>,
-    mut commands: Commands,
-) {
-    local_host.refresh();
-
-    let Some(timer) = local_host.connect_timer.as_mut() else {
-        return;
-    };
-    timer.tick(time.delta());
-    if !timer.is_finished() {
-        return;
-    }
-
-    let Some(session_url) = local_host.session_url.clone() else {
-        local_host.connect_timer = None;
-        return;
-    };
-
-    block_remap.reset();
-    do_connect(&mut runtime, session_url.clone(), &mut commands);
-    multiplayer_connection.connected = false;
-    multiplayer_connection.phase = MultiplayerConnectionPhase::Connecting;
-    multiplayer_connection.set_world_data_mode_remote();
-    multiplayer_connection.active_session_url = Some(session_url);
-    multiplayer_connection.server_name = None;
-    multiplayer_connection.world_name = None;
-    multiplayer_connection.world_seed = None;
-    multiplayer_connection.spawn_translation = None;
-    multiplayer_connection.known_player_names.clear();
-    multiplayer_connection.last_error = None;
-    chunk_stream.last_requested_center = None;
-    chunk_stream.last_requested_radius = None;
-    local_host.connect_timer = None;
-}
-
-/// Runs the `stop_lan_host_requested` routine for stop lan host requested in the `client` module.
-fn stop_lan_host_requested(
-    mut requests: MessageReader<StopLanHostRequest>,
-    runtime: Res<MultiplayerClientRuntime>,
-    q_active: Query<
-        (),
-        Or<(
-            With<Connected>,
-            With<lightyear::prelude::client::Connecting>,
-        )>,
-    >,
-    mut local_host: NonSendMut<LocalLanHost>,
-) {
-    if requests.read().next().is_none() {
-        return;
-    }
-
-    let connection_active = runtime
-        .connection_entity
-        .map(|entity| q_active.get(entity).is_ok())
-        .unwrap_or(false);
-
-    if connection_active {
-        local_host.stop_pending = true;
-        return;
-    }
-
-    local_host.stop();
-}
-
-/// Stops local LAN host after disconnect is fully complete.
-fn stop_lan_host_after_disconnect(
-    runtime: Res<MultiplayerClientRuntime>,
-    q_active: Query<
-        (),
-        Or<(
-            With<Connected>,
-            With<lightyear::prelude::client::Connecting>,
-        )>,
-    >,
-    mut local_host: NonSendMut<LocalLanHost>,
-) {
-    if !local_host.stop_pending {
-        return;
-    }
-
-    local_host.refresh();
-    if local_host.child.is_none() {
-        local_host.stop_pending = false;
-        return;
-    }
-
-    let connection_active = runtime
-        .connection_entity
-        .map(|entity| q_active.get(entity).is_ok())
-        .unwrap_or(false);
-    if connection_active {
-        return;
-    }
-
-    local_host.stop();
+    chunk_stream.reset();
 }
 
 /// Polls connection state and updates `MultiplayerConnectionState`.
@@ -873,8 +724,7 @@ fn receive_player_messages(
         runtime.player_names.clear();
         runtime.disconnected_remote_players.clear();
         block_remap.reset();
-        chunk_stream.last_requested_center = None;
-        chunk_stream.last_requested_radius = None;
+        chunk_stream.reset();
 
         if matches!(
             app_state.get(),
@@ -933,8 +783,7 @@ fn receive_player_messages(
             &mut next_state,
         );
         multiplayer_connection.spawn_translation = Some(spawn_translation);
-        chunk_stream.last_requested_center = None;
-        chunk_stream.last_requested_radius = None;
+        chunk_stream.reset();
     }
 
     for message in recv_joined.receive() {
@@ -1412,11 +1261,6 @@ fn receive_world_messages(
             }
         }
 
-        debug!(
-            "[MP] Received ServerChunkData for chunk {:?} (total: {})",
-            coord,
-            chunk_map.chunks.len() + 1
-        );
         chunk.mark_all_dirty();
         chunk_map.chunks.insert(coord, chunk);
         fluids.0.insert(coord, fluid_chunk);
@@ -1543,6 +1387,7 @@ fn receive_drop_messages(
 
 /// Runs the `send_chunk_interest_updates` routine for send chunk interest updates in the `client` module.
 fn send_chunk_interest_updates(
+    time: Res<Time>,
     game_config: Res<GlobalConfig>,
     q_player: Query<&Transform, With<Player>>,
     multiplayer_connection: Res<MultiplayerConnectionState>,
@@ -1552,18 +1397,18 @@ fn send_chunk_interest_updates(
     mut q_sender: Query<&mut MessageSender<ClientChunkInterest>>,
 ) {
     let Some(entity) = runtime.connection_entity else {
-        chunk_stream.last_requested_center = None;
-        chunk_stream.last_requested_radius = None;
+        chunk_stream.reset();
         return;
     };
 
     if !q_connected.get(entity).unwrap_or(false)
         || multiplayer_connection.active_session_url.is_none()
     {
+        chunk_stream.reset();
         return;
     }
 
-    let radius = game_config.graphics.chunk_range.max(1);
+    let target_radius = game_config.graphics.chunk_range.max(1);
     let center = if let Ok(transform) = q_player.single() {
         world_to_chunk_xz(
             (transform.translation.x / VOXEL_SIZE).floor() as i32,
@@ -1579,6 +1424,30 @@ fn send_chunk_interest_updates(
     } else {
         return;
     };
+    let now = time.elapsed_secs();
+
+    if chunk_stream.last_requested_center != Some(center) {
+        let bootstrap_radius = target_radius
+            .min(MULTIPLAYER_CHUNK_INTEREST_BOOTSTRAP_RADIUS)
+            .max(1);
+        chunk_stream.progressive_radius = Some(bootstrap_radius);
+        chunk_stream.next_radius_step_at = now + MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS;
+        chunk_stream.last_requested_center = None;
+        chunk_stream.last_requested_radius = None;
+    }
+
+    let mut radius = chunk_stream
+        .progressive_radius
+        .unwrap_or(target_radius)
+        .clamp(1, target_radius);
+
+    if radius < target_radius && now >= chunk_stream.next_radius_step_at {
+        radius += 1;
+        chunk_stream.progressive_radius = Some(radius);
+        chunk_stream.next_radius_step_at = now + MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS;
+    } else {
+        chunk_stream.progressive_radius = Some(radius);
+    }
 
     if chunk_stream.last_requested_center == Some(center)
         && chunk_stream.last_requested_radius == Some(radius)
@@ -1587,11 +1456,6 @@ fn send_chunk_interest_updates(
     }
 
     if let Ok(mut sender) = q_sender.get_mut(entity) {
-        debug!(
-            "[MP] Sending ClientChunkInterest: center={:?}, radius={}",
-            [center.x, center.y],
-            radius
-        );
         sender.send::<OrderedReliable>(ClientChunkInterest::new([center.x, center.y], radius));
         chunk_stream.last_requested_center = Some(center);
         chunk_stream.last_requested_radius = Some(radius);

@@ -818,15 +818,6 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                 ));
                 panel.spawn((
                     Button {
-                        text: "Open to LAN".to_string(),
-                        ..default()
-                    },
-                    CssID(PAUSE_CONNECT_ID.to_string()),
-                    UiButtonKind::Action,
-                    UiButtonTone::Normal,
-                ));
-                panel.spawn((
-                    Button {
                         text: "Settings".to_string(),
                         ..default()
                     },

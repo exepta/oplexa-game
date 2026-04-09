@@ -9,6 +9,7 @@
 /logs/
 /saves/
 /worlds/
+/dist/
 server.settings.toml
 
 # OS

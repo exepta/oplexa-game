@@ -238,23 +238,37 @@ fn sync_system_last_ui(
         .map(|adapter| adapter.name.as_str())
         .filter(|name| !name.is_empty())
         .unwrap_or("Unknown GPU");
-    let vram_text = vram_state
-        .bytes
-        .map(v_ram_utils::fmt_bytes)
-        .unwrap_or_else(|| "n/a".to_string());
-    let vram_backend = match (vram_state.source, vram_state.scope) {
-        (Some(source), Some(scope)) => format!("{source}/{scope}"),
-        (Some(source), None) => source.to_string(),
-        _ => "unavailable".to_string(),
+    let (vram_text, vram_backend) = if let Some(bytes) = vram_state.bytes {
+        let backend = match (vram_state.source, vram_state.scope) {
+            (Some(source), Some(scope)) => format!("{source}/{scope}"),
+            (Some(source), None) => source.to_string(),
+            _ => "unknown".to_string(),
+        };
+        (v_ram_utils::fmt_bytes(bytes), backend)
+    } else if cfg!(target_os = "macos") {
+        (
+            format!("~{}", v_ram_utils::fmt_bytes(stats.app_mem_bytes)),
+            "fallback/app-rss".to_string(),
+        )
+    } else {
+        ("n/a".to_string(), "unavailable".to_string())
     };
-    let gpu_load_text = match gpu_load_state.percent {
-        Some(percent) => format!("{percent:.1}%"),
-        None => "n/a".to_string(),
-    };
-    let gpu_load_backend = match (gpu_load_state.source, gpu_load_state.scope) {
-        (Some(source), Some(scope)) => format!("{source}/{scope}"),
-        (Some(source), None) => source.to_string(),
-        _ => "unavailable".to_string(),
+    let (gpu_load_text, gpu_load_backend) = if let Some(percent) = gpu_load_state.percent {
+        let backend = match (gpu_load_state.source, gpu_load_state.scope) {
+            (Some(source), Some(scope)) => format!("{source}/{scope}"),
+            (Some(source), None) => source.to_string(),
+            _ => "unknown".to_string(),
+        };
+        (format!("{percent:.1}%"), backend)
+    } else if cfg!(target_os = "macos") {
+        let fps = perf.fps.max(1.0);
+        let estimated_percent = (60.0 / fps * 100.0).clamp(0.0, 100.0);
+        (
+            format!("~{estimated_percent:.1}%"),
+            "fallback/fps-estimate".to_string(),
+        )
+    } else {
+        ("n/a".to_string(), "unavailable".to_string())
     };
     let (player_pos, player_yaw_pitch) = player
         .iter()

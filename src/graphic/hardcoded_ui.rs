@@ -10,7 +10,6 @@ use crate::core::entities::player::inventory::{
 use crate::core::entities::player::{FpsController, GameMode, GameModeState, Player};
 use crate::core::events::ui_events::{
     ConnectToServerRequest, CraftHandCraftedRequest, DisconnectFromServerRequest, DropItemRequest,
-    OpenToLanRequest, StopLanHostRequest,
 };
 use crate::core::inventory::creative_panel::{
     CREATIVE_PANEL_COLUMNS, CREATIVE_PANEL_PAGE_SIZE, CreativePanelState,
@@ -114,7 +113,6 @@ const MULTIPLAYER_CONNECT_TEXT_ID: &str = "multi-player-connect-text";
 const MULTIPLAYER_CONNECT_OK_ID: &str = "multi-player-connect-ok";
 
 const PAUSE_PLAY_ID: &str = "pause-menu-play";
-const PAUSE_CONNECT_ID: &str = "pause-menu-connect";
 const PAUSE_SETTINGS_ID: &str = "pause-menu-settings";
 const PAUSE_CLOSE_ID: &str = "pause-menu-close";
 
@@ -635,7 +633,6 @@ enum MultiplayerAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseMenuAction {
     BackToGame,
-    OpenToLan,
     Settings,
     ExitToMenu,
 }

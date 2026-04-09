@@ -90,8 +90,7 @@ fn sync_world_gen_progress(
             .is_none_or(|last| pct > last)
         {
             info!(
-                "[Worler-{}]: progress {}%",
-                progress_log_state.world_sequence.max(1),
+                "[GENERATE]: progress {}%",
                 pct
             );
             progress_log_state.last_logged_percent = Some(pct);
@@ -319,10 +318,10 @@ fn log_task_pool_worker_counts_on_world_start() {
     let chunk_workers = AsyncComputeTaskPool::get().thread_num();
     let io_workers = IoTaskPool::get().thread_num();
 
-    info!(
-        "[WORKERS] gameplay={} | chunks={} | io={} | cores={}",
-        gameplay_workers, chunk_workers, io_workers, total_cores
-    );
+    info!("[WORKERS] System {} (cores)", total_cores);
+    info!("[WORKERS] GamePlay = {}", gameplay_workers);
+    info!("[WORKERS] Chunk = {}", chunk_workers);
+    info!("[WORKERS] Io = {}", io_workers);
 }
 
 /// Runs the `smooth_progress` routine for smooth progress in the `graphic::components::world_flow` module.

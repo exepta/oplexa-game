@@ -445,6 +445,7 @@ fn rebuild_multiplayer_cards(
                         ..default()
                     },
                     BackgroundColor::DEFAULT,
+                    Visibility::Inherited,
                 ))
                 .with_children(|row| {
                     row.spawn((
@@ -482,6 +483,7 @@ fn rebuild_multiplayer_cards(
                         ..default()
                     },
                     BackgroundColor::DEFAULT,
+                    Visibility::Inherited,
                 ))
                 .with_children(|row| {
                     row.spawn((

@@ -120,3 +120,6 @@ version = "0.5.0"
 [dependencies]
 api = { path = "api" }
 lightyear = { version = "0.26.4", features = ["websocket", "netcode"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+api = { path = "api", features = ["vram_metal"] }

@@ -290,7 +290,6 @@ fn style_pause_menu_button_texts(
     let mut pause_ids = HashSet::new();
     for (id, css_id) in &buttons {
         if css_id.0 == PAUSE_PLAY_ID
-            || css_id.0 == PAUSE_CONNECT_ID
             || css_id.0 == PAUSE_SETTINGS_ID
             || css_id.0 == PAUSE_CLOSE_ID
         {

@@ -6669,6 +6669,7 @@ dependencies = [
  "futures-lite",
  "lightyear",
  "log",
+ "rand 0.10.0",
  "simple_logger",
 ]
 
