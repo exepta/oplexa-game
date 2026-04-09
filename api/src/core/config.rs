@@ -369,6 +369,10 @@ pub struct InputConfig {
     /// Shows system stats
     pub debug_overlay: String,
 
+    /// Toggle for block collider debug gizmos.
+    #[serde(default = "default_collider_debug_key")]
+    pub collider_debug: String,
+
     /// Toggle chunk grid.
     pub chunk_grid: String,
 
@@ -404,6 +408,7 @@ impl Default for InputConfig {
             hotbar_slot_6: default_hotbar_slot_6_key(),
 
             debug_overlay: String::from("F3"),
+            collider_debug: default_collider_debug_key(),
             chunk_grid: String::from("F9"),
             world_inspector: String::from("F1"),
         }
@@ -453,6 +458,11 @@ fn default_hotbar_slot_5_key() -> String {
 /// Runs the `default_hotbar_slot_6_key` routine for default hotbar slot 6 key in the `core::config` module.
 fn default_hotbar_slot_6_key() -> String {
     String::from("6")
+}
+
+/// Runs the `default_collider_debug_key` routine for default collider debug key in the `core::config` module.
+fn default_collider_debug_key() -> String {
+    String::from("F8")
 }
 
 /// Runs the `default_window_width` routine for default window width in the `core::config` module.

@@ -8,8 +8,8 @@ const CHAT_FADE_DURATION_SECS: f32 = 3.0;
 const CHAT_PANEL_WIDTH: f32 = 750.0;
 const CHAT_PANEL_MAX_HEIGHT: f32 = 220.0;
 const CHAT_PANEL_BOTTOM_OFFSET: f32 = 100.0;
-const CHAT_INPUT_HEIGHT: f32 = 16.0;
-const CHAT_FONT_SIZE: f32 = 12.0;
+const CHAT_INPUT_HEIGHT: f32 = 18.0;
+const CHAT_FONT_SIZE: f32 = 13.0;
 const CHAT_RENDERED_LINES_CLOSED: usize = 10;
 
 /// Represents chat ui runtime state used by the `graphic::components::chat` module.
@@ -193,9 +193,10 @@ fn render_chat_overlay(
 
     let alpha = chat_ui.alpha.clamp(0.0, 1.0);
     let frame_fill = egui::Color32::from_black_alpha((170.0 * alpha) as u8);
-    let text_color = egui::Color32::from_white_alpha((220.0 * alpha) as u8);
+    let text_color = egui::Color32::from_white_alpha((255.0 * alpha) as u8);
     let mention_color = egui::Color32::from_white_alpha((255.0 * alpha) as u8);
-    let hint_color = egui::Color32::from_white_alpha((180.0 * alpha) as u8);
+    let hint_color = egui::Color32::from_white_alpha((255.0 * alpha) as u8);
+    let location_color = egui::Color32::from_white_alpha((255.0 * alpha) as u8);
     let accent_color = egui::Color32::from_rgb(0x40, 0xc2, 0x99);
 
     egui::Area::new("oplexa-chat-overlay".into())
@@ -222,6 +223,7 @@ fn render_chat_overlay(
                         egui::TextStyle::Body,
                         egui::FontId::proportional(CHAT_FONT_SIZE),
                     );
+                    style.visuals.override_text_color = Some(text_color);
                     ui.set_style(style);
 
                     let lines = chat_log.lines();
@@ -243,7 +245,7 @@ fn render_chat_overlay(
                                         line.formatted().as_str(),
                                         text_color,
                                         mention_color,
-                                        accent_color,
+                                        location_color,
                                     );
                                 } else {
                                     let _ = render_chat_line_with_mentions(
@@ -251,7 +253,7 @@ fn render_chat_overlay(
                                         line.formatted().as_str(),
                                         text_color,
                                         mention_color,
-                                        accent_color,
+                                        location_color,
                                     );
                                 }
                             }

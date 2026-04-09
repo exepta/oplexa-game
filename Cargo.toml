@@ -40,6 +40,7 @@ features = [
     "bevy_state",
     "bevy_core_pipeline",
     "bevy_gizmos",
+    "bevy_gizmos_render",
     "bevy_log",
     "bevy_render",
     "bevy_window",

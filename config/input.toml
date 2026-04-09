@@ -27,5 +27,6 @@ hotbar_slot_6 = "6"
 
 # Debug
 debug_overlay = "F3"
+collider_debug = "F8"
 chunk_grid = "F9"
 world_inspector = "F1"

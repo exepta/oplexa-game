@@ -1487,14 +1487,16 @@ fn schedule_collider_build_tasks(
         game_config.graphics.chunk_collider_max_inflight.clamp(1, 4)
     };
     let pool = AsyncComputeTaskPool::get();
-    let center_c = if let Ok(t) = q_cam.single() {
-        let (c, _) = world_to_chunk_xz(
+    let center_blocks = if let Ok(t) = q_cam.single() {
+        IVec2::new(
             (t.translation().x / VOXEL_SIZE).floor() as i32,
             (t.translation().z / VOXEL_SIZE).floor() as i32,
-        );
-        c
+        )
     } else if let Some(lc) = load_center {
-        lc.world_xz
+        IVec2::new(
+            lc.world_xz.x * CX as i32 + (CX as i32 / 2),
+            lc.world_xz.y * CZ as i32 + (CZ as i32 / 2),
+        )
     } else {
         IVec2::ZERO
     };
@@ -1503,7 +1505,7 @@ fn schedule_collider_build_tasks(
         .graphics
         .chunk_collider_activation_radius_blocks
         .max(1);
-    let collider_activation_chunks = (collider_activation_blocks + CX as i32 - 1) / CX as i32 + 1;
+    let radius_sq = i64::from(collider_activation_blocks) * i64::from(collider_activation_blocks);
 
     while pending.0.len() < max_inflight {
         let Some(key) = backlog
@@ -1512,15 +1514,9 @@ fn schedule_collider_build_tasks(
             .take(1024)
             .copied()
             .filter(|(coord, _)| {
-                waiting
-                    || ((coord.x - center_c.x).abs() <= collider_activation_chunks
-                        && (coord.y - center_c.y).abs() <= collider_activation_chunks)
+                waiting || chunk_min_distance_sq_blocks(*coord, center_blocks) <= radius_sq
             })
-            .min_by_key(|(coord, sub)| {
-                let dx = coord.x - center_c.x;
-                let dz = coord.y - center_c.y;
-                (dx * dx + dz * dz, *sub)
-            })
+            .min_by_key(|(coord, sub)| (chunk_min_distance_sq_blocks(*coord, center_blocks), *sub))
         else {
             break;
         };
@@ -1529,10 +1525,10 @@ fn schedule_collider_build_tasks(
         };
 
         let task = pool.spawn(async move {
+            // Keep collisions robust on open/non-manifold terrain meshes.
             let flags = TriMeshFlags::FIX_INTERNAL_EDGES
                 | TriMeshFlags::MERGE_DUPLICATE_VERTICES
-                | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES
-                | TriMeshFlags::ORIENTED;
+                | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES;
             let (collider, local_offset) =
                 build_collider_with_fallback(todo.positions, todo.indices, flags);
             (
@@ -1695,6 +1691,31 @@ fn collect_finished_collider_builds(
     );
 }
 
+#[inline]
+fn chunk_min_distance_sq_blocks(coord: IVec2, point_blocks: IVec2) -> i64 {
+    let min_x = coord.x * CX as i32;
+    let max_x = min_x + CX as i32 - 1;
+    let min_z = coord.y * CZ as i32;
+    let max_z = min_z + CZ as i32 - 1;
+
+    let dx = if point_blocks.x < min_x {
+        i64::from(min_x - point_blocks.x)
+    } else if point_blocks.x > max_x {
+        i64::from(point_blocks.x - max_x)
+    } else {
+        0
+    };
+    let dz = if point_blocks.y < min_z {
+        i64::from(min_z - point_blocks.y)
+    } else if point_blocks.y > max_z {
+        i64::from(point_blocks.y - max_z)
+    } else {
+        0
+    };
+
+    dx * dx + dz * dz
+}
+
 /// Enables/disables chunk colliders based on nearby gameplay entities.
 fn update_chunk_collider_activation(
     mut commands: Commands,
@@ -1742,13 +1763,9 @@ fn update_chunk_collider_activation(
     }
 
     for (entity, proxy, disabled) in q_colliders.iter() {
-        let center_x = proxy.coord.x * CX as i32 + (CX as i32 / 2);
-        let center_z = proxy.coord.y * CZ as i32 + (CZ as i32 / 2);
-        let should_enable = centers_xz_blocks.iter().any(|p| {
-            let dx = i64::from(center_x - p.x);
-            let dz = i64::from(center_z - p.y);
-            dx * dx + dz * dz <= radius_sq
-        });
+        let should_enable = centers_xz_blocks
+            .iter()
+            .any(|p| chunk_min_distance_sq_blocks(proxy.coord, *p) <= radius_sq);
 
         if should_enable {
             if disabled.is_some() {
