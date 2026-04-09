@@ -453,6 +453,14 @@ struct DebugVramState {
     scope: Option<&'static str>,
 }
 
+/// Represents debug gpu load state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+struct DebugGpuLoadState {
+    percent: Option<f32>,
+    source: Option<&'static str>,
+    scope: Option<&'static str>,
+}
+
 /// Represents saved world entry used by the `graphic::hardcoded_ui` module.
 #[derive(Clone, Debug)]
 struct SavedWorldEntry {
@@ -662,6 +670,7 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<CreativePanelState>()
             .init_resource::<ChatUiState>()
             .init_resource::<DebugVramState>()
+            .init_resource::<DebugGpuLoadState>()
             .init_resource::<SinglePlayerUiState>()
             .init_resource::<MultiplayerUiState>()
             .init_resource::<DebugOverlayState>()

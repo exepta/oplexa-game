@@ -49,6 +49,7 @@ fn refresh_sys_stats(
     overlay: Res<DebugOverlayState>,
     mut stats: ResMut<SysStats>,
     mut vram_state: ResMut<DebugVramState>,
+    mut gpu_load_state: ResMut<DebugGpuLoadState>,
 ) {
     if !overlay.show {
         return;
@@ -80,6 +81,11 @@ fn refresh_sys_stats(
     vram_state.bytes = vram.map(|value| value.bytes);
     vram_state.source = vram.map(|value| value.source);
     vram_state.scope = vram.map(|value| value.scope);
+
+    let gpu_load = v_ram_utils::detect_gpu_load_best_effort();
+    gpu_load_state.percent = gpu_load.map(|value| value.percent);
+    gpu_load_state.source = gpu_load.map(|value| value.source);
+    gpu_load_state.scope = gpu_load.map(|value| value.scope);
 }
 
 /// Samples runtime FPS and update tick speed for the debug overlay.
@@ -203,8 +209,8 @@ fn sync_system_last_ui(
     world_inspector: Res<WorldInspectorState>,
     stats: Res<SysStats>,
     perf: Res<RuntimePerfStats>,
-    _chunk_debug: Res<ChunkDebugStats>,
     vram_state: Res<DebugVramState>,
+    gpu_load_state: Res<DebugGpuLoadState>,
     gpu_adapter: Option<Res<RenderAdapterInfo>>,
     world_gen_config: Res<WorldGenConfig>,
     biomes: Res<BiomeRegistry>,
@@ -237,6 +243,15 @@ fn sync_system_last_ui(
         .map(v_ram_utils::fmt_bytes)
         .unwrap_or_else(|| "n/a".to_string());
     let vram_backend = match (vram_state.source, vram_state.scope) {
+        (Some(source), Some(scope)) => format!("{source}/{scope}"),
+        (Some(source), None) => source.to_string(),
+        _ => "unavailable".to_string(),
+    };
+    let gpu_load_text = match gpu_load_state.percent {
+        Some(percent) => format!("{percent:.1}%"),
+        None => "n/a".to_string(),
+    };
+    let gpu_load_backend = match (gpu_load_state.source, gpu_load_state.scope) {
         (Some(source), Some(scope)) => format!("{source}/{scope}"),
         (Some(source), None) => source.to_string(),
         _ => "unavailable".to_string(),
@@ -304,7 +319,7 @@ fn sync_system_last_ui(
             ID_GLOBAL_CPU => format!("System CPU: {:.1}%", stats.cpu_percent),
             ID_APP_MEM => format!("RAM: {:.1} MiB", bytes_to_mib(stats.app_mem_bytes)),
             ID_GPU_NAME => format!("Graphic Name: {}", gpu_name),
-            ID_GPU_LOAD => format!("Graphic Last: n/a"),
+            ID_GPU_LOAD => format!("Graphic Last: {} ({})", gpu_load_text, gpu_load_backend),
             ID_VRAM => format!("VRAM: {} ({})", vram_text, vram_backend),
             ID_BIOME => format!("Biome Name: {}", biome_name),
             ID_BIOME_CLIMATE => format!("Biome Klima: {}", biome_climate),

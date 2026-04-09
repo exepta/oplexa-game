@@ -124,9 +124,9 @@ fn block_break_handler(
         // Props (e.g. tall grass) break instantly in survival.
         state.target = None;
     } else {
-        let duration =
-            (break_time_for(id_now, &registry) / mining_speed_multiplier(requirement, held_tool))
-                .max(0.05);
+        let duration = (break_time_for(id_now, &registry)
+            / mining_speed_multiplier(requirement, held_tool))
+        .max(0.05);
         let target_matches = state
             .target
             .is_some_and(|target| target.loc == hit.block_pos && target.id == id_now);

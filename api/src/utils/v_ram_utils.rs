@@ -32,6 +32,17 @@ pub struct VideoRamInfo {
     pub scope: &'static str,
 }
 
+/// Information about a GPU load reading.
+#[derive(Debug, Clone, Copy)]
+pub struct GpuLoadInfo {
+    /// Utilization in percent (0.0 - 100.0).
+    pub percent: f32,
+    /// Backend name, e.g. "amdgpu-sysfs".
+    pub source: &'static str,
+    /// Scope of the reading, e.g. "device-wide".
+    pub scope: &'static str,
+}
+
 /// Try platform/vendor-specific backends in a sensible order and return the first hit.
 ///
 /// Order of preference:
@@ -81,6 +92,33 @@ pub fn detect_v_ram_best_effort() -> Option<VideoRamInfo> {
         return Some(VideoRamInfo {
             bytes,
             source: "Metal",
+            scope: "device-wide",
+        });
+    }
+
+    None
+}
+
+/// Try platform/vendor-specific backends in a sensible order and return the first hit.
+///
+/// Current best-effort order:
+/// 1. Linux AMDGPU `gpu_busy_percent` (sysfs)
+/// 2. Linux AMDGPU `amdgpu_pm_info` (debugfs)
+pub fn detect_gpu_load_best_effort() -> Option<GpuLoadInfo> {
+    #[cfg(target_os = "linux")]
+    if let Some(percent) = query_gpu_load_percent_linux_amdgpu_sysfs() {
+        return Some(GpuLoadInfo {
+            percent,
+            source: "amdgpu-sysfs",
+            scope: "device-wide",
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Some(percent) = query_gpu_load_percent_linux_amdgpu_debugfs() {
+        return Some(GpuLoadInfo {
+            percent,
+            source: "amdgpu-debugfs",
             scope: "device-wide",
         });
     }
@@ -245,6 +283,108 @@ pub fn query_vram_bytes_linux_amdgpu_per_process(pid: u32) -> Option<u64> {
     None
 }
 
+/// Query AMD GPU load percentage from sysfs.
+///
+/// Uses `/sys/class/drm/card*/device/gpu_busy_percent` and picks the maximum value.
+#[cfg(target_os = "linux")]
+pub fn query_gpu_load_percent_linux_amdgpu_sysfs() -> Option<f32> {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn read_u64_any(path: &Path) -> Option<u64> {
+        let s = fs::read_to_string(path).ok()?;
+        let t = s.trim();
+        if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+            u64::from_str_radix(hex, 16).ok()
+        } else {
+            t.parse::<u64>().ok()
+        }
+    }
+
+    fn is_amdgpu(dev_dir: &Path) -> bool {
+        if let Ok(link) = fs::read_link(dev_dir.join("driver"))
+            && link.file_name().map(|n| n == "amdgpu").unwrap_or(false)
+        {
+            return true;
+        }
+        read_u64_any(&dev_dir.join("vendor")) == Some(0x1002)
+    }
+
+    let drm_path = Path::new("/sys/class/drm");
+    let entries = fs::read_dir(drm_path).ok()?;
+    let mut best: Option<f32> = None;
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("card") || !name[4..].chars().all(|ch| ch.is_ascii_digit()) {
+            continue;
+        }
+
+        let dev_dir: PathBuf = entry.path().join("device");
+        if !is_amdgpu(&dev_dir) {
+            continue;
+        }
+
+        let busy_file = dev_dir.join("gpu_busy_percent");
+        let Some(raw) = read_u64_any(&busy_file) else {
+            continue;
+        };
+        let percent = (raw as f32).clamp(0.0, 100.0);
+        best = Some(best.map_or(percent, |curr| curr.max(percent)));
+    }
+
+    best
+}
+
+/// Query AMD GPU load percentage from debugfs.
+///
+/// Parses `/sys/kernel/debug/dri/*/amdgpu_pm_info` lines like `GPU load: 23 %`.
+#[cfg(target_os = "linux")]
+pub fn query_gpu_load_percent_linux_amdgpu_debugfs() -> Option<f32> {
+    use std::fs;
+    use std::path::Path;
+
+    let root = Path::new("/sys/kernel/debug/dri");
+    let entries = fs::read_dir(root).ok()?;
+    let mut best: Option<f32> = None;
+
+    for entry in entries.flatten() {
+        let pm_info = entry.path().join("amdgpu_pm_info");
+        let Ok(content) = fs::read_to_string(pm_info) else {
+            continue;
+        };
+
+        for line in content.lines() {
+            let lower = line.to_ascii_lowercase();
+            if !lower.contains("gpu load") {
+                continue;
+            }
+            if let Some(percent) = parse_percent_from_line(line) {
+                best = Some(best.map_or(percent, |curr| curr.max(percent)));
+            }
+        }
+    }
+
+    best
+}
+
+#[cfg(target_os = "linux")]
+fn parse_percent_from_line(line: &str) -> Option<f32> {
+    let mut value = String::new();
+    for ch in line.chars() {
+        if ch.is_ascii_digit() {
+            value.push(ch);
+        } else if !value.is_empty() {
+            break;
+        }
+    }
+    if value.is_empty() {
+        return None;
+    }
+    value.parse::<f32>().ok().map(|v| v.clamp(0.0, 100.0))
+}
+
 /// Parses amdgpu vm info for pid for the `utils::v_ram_utils` module.
 #[cfg(target_os = "linux")]
 fn parse_amdgpu_vm_info_for_pid(path: &std::path::Path, pid: u32) -> Option<u64> {
@@ -344,6 +484,16 @@ fn parse_embedded_number_with_unit(t: &str) -> Option<u64> {
 /// Runs the `query_vram_bytes_linux_drm_amdgpu` routine for query vram bytes linux drm amdgpu in the `utils::v_ram_utils` module.
 #[cfg(not(target_os = "linux"))]
 pub fn query_vram_bytes_linux_drm_amdgpu() -> Option<u64> {
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn query_gpu_load_percent_linux_amdgpu_sysfs() -> Option<f32> {
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn query_gpu_load_percent_linux_amdgpu_debugfs() -> Option<f32> {
     None
 }
 
