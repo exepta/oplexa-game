@@ -18,9 +18,9 @@ use lightyear::prelude::*;
 
 // ── Channel marker types ──────────────────────────────────────────────────────
 
-/// Reliable and ordered: block interactions, drops, chunk interest
+/// Reliable and ordered: block interactions, drops
 pub struct OrderedReliable;
-/// Reliable but unordered: player join/leave, welcome, chunk data
+/// Reliable but unordered: player join/leave, welcome, chunk data, chunk interest
 pub struct UnorderedReliable;
 /// Unreliable and unordered: position snapshots, keep-alives
 pub struct UnorderedUnreliable;

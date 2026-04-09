@@ -24,6 +24,13 @@ struct BlockColliderDebugSample {
     faces_mask: u8,
 }
 
+const FACE_POS_X: u8 = 1 << 0;
+const FACE_NEG_X: u8 = 1 << 1;
+const FACE_POS_Y: u8 = 1 << 2;
+const FACE_NEG_Y: u8 = 1 << 3;
+const FACE_POS_Z: u8 = 1 << 4;
+const FACE_NEG_Z: u8 = 1 << 5;
+
 #[derive(Resource, Default)]
 struct BlockColliderDebugCache {
     last_anchor: Option<IVec3>,
@@ -151,9 +158,11 @@ fn rebuild_block_collider_debug_cache(
         return;
     }
 
-    const DEBUG_RADIUS_BLOCKS: i32 = 50;
+    const DEBUG_RADIUS_BLOCKS: i32 = 25;
     const DEBUG_RADIUS_SQ: i32 = DEBUG_RADIUS_BLOCKS * DEBUG_RADIUS_BLOCKS;
     const MAX_DEBUG_BLOCKS: usize = 6000;
+    const MAX_VISIBILITY_CANDIDATES: usize = 12000;
+    let cam_world = cam.translation();
 
     let mut picked: Vec<(i32, BlockColliderDebugSample)> = Vec::new();
 
@@ -187,24 +196,28 @@ fn rebuild_block_collider_debug_cache(
 
     picked.sort_unstable_by_key(|(dist_sq, _)| *dist_sq);
     cache.samples.clear();
-    cache.samples.extend(
-        picked
-            .into_iter()
-            .take(MAX_DEBUG_BLOCKS)
-            .map(|(_, sample)| sample),
-    );
+    for (_, mut sample) in picked.into_iter().take(MAX_VISIBILITY_CANDIDATES) {
+        let visible_faces = visible_faces_mask_from_camera(
+            sample.pos,
+            sample.faces_mask,
+            cam_world,
+            &chunk_map,
+            &block_registry,
+        );
+        if visible_faces == 0 {
+            continue;
+        }
+        sample.faces_mask = visible_faces;
+        cache.samples.push(sample);
+        if cache.samples.len() >= MAX_DEBUG_BLOCKS {
+            break;
+        }
+    }
     cache.last_anchor = Some(anchor);
 }
 
 #[inline]
 fn exposed_faces_mask(pos: IVec3, chunk_map: &ChunkMap, block_registry: &BlockRegistry) -> u8 {
-    const FACE_POS_X: u8 = 1 << 0;
-    const FACE_NEG_X: u8 = 1 << 1;
-    const FACE_POS_Y: u8 = 1 << 2;
-    const FACE_NEG_Y: u8 = 1 << 3;
-    const FACE_POS_Z: u8 = 1 << 4;
-    const FACE_NEG_Z: u8 = 1 << 5;
-
     let mut mask = 0u8;
     let is_open = |p: IVec3| !block_registry.is_solid_for_collision(get_block_world(chunk_map, p));
 
@@ -230,6 +243,92 @@ fn exposed_faces_mask(pos: IVec3, chunk_map: &ChunkMap, block_registry: &BlockRe
     mask
 }
 
+fn visible_faces_mask_from_camera(
+    pos: IVec3,
+    faces_mask: u8,
+    camera_world: Vec3,
+    chunk_map: &ChunkMap,
+    block_registry: &BlockRegistry,
+) -> u8 {
+    let mut visible = 0u8;
+    let face_bits = [
+        FACE_POS_X, FACE_NEG_X, FACE_POS_Y, FACE_NEG_Y, FACE_POS_Z, FACE_NEG_Z,
+    ];
+
+    for face in face_bits {
+        if (faces_mask & face) == 0 {
+            continue;
+        }
+        let (face_center, face_normal) = face_center_and_normal(pos, face);
+        // Cull backfaces first, then test whether terrain blocks line-of-sight.
+        if (camera_world - face_center).dot(face_normal) <= 0.0 {
+            continue;
+        }
+        if has_voxel_line_of_sight(camera_world, face_center, pos, chunk_map, block_registry) {
+            visible |= face;
+        }
+    }
+
+    visible
+}
+
+#[inline]
+fn face_center_and_normal(pos: IVec3, face: u8) -> (Vec3, Vec3) {
+    let s = VOXEL_SIZE;
+    let x0 = pos.x as f32 * s;
+    let y0 = pos.y as f32 * s;
+    let z0 = pos.z as f32 * s;
+    let x1 = x0 + s;
+    let y1 = y0 + s;
+    let z1 = z0 + s;
+    let cx = (x0 + x1) * 0.5;
+    let cy = (y0 + y1) * 0.5;
+    let cz = (z0 + z1) * 0.5;
+
+    match face {
+        FACE_POS_X => (Vec3::new(x1, cy, cz), Vec3::X),
+        FACE_NEG_X => (Vec3::new(x0, cy, cz), -Vec3::X),
+        FACE_POS_Y => (Vec3::new(cx, y1, cz), Vec3::Y),
+        FACE_NEG_Y => (Vec3::new(cx, y0, cz), -Vec3::Y),
+        FACE_POS_Z => (Vec3::new(cx, cy, z1), Vec3::Z),
+        FACE_NEG_Z => (Vec3::new(cx, cy, z0), -Vec3::Z),
+        _ => (Vec3::new(cx, cy, cz), Vec3::ZERO),
+    }
+}
+
+fn has_voxel_line_of_sight(
+    from_world: Vec3,
+    to_world: Vec3,
+    target_block: IVec3,
+    chunk_map: &ChunkMap,
+    block_registry: &BlockRegistry,
+) -> bool {
+    let delta = to_world - from_world;
+    let distance = delta.length();
+    if distance <= 0.001 {
+        return true;
+    }
+    let dir = delta / distance;
+    let step = (VOXEL_SIZE * 0.45).max(0.01);
+    let mut t = step;
+    while t < (distance - step) {
+        let p = from_world + dir * t;
+        let block = IVec3::new(
+            (p.x / VOXEL_SIZE).floor() as i32,
+            (p.y / VOXEL_SIZE).floor() as i32,
+            (p.z / VOXEL_SIZE).floor() as i32,
+        );
+        if block != target_block {
+            let id = get_block_world(chunk_map, block);
+            if block_registry.is_solid_for_collision(id) {
+                return false;
+            }
+        }
+        t += step;
+    }
+    true
+}
+
 /// Runs the `draw_block_collider_debug_lines` routine for draw block collider debug lines in the `client` module.
 fn draw_block_collider_debug_lines(
     gizmo_state: Res<BlockColliderGizmoState>,
@@ -239,13 +338,6 @@ fn draw_block_collider_debug_lines(
     if !gizmo_state.show {
         return;
     }
-
-    const FACE_POS_X: u8 = 1 << 0;
-    const FACE_NEG_X: u8 = 1 << 1;
-    const FACE_POS_Y: u8 = 1 << 2;
-    const FACE_NEG_Y: u8 = 1 << 3;
-    const FACE_POS_Z: u8 = 1 << 4;
-    const FACE_NEG_Z: u8 = 1 << 5;
 
     let color = Color::srgb(1.0, 0.0, 0.0);
     let s = VOXEL_SIZE;

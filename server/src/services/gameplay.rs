@@ -119,7 +119,9 @@ pub fn flush_chunk_streaming(
     mut multi_sender: ServerMultiMessageSender,
     server: Single<&Server>,
 ) {
+    state.pump_stream_chunk_tasks(&config);
     state.collect_ready_stream_chunks();
+    state.pump_stream_chunk_tasks(&config);
 
     // Expire chunks that have been in-flight long enough to be considered delivered.
     let now = std::time::Instant::now();

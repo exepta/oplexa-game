@@ -2176,46 +2176,37 @@ fn build_surface_placeholder_collider(
     }
 
     let s = VOXEL_SIZE;
-    let half = (s * 0.5).max(0.05);
+    let half_xz = (s * 0.5).max(0.05);
     let mut parts: Vec<(Vec3, Quat, Collider)> = Vec::with_capacity(CX * CZ);
 
     for z in 0..CZ {
         for x in 0..CX {
-            let mut fallback_ly: Option<usize> = None;
-            let mut top_ly: Option<usize> = None;
-
-            for ly in (y0..y1).rev() {
-                let bid = chunk.get(x, ly, z);
-                if !reg.is_solid_for_collision(bid) {
-                    continue;
-                }
-
-                if fallback_ly.is_none() {
-                    fallback_ly = Some(ly);
-                }
-
-                let exposed_top = if ly + 1 < CY {
-                    let above = chunk.get(x, ly + 1, z);
-                    !reg.is_solid_for_collision(above)
-                } else {
-                    true
-                };
-                if exposed_top {
-                    top_ly = Some(ly);
-                    break;
+            // Build contiguous vertical runs to keep placeholder collision robust in caves,
+            // not only on top surfaces.
+            let mut run_start: Option<usize> = None;
+            for ly in y0..=y1 {
+                let solid = ly < y1 && reg.is_solid_for_collision(chunk.get(x, ly, z));
+                match (run_start, solid) {
+                    (None, true) => run_start = Some(ly),
+                    (Some(start), false) => {
+                        let end = ly - 1;
+                        let blocks = (end - start + 1) as f32;
+                        let half_y = (blocks * s * 0.5).max(0.05);
+                        let center = Vec3::new(
+                            (x as f32 + 0.5) * s,
+                            (start as f32 * s) + half_y,
+                            (z as f32 + 0.5) * s,
+                        );
+                        parts.push((
+                            center,
+                            Quat::IDENTITY,
+                            Collider::cuboid(half_xz, half_y, half_xz),
+                        ));
+                        run_start = None;
+                    }
+                    _ => {}
                 }
             }
-
-            let Some(ly) = top_ly.or(fallback_ly) else {
-                continue;
-            };
-
-            let center = Vec3::new(
-                (x as f32 + 0.5) * s,
-                (ly as f32 + 0.5) * s,
-                (z as f32 + 0.5) * s,
-            );
-            parts.push((center, Quat::IDENTITY, Collider::cuboid(half, half, half)));
         }
     }
 

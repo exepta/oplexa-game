@@ -201,6 +201,19 @@ impl RemoteChunkStreamState {
     }
 }
 
+/// Represents remote chunk decode queue used by the `client` module.
+#[derive(Resource, Default)]
+struct RemoteChunkDecodeQueue {
+    queued: VecDeque<ServerChunkData>,
+}
+
+impl RemoteChunkDecodeQueue {
+    /// Runs the `reset` routine for reset in the `client` module.
+    fn reset(&mut self) {
+        self.queued.clear();
+    }
+}
+
 /// Represents block id remap used by the `client` module.
 #[derive(Resource, Default)]
 struct BlockIdRemap {
@@ -300,6 +313,7 @@ const REMOTE_PLAYER_MAX_SNAPSHOT_POINTS: usize = 24;
 const REMOTE_PLAYER_SMOOTHING_HZ: f32 = 18.0;
 const MULTIPLAYER_CHUNK_INTEREST_BOOTSTRAP_RADIUS: i32 = 3;
 const MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS: f32 = 0.12;
+const MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE: usize = 2;
 const LOCATE_MAX_RADIUS_BLOCKS_CAP: i32 = 1000;
 const NETWORK_CONFIG_PATH: &str = "config/network.toml";
 const CTRL_C_GRACEFUL_EXIT_DELAY_SECS: f64 = 0.25;
@@ -312,6 +326,31 @@ fn locate_radius_chunks_from_blocks(radius_blocks: i32) -> i32 {
     let clamped_blocks = radius_blocks.clamp(1, LOCATE_MAX_RADIUS_BLOCKS_CAP);
     let chunk_span = (CX as i32).max(CZ as i32);
     (clamped_blocks + (chunk_span - 1)) / chunk_span
+}
+
+/// Dynamic decode budget for streamed multiplayer chunks.
+fn multiplayer_chunk_decode_budget(backlog_len: usize, frame_secs: f32) -> usize {
+    let mut budget = MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE;
+    if backlog_len >= 64 {
+        budget = 4;
+    }
+    if backlog_len >= 160 {
+        budget = 8;
+    }
+    if backlog_len >= 320 {
+        budget = 12;
+    }
+    if backlog_len >= 640 {
+        budget = 20;
+    }
+
+    if frame_secs > 0.033 {
+        budget = budget.min(4);
+    } else if frame_secs > 0.024 {
+        budget = budget.min(8);
+    }
+
+    budget.max(MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE)
 }
 
 /// Runs the main routine for the `client` module.
@@ -351,6 +390,7 @@ impl Plugin for MultiplayerClientPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MultiplayerDropIndex>()
             .init_resource::<RemoteChunkStreamState>()
+            .init_resource::<RemoteChunkDecodeQueue>()
             .init_resource::<BlockIdRemap>()
             .init_resource::<TerminalInterruptExitState>()
             .add_systems(Startup, setup_remote_player_visuals)
@@ -391,6 +431,7 @@ fn handle_terminal_interrupt_exit(
     mut block_remap: ResMut<BlockIdRemap>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     mut commands: Commands,
     mut app_exit: MessageWriter<AppExit>,
 ) {
@@ -404,6 +445,7 @@ fn handle_terminal_interrupt_exit(
         runtime.remote_player_smoothing.clear();
         block_remap.reset();
         chunk_stream.reset();
+        chunk_decode_queue.reset();
         multiplayer_connection.clear_session();
         interrupt_state.started_at = Some(time.elapsed_secs_f64());
         return;
@@ -469,6 +511,7 @@ fn on_server_disconnected(
     mut block_remap: ResMut<BlockIdRemap>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     mut chat_log: ResMut<ChatLog>,
     mut drops: ResMut<MultiplayerDropIndex>,
     mut next_state: ResMut<NextState<AppState>>,
@@ -499,6 +542,7 @@ fn on_server_disconnected(
     runtime.disconnected_remote_players.clear();
     block_remap.reset();
     chunk_stream.reset();
+    chunk_decode_queue.reset();
 
     // If we disconnect while the world is loading or in-game, reset to the menu.
     // Without this, check_base_gen_world_ready would see uses_local_save_data()=true
@@ -573,6 +617,7 @@ fn connect_to_server_requested(
     mut connect_requests: MessageReader<ConnectToServerRequest>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     mut block_remap: ResMut<BlockIdRemap>,
     q_active: Query<
         (),
@@ -628,6 +673,7 @@ fn connect_to_server_requested(
     multiplayer_connection.known_player_names.clear();
     multiplayer_connection.last_error = None;
     chunk_stream.reset();
+    chunk_decode_queue.reset();
 }
 
 /// Runs the `disconnect_from_server_requested` routine for disconnect from server requested in the `client` module.
@@ -635,6 +681,7 @@ fn disconnect_from_server_requested(
     mut disconnect_requests: MessageReader<DisconnectFromServerRequest>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     mut block_remap: ResMut<BlockIdRemap>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut commands: Commands,
@@ -647,6 +694,7 @@ fn disconnect_from_server_requested(
     block_remap.reset();
     multiplayer_connection.clear_session();
     chunk_stream.reset();
+    chunk_decode_queue.reset();
 }
 
 /// Polls connection state and updates `MultiplayerConnectionState`.
@@ -685,6 +733,7 @@ fn receive_player_messages(
     mut next_state: ResMut<NextState<AppState>>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     mut block_remap: ResMut<BlockIdRemap>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut q: Query<(
@@ -725,6 +774,7 @@ fn receive_player_messages(
         runtime.disconnected_remote_players.clear();
         block_remap.reset();
         chunk_stream.reset();
+        chunk_decode_queue.reset();
 
         if matches!(
             app_state.get(),
@@ -784,6 +834,7 @@ fn receive_player_messages(
         );
         multiplayer_connection.spawn_translation = Some(spawn_translation);
         chunk_stream.reset();
+        chunk_decode_queue.reset();
     }
 
     for message in recv_joined.receive() {
@@ -1206,11 +1257,13 @@ fn sync_known_player_names(
 /// Handles ServerChunkData, ServerBlockBreak, ServerBlockPlace messages.
 #[allow(clippy::too_many_arguments)]
 fn receive_world_messages(
+    time: Res<Time>,
     registry: Option<Res<BlockRegistry>>,
     block_remap: Res<BlockIdRemap>,
     mut chunk_map: ResMut<ChunkMap>,
     mut fluids: ResMut<FluidMap>,
     mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     runtime: Res<MultiplayerClientRuntime>,
     mut q: Query<(
         &mut MessageReceiver<ServerChunkData>,
@@ -1219,70 +1272,92 @@ fn receive_world_messages(
     )>,
 ) {
     let Some(entity) = runtime.connection_entity else {
+        chunk_decode_queue.reset();
         return;
     };
     if !block_remap.is_ready() {
+        chunk_decode_queue.reset();
         return;
     }
 
     let Ok((mut recv_chunk, mut recv_block_break, mut recv_block_place)) = q.get_mut(entity) else {
+        chunk_decode_queue.reset();
         return;
     };
 
     for message in recv_chunk.receive() {
-        let Some(registry) = registry.as_ref() else {
-            continue;
-        };
+        chunk_decode_queue.queued.push_back(message);
+    }
 
+    let decode_budget =
+        multiplayer_chunk_decode_budget(chunk_decode_queue.queued.len(), time.delta_secs());
+
+    let mut dirty_coords = HashSet::new();
+    if let Some(registry) = registry.as_ref() {
         let water_local_id = registry
             .id_opt("water_block")
             .or_else(|| registry.id_opt("water"))
             .unwrap_or(0);
-        let coord = IVec2::new(message.coord[0], message.coord[1]);
-        let Ok(mut chunk) = crate::generator::chunk::chunk_utils::decode_chunk(&message.blocks)
-        else {
-            warn!("Failed to decode streamed chunk {},{}", coord.x, coord.y);
-            continue;
-        };
+        for _ in 0..decode_budget {
+            let Some(message) = chunk_decode_queue.queued.pop_front() else {
+                break;
+            };
 
-        let mut fluid_chunk = FluidChunk::new(SEA_LEVEL);
-        for y in 0..CY {
-            for z in 0..CZ {
-                for x in 0..CX {
-                    let id = chunk.get(x, y, z);
-                    let local_id = remap_server_block_id(&block_remap, registry, id);
-                    if water_local_id != 0 && local_id == water_local_id {
-                        chunk.set(x, y, z, 0);
-                        fluid_chunk.set(x, y, z, true);
-                    } else {
-                        chunk.set(x, y, z, local_id);
+            // Keep only the newest queued payload per chunk coord to avoid stale
+            // rebuild work when the same chunk was streamed multiple times.
+            if chunk_decode_queue
+                .queued
+                .iter()
+                .any(|queued| queued.coord == message.coord)
+            {
+                continue;
+            }
+
+            let coord = IVec2::new(message.coord[0], message.coord[1]);
+            let Ok(mut chunk) = crate::generator::chunk::chunk_utils::decode_chunk(&message.blocks)
+            else {
+                warn!("Failed to decode streamed chunk {},{}", coord.x, coord.y);
+                continue;
+            };
+
+            let mut fluid_chunk = FluidChunk::new(SEA_LEVEL);
+            for y in 0..CY {
+                for z in 0..CZ {
+                    for x in 0..CX {
+                        let id = chunk.get(x, y, z);
+                        let local_id = remap_server_block_id(&block_remap, registry, id);
+                        if water_local_id != 0 && local_id == water_local_id {
+                            chunk.set(x, y, z, 0);
+                            fluid_chunk.set(x, y, z, true);
+                        } else {
+                            chunk.set(x, y, z, local_id);
+                        }
                     }
                 }
             }
-        }
 
-        chunk.mark_all_dirty();
-        chunk_map.chunks.insert(coord, chunk);
-        fluids.0.insert(coord, fluid_chunk);
+            chunk.mark_all_dirty();
+            chunk_map.chunks.insert(coord, chunk);
+            fluids.0.insert(coord, fluid_chunk);
 
-        for sub in 0..SEC_COUNT {
-            ev_dirty.write(SubChunkNeedRemeshEvent { coord, sub });
-        }
+            dirty_coords.insert(coord);
 
-        for neighbor in [
-            IVec2::new(coord.x + 1, coord.y),
-            IVec2::new(coord.x - 1, coord.y),
-            IVec2::new(coord.x, coord.y + 1),
-            IVec2::new(coord.x, coord.y - 1),
-        ] {
-            if chunk_map.chunks.contains_key(&neighbor) {
-                for sub in 0..SEC_COUNT {
-                    ev_dirty.write(SubChunkNeedRemeshEvent {
-                        coord: neighbor,
-                        sub,
-                    });
+            for neighbor in [
+                IVec2::new(coord.x + 1, coord.y),
+                IVec2::new(coord.x - 1, coord.y),
+                IVec2::new(coord.x, coord.y + 1),
+                IVec2::new(coord.x, coord.y - 1),
+            ] {
+                if chunk_map.chunks.contains_key(&neighbor) {
+                    dirty_coords.insert(neighbor);
                 }
             }
+        }
+    }
+
+    for coord in dirty_coords {
+        for sub in 0..SEC_COUNT {
+            ev_dirty.write(SubChunkNeedRemeshEvent { coord, sub });
         }
     }
 
@@ -1393,11 +1468,13 @@ fn send_chunk_interest_updates(
     multiplayer_connection: Res<MultiplayerConnectionState>,
     q_connected: Query<Has<Connected>>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     runtime: Res<MultiplayerClientRuntime>,
     mut q_sender: Query<&mut MessageSender<ClientChunkInterest>>,
 ) {
     let Some(entity) = runtime.connection_entity else {
         chunk_stream.reset();
+        chunk_decode_queue.reset();
         return;
     };
 
@@ -1405,6 +1482,7 @@ fn send_chunk_interest_updates(
         || multiplayer_connection.active_session_url.is_none()
     {
         chunk_stream.reset();
+        chunk_decode_queue.reset();
         return;
     }
 
@@ -1426,14 +1504,24 @@ fn send_chunk_interest_updates(
     };
     let now = time.elapsed_secs();
 
-    if chunk_stream.last_requested_center != Some(center) {
+    let should_reset_progressive = match chunk_stream.last_requested_center {
+        None => true,
+        Some(last_center) => {
+            let dx = (center.x - last_center.x).abs();
+            let dz = (center.y - last_center.y).abs();
+            dx.max(dz) > 2
+        }
+    };
+
+    if should_reset_progressive {
         let bootstrap_radius = target_radius
             .min(MULTIPLAYER_CHUNK_INTEREST_BOOTSTRAP_RADIUS)
             .max(1);
         chunk_stream.progressive_radius = Some(bootstrap_radius);
         chunk_stream.next_radius_step_at = now + MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS;
-        chunk_stream.last_requested_center = None;
-        chunk_stream.last_requested_radius = None;
+    } else if chunk_stream.progressive_radius.is_none() {
+        let carry_radius = chunk_stream.last_requested_radius.unwrap_or(target_radius);
+        chunk_stream.progressive_radius = Some(carry_radius.clamp(1, target_radius));
     }
 
     let mut radius = chunk_stream
@@ -1456,7 +1544,7 @@ fn send_chunk_interest_updates(
     }
 
     if let Ok(mut sender) = q_sender.get_mut(entity) {
-        sender.send::<OrderedReliable>(ClientChunkInterest::new([center.x, center.y], radius));
+        sender.send::<UnorderedReliable>(ClientChunkInterest::new([center.x, center.y], radius));
         chunk_stream.last_requested_center = Some(center);
         chunk_stream.last_requested_radius = Some(radius);
     }
