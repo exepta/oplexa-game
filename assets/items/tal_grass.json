@@ -1,0 +1,19 @@
+{
+  "localized_name": "oplexa:tal_grass",
+  "name": "Tal Grass",
+  "max_stack_size": -1,
+  "category": "nature",
+  "block_item": true,
+  "placeable": true,
+  "block": "tal_grass_block",
+  "tags": ["block", "prop", "nature"],
+  "rarity": "common",
+  "texture": "textures/blocks/tal_grass/tal_grass.png",
+  "render": {
+    "type": "flat",
+    "texture": "textures/blocks/tal_grass/tal_grass.png"
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

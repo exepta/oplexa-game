@@ -48,12 +48,28 @@ pub struct DebugOverlayState {
 /// Controls rendering of a world-aligned debug grid.
 ///
 /// `plane_y` specifies the Y elevation (in world units) of the grid plane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DebugGridMode {
+    #[default]
+    Off,
+    Chunks,
+    AllSubchunks,
+}
+
 #[derive(Resource, Default)]
 pub struct DebugGridState {
     /// Whether the grid should be drawn.
     pub show: bool,
+    /// Current debug grid render mode.
+    pub mode: DebugGridMode,
     /// World-space Y height of the grid plane.
     pub plane_y: f32,
+}
+
+/// Runtime toggle state for block-collider gizmo rendering.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct BlockColliderGizmoState {
+    pub show: bool,
 }
 
 /// Periodically sampled system/application performance metrics.
@@ -80,6 +96,38 @@ pub struct SysStats {
     pub app_mem_bytes: u64,
     /// Repeating timer determining how often metrics are refreshed.
     pub timer: Timer,
+}
+
+/// Runtime frame/tick performance values for the debug overlay.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct RuntimePerfStats {
+    /// Smoothed frames per second.
+    pub fps: f32,
+    /// Smoothed update ticks per second.
+    pub tick_speed: f32,
+}
+
+/// Runtime chunk streaming diagnostics for the debug overlay.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct ChunkDebugStats {
+    pub loaded_chunks: usize,
+    pub queue_chunks: usize,
+    pub dirty_chunks: usize,
+    pub dirty_subchunks: usize,
+    pub base_gen_inflight: usize,
+    pub base_mesh_inflight: usize,
+    pub base_mesh_queue: usize,
+    pub collider_inflight: usize,
+    pub collider_queue: usize,
+    pub water_gen_inflight: usize,
+    pub water_mesh_inflight: usize,
+    pub water_mesh_queue: usize,
+    pub stage_gen_collect_ms: f32,
+    pub stage_mesh_apply_ms: f32,
+    pub stage_collider_schedule_ms: f32,
+    pub stage_collider_apply_ms: f32,
+    pub chunk_ready_latency_ms: f32,
+    pub chunk_ready_latency_p95_ms: f32,
 }
 
 impl Default for SysStats {

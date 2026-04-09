@@ -1,6 +1,6 @@
 {
   "localized_name": "oplexa:clay_block",
-  "name": "Clay Block",
+  "name": "Clay",
   "max_stack_size": -1,
   "category": "block",
   "block_item": true,

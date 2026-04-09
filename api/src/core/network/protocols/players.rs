@@ -82,3 +82,20 @@ impl PlayerSnapshot {
         }
     }
 }
+
+/// Server to client teleport payload for authoritative position correction.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerTeleport {
+    pub player_id: u64,
+    pub translation: [f32; 3],
+}
+
+impl ServerTeleport {
+    /// Creates a new instance for the `core::network::protocols::players` module.
+    pub fn new(player_id: u64, translation: [f32; 3]) -> Self {
+        Self {
+            player_id,
+            translation,
+        }
+    }
+}

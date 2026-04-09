@@ -1,0 +1,9 @@
+{
+  "image": "flower_pink.png",
+  "tile_size": 128,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "flower_tulip": [0, 0]
+  }
+}

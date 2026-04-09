@@ -1,6 +1,7 @@
  // shaders/water.wgsl
 
-#import bevy_pbr::mesh_view_bindings
+#import bevy_pbr::mesh_view_bindings::{view, fog}
+#import bevy_pbr::pbr_functions::apply_fog
 #import bevy_pbr::prepass_utils::prepass_depth
 #import bevy_pbr::view_transformations::{
   position_world_to_clip,
@@ -80,19 +81,9 @@ fn vertex(v: VertexInput) -> VOut {
 
 @fragment
 fn fragment(in: VOut) -> @location(0) vec4<f32> {
-  let view    = bevy_pbr::mesh_view_bindings::view;
   let cam_pos = (view.world_from_view * vec4<f32>(0.0,0.0,0.0,1.0)).xyz;
   let V       = normalize(cam_pos - in.world_pos);
   let N       = normalize(in.normal_ws);
-
-  // --- Seiten von innen unsichtbar machen ---
-  let is_side     = abs(N.y) < 0.4;
-  let from_inside = dot(N, V) < 0.0;
-  let camera_below_side = cam_pos.y < in.world_pos.y;
-
-  if (is_side && (from_inside || camera_below_side)) {
-    discard;
-  }
 
   // --- UV / Textur ---
   let uv  = remap_uv_scroll(in.uv, in.normal_ws);
@@ -101,21 +92,8 @@ fn fragment(in: VOut) -> @location(0) vec4<f32> {
   // --- Fresnel ---
   let fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
 
-  // --- Depth Fade (Bodenkontakt) ---
-  var contact: f32 = 0.0;
-  #ifdef DEPTH_PREPASS
-    let clip    = position_world_to_clip(in.world_pos);
-    let ndc     = clip.xyz / clip.w;
-    let frag_xy = ndc_to_frag_coord(ndc.xy);
-
-    let scene_ndc   = prepass_depth(vec4<f32>(frag_xy, 0.0, 0.0), 0u);
-    let scene_viewz = depth_ndc_to_view_z(scene_ndc);
-    let my_viewz    = depth_ndc_to_view_z(ndc.z);
-    let dist_view   = abs(scene_viewz - my_viewz);
-
-    let fade    = max(params.t_misc.w, 0.01);        // Meter
-    contact     = 1.0 - smoothstep(0.0, fade, dist_view);
-  #endif
+  // Depth-prepass-based contact fade is disabled for platform stability.
+  let contact: f32 = 0.0;
 
   // --- Lighting ---
   let base_rgb = tex.rgb * params.tint.rgb;
@@ -132,7 +110,13 @@ fn fragment(in: VOut) -> @location(0) vec4<f32> {
   let a_base       = params.tint.a;
   let a_final      = clamp(a_base + contact * 0.12, 0.0, 1.0);
 
-  let rgb_lit    = (fres_rgb * contact_dark) + vec3<f32>(spec);
-  let rgb_premul = rgb_lit * a_final; // premultiplied
-  return vec4<f32>(rgb_premul, a_final);
+  let rgb_lit = (fres_rgb * contact_dark) + vec3<f32>(spec);
+  let fogged = apply_fog(
+    fog,
+    vec4<f32>(rgb_lit, a_final),
+    in.world_pos,
+    view.world_position.xyz
+  );
+
+  return vec4<f32>(fogged.rgb, fogged.a);
 }

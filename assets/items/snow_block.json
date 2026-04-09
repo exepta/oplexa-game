@@ -1,6 +1,6 @@
 {
   "localized_name": "oplexa:snow_block",
-  "name": "Snow Block",
+  "name": "Snow",
   "max_stack_size": -1,
   "category": "block",
   "block_item": true,

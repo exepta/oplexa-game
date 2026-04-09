@@ -1,6 +1,7 @@
 mod client;
 mod graphic;
 mod logic;
+mod shader;
 
 pub use api::{core, generator, utils};
 

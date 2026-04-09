@@ -111,5 +111,17 @@ pub fn default_chat_command_registry() -> CommandRegistry {
         "/gamemode <survival|creative|spectator>",
         "Changes your current game mode.",
     ));
+    registry.register(CommandDescriptor::new(
+        "locate",
+        std::iter::empty::<&str>(),
+        "/locate <biome> <name:key>",
+        "Finds biome coordinates, e.g. /locate biome oplexa:desert.",
+    ));
+    registry.register(CommandDescriptor::new(
+        "tp",
+        ["teleport"],
+        "/tp <player>|<x y z>|<player target>|<player x y z>",
+        "Teleports players or yourself to a player/location.",
+    ));
     registry
 }

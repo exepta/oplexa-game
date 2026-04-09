@@ -151,11 +151,32 @@ pub fn dominant_biome_at_p_chunks(
                 let site_influence = (w_site / w_sum).clamp(0.0, 1.0);
                 core *= site_influence;
 
-                // Only switch label if sub adds meaningful height features and is dominant.
-                if core > 0.0
-                    && (sub_b.settings.mount_amp.is_some() || sub_b.settings.mount_freq.is_some())
-                    && site_influence > 0.5
-                {
+                // Prevent flat subs (e.g. forest) from taking over labels where
+                // a relief sub (e.g. mountains) is currently dominant for terrain.
+                let sub_is_relief =
+                    sub_b.settings.mount_amp.is_some() || sub_b.settings.mount_freq.is_some();
+                let blocked_by_relief = if sub_is_relief {
+                    false
+                } else if let Some((relief_sub, s_relief)) = pick_relief_sub_biome_in_host(
+                    biomes, site_biome, site_pos, site_r, p_chunks, world_seed,
+                ) {
+                    let mut relief_core = sub_core_factor(s_relief);
+                    let relief_adj = adjacency_support_factor(
+                        biomes,
+                        p_chunks,
+                        world_seed,
+                        site_biome,
+                        &relief_sub.name,
+                    );
+                    relief_core *= relief_adj;
+                    relief_core *= site_influence;
+                    relief_core > 0.20
+                } else {
+                    false
+                };
+
+                // Switch biome label/rules when sub influence is meaningfully dominant.
+                if core > 0.22 && site_influence > 0.5 && !blocked_by_relief {
                     mat_biome = sub_b;
                 }
             }
@@ -271,6 +292,75 @@ pub fn choose_biome_label_thresholded(biomes: &BiomeRegistry, coord: IVec2, seed
         return b;
     }
     biomes.by_name.get(&biomes.ordered_names[0]).unwrap()
+}
+
+/// Locates the nearest chunk whose dominant biome matches `localized_name`.
+///
+/// Searches ring-by-ring around `origin_chunk` up to `max_radius_chunks`.
+pub fn locate_biome_chunk_by_localized_name(
+    biomes: &BiomeRegistry,
+    world_seed: i32,
+    origin_chunk: IVec2,
+    localized_name: &str,
+    max_radius_chunks: i32,
+) -> Option<IVec2> {
+    if biomes.is_empty() {
+        return None;
+    }
+
+    let target = localized_name.trim();
+    if target.is_empty() {
+        return None;
+    }
+
+    let max_radius_chunks = max_radius_chunks.max(0);
+
+    // Use dominant biome directly for locate queries to keep command latency stable.
+    // (The smoothed label pass is significantly more expensive over large radii.)
+    let matches = |coord: IVec2| {
+        let p = Vec2::new(coord.x as f32 + 0.5, coord.y as f32 + 0.5);
+        dominant_biome_at_p_chunks(biomes, world_seed, p)
+            .localized_name
+            .eq_ignore_ascii_case(target)
+    };
+
+    for radius in 0..=max_radius_chunks {
+        if radius == 0 {
+            if matches(origin_chunk) {
+                return Some(origin_chunk);
+            }
+            continue;
+        }
+
+        let min_x = origin_chunk.x - radius;
+        let max_x = origin_chunk.x + radius;
+        let min_z = origin_chunk.y - radius;
+        let max_z = origin_chunk.y + radius;
+
+        for x in min_x..=max_x {
+            if matches(IVec2::new(x, min_z)) {
+                return Some(IVec2::new(x, min_z));
+            }
+            if matches(IVec2::new(x, max_z)) {
+                return Some(IVec2::new(x, max_z));
+            }
+        }
+
+        if max_z - min_z <= 1 {
+            continue;
+        }
+
+        for z in (min_z + 1)..=(max_z - 1) {
+            if matches(IVec2::new(min_x, z)) {
+                return Some(IVec2::new(min_x, z));
+            }
+            if matches(IVec2::new(max_x, z)) {
+                return Some(IVec2::new(max_x, z));
+            }
+        }
+    }
+
+    None
 }
 
 /* ======================================================================= */
@@ -478,15 +568,14 @@ pub fn size_to_area_bounds(size: &BiomeSize) -> (f32, f32) {
 /* == Sub-biomes: Picking / Adjacency ===================================== */
 /* ======================================================================= */
 
-/// Pick a sub-biome inside a host land biome near `p`. Returns `(sub, s)`
-/// where `s` is normalized distance to sub center (`p.distance/r_site`).
-pub fn pick_sub_biome_in_host<'a>(
+fn pick_sub_biome_in_host_internal<'a>(
     biomes: &'a BiomeRegistry,
     host: &'a Biome,
     host_pos: Vec2,
     host_r: f32,
     p: Vec2,
     world_seed: i32,
+    require_relief_sub: bool,
 ) -> Option<(&'a Biome, f32)> {
     let subs = host.subs.as_ref()?;
     if subs.is_empty() {
@@ -500,6 +589,12 @@ pub fn pick_sub_biome_in_host<'a>(
             Some(b) => b,
             None => continue,
         };
+        if require_relief_sub
+            && sub.settings.mount_amp.is_none()
+            && sub.settings.mount_freq.is_none()
+        {
+            continue;
+        }
 
         // Determine a sub-area from its size list (default Small).
         let (area_min, area_max) = if sub.sizes.is_empty() {
@@ -555,6 +650,31 @@ pub fn pick_sub_biome_in_host<'a>(
     }
 
     best
+}
+
+/// Pick a sub-biome inside a host land biome near `p`. Returns `(sub, s)`
+/// where `s` is normalized distance to sub center (`p.distance/r_site`).
+pub fn pick_sub_biome_in_host<'a>(
+    biomes: &'a BiomeRegistry,
+    host: &'a Biome,
+    host_pos: Vec2,
+    host_r: f32,
+    p: Vec2,
+    world_seed: i32,
+) -> Option<(&'a Biome, f32)> {
+    pick_sub_biome_in_host_internal(biomes, host, host_pos, host_r, p, world_seed, false)
+}
+
+/// Pick the nearest sub-biome that can contribute mountain relief (`mount_*` set).
+pub fn pick_relief_sub_biome_in_host<'a>(
+    biomes: &'a BiomeRegistry,
+    host: &'a Biome,
+    host_pos: Vec2,
+    host_r: f32,
+    p: Vec2,
+    world_seed: i32,
+) -> Option<(&'a Biome, f32)> {
+    pick_sub_biome_in_host_internal(biomes, host, host_pos, host_r, p, world_seed, true)
 }
 
 /// Down-weight sub-biome dominance if the nearest *different* land site

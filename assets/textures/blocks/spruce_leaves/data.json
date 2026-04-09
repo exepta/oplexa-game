@@ -1,0 +1,9 @@
+{
+  "image": "spruce_leaves.png",
+  "tile_size": 128,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "spruce_leaves": [0, 0]
+  }
+}

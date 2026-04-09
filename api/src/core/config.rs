@@ -117,6 +117,13 @@ pub struct InterfaceConfig {
     /// Maximum number of chat lines kept in local history.
     #[serde(default = "default_chat_max_space")]
     pub chat_max_space: usize,
+    /// Max block distance used by local `/locate` biome search.
+    #[serde(
+        default = "default_locate_search_radius",
+        rename = "locate-search-radius",
+        alias = "locate_search_radius"
+    )]
+    pub locate_search_radius: i32,
 }
 
 impl Default for InterfaceConfig {
@@ -124,6 +131,7 @@ impl Default for InterfaceConfig {
     fn default() -> Self {
         Self {
             chat_max_space: default_chat_max_space(),
+            locate_search_radius: default_locate_search_radius(),
         }
     }
 }
@@ -141,35 +149,107 @@ impl Default for InterfaceConfig {
 #[allow(dead_code)]
 pub struct GraphicsConfig {
     /// The width of the application window (in logical pixels or units).
+    #[serde(default = "default_window_width")]
     pub window_width: u32,
 
     /// The height of the application window (in logical pixels or units).
+    #[serde(default = "default_window_height")]
     pub window_height: u32,
 
     /// Whether the application should run in fullscreen mode.
+    #[serde(default = "default_fullscreen")]
     pub fullscreen: bool,
 
     /// Whether vertical synchronization (vsync) is enabled.
+    #[serde(default = "default_vsync")]
     pub vsync: bool,
 
     /// Identifier for the graphics backend to use (e.g., "wgpu", "OpenGL", "Vulkan").
+    #[serde(default = "default_graphic_backend")]
     pub graphic_backend: String,
 
     /// The number of chunk generating ranges. 2 means 2 chunks in each direction.
     /// Note this build a cube around the player.
+    #[serde(default = "default_chunk_range")]
     pub chunk_range: i32,
+
+    /// Number of chunk generation tasks submitted per frame while in-game.
+    #[serde(default = "default_chunk_gen_submit_per_frame")]
+    pub chunk_gen_submit_per_frame: usize,
+
+    /// Max simultaneous chunk generation tasks while in-game.
+    #[serde(default = "default_chunk_gen_max_inflight")]
+    pub chunk_gen_max_inflight: usize,
+
+    /// Max simultaneous chunk meshing tasks while in-game.
+    #[serde(default = "default_chunk_mesh_max_inflight")]
+    pub chunk_mesh_max_inflight: usize,
+
+    /// Max finished chunk meshes applied per frame while in-game.
+    #[serde(default = "default_chunk_mesh_apply_per_frame")]
+    pub chunk_mesh_apply_per_frame: usize,
+
+    /// Max simultaneous collider build tasks while in-game.
+    #[serde(default = "default_chunk_collider_max_inflight")]
+    pub chunk_collider_max_inflight: usize,
+
+    /// Max finished colliders applied per frame while in-game.
+    #[serde(default = "default_chunk_collider_apply_per_frame")]
+    pub chunk_collider_apply_per_frame: usize,
+
+    /// Activation radius for chunk colliders around entities (in blocks).
+    #[serde(default = "default_chunk_collider_activation_radius_blocks")]
+    pub chunk_collider_activation_radius_blocks: i32,
+
+    /// Maximum number of chunks unloaded per frame.
+    #[serde(default = "default_chunk_unload_budget_per_frame")]
+    pub chunk_unload_budget_per_frame: usize,
+
+    /// Enables or disables world fog.
+    #[serde(default = "default_fog_enabled")]
+    pub fog_enabled: bool,
+
+    /// Fog color as RGB in 0.0..1.0.
+    #[serde(default = "default_fog_color")]
+    pub fog_color: [f32; 3],
+
+    /// Fog start as factor of loaded world radius.
+    #[serde(default = "default_fog_start_factor")]
+    pub fog_start_factor: f32,
+
+    /// Fog end as factor of loaded world radius.
+    #[serde(default = "default_fog_end_factor")]
+    pub fog_end_factor: f32,
+
+    /// Additional distance added behind fog end for camera far clip.
+    #[serde(default = "default_far_clip_extra")]
+    pub far_clip_extra: f32,
 }
 
 impl Default for GraphicsConfig {
     /// Runs the `default` routine for default in the `core::config` module.
     fn default() -> Self {
         Self {
-            window_width: 1270,
-            window_height: 720,
-            fullscreen: false,
-            vsync: true,
-            graphic_backend: String::from("AUTO"),
-            chunk_range: 8,
+            window_width: default_window_width(),
+            window_height: default_window_height(),
+            fullscreen: default_fullscreen(),
+            vsync: default_vsync(),
+            graphic_backend: default_graphic_backend(),
+            chunk_range: default_chunk_range(),
+            chunk_gen_submit_per_frame: default_chunk_gen_submit_per_frame(),
+            chunk_gen_max_inflight: default_chunk_gen_max_inflight(),
+            chunk_mesh_max_inflight: default_chunk_mesh_max_inflight(),
+            chunk_mesh_apply_per_frame: default_chunk_mesh_apply_per_frame(),
+            chunk_collider_max_inflight: default_chunk_collider_max_inflight(),
+            chunk_collider_apply_per_frame: default_chunk_collider_apply_per_frame(),
+            chunk_collider_activation_radius_blocks:
+                default_chunk_collider_activation_radius_blocks(),
+            chunk_unload_budget_per_frame: default_chunk_unload_budget_per_frame(),
+            fog_enabled: default_fog_enabled(),
+            fog_color: default_fog_color(),
+            fog_start_factor: default_fog_start_factor(),
+            fog_end_factor: default_fog_end_factor(),
+            far_clip_extra: default_far_clip_extra(),
         }
     }
 }
@@ -261,9 +341,37 @@ pub struct InputConfig {
     #[serde(default = "default_inventory_recipe_open_key")]
     pub inventory_recipe_open: String,
 
+    /// Key or button mapping to select hotbar slot 1.
+    #[serde(default = "default_hotbar_slot_1_key")]
+    pub hotbar_slot_1: String,
+
+    /// Key or button mapping to select hotbar slot 2.
+    #[serde(default = "default_hotbar_slot_2_key")]
+    pub hotbar_slot_2: String,
+
+    /// Key or button mapping to select hotbar slot 3.
+    #[serde(default = "default_hotbar_slot_3_key")]
+    pub hotbar_slot_3: String,
+
+    /// Key or button mapping to select hotbar slot 4.
+    #[serde(default = "default_hotbar_slot_4_key")]
+    pub hotbar_slot_4: String,
+
+    /// Key or button mapping to select hotbar slot 5.
+    #[serde(default = "default_hotbar_slot_5_key")]
+    pub hotbar_slot_5: String,
+
+    /// Key or button mapping to select hotbar slot 6.
+    #[serde(default = "default_hotbar_slot_6_key")]
+    pub hotbar_slot_6: String,
+
     // Debug
     /// Shows system stats
     pub debug_overlay: String,
+
+    /// Toggle for block collider debug gizmos.
+    #[serde(default = "default_collider_debug_key")]
+    pub collider_debug: String,
 
     /// Toggle chunk grid.
     pub chunk_grid: String,
@@ -292,8 +400,15 @@ impl Default for InputConfig {
             ui_close_back: String::from("Escape"),
             open_chat: default_open_chat_key(),
             inventory_recipe_open: default_inventory_recipe_open_key(),
+            hotbar_slot_1: default_hotbar_slot_1_key(),
+            hotbar_slot_2: default_hotbar_slot_2_key(),
+            hotbar_slot_3: default_hotbar_slot_3_key(),
+            hotbar_slot_4: default_hotbar_slot_4_key(),
+            hotbar_slot_5: default_hotbar_slot_5_key(),
+            hotbar_slot_6: default_hotbar_slot_6_key(),
 
             debug_overlay: String::from("F3"),
+            collider_debug: default_collider_debug_key(),
             chunk_grid: String::from("F9"),
             world_inspector: String::from("F1"),
         }
@@ -315,9 +430,144 @@ fn default_inventory_recipe_open_key() -> String {
     String::from("R")
 }
 
+/// Runs the `default_hotbar_slot_1_key` routine for default hotbar slot 1 key in the `core::config` module.
+fn default_hotbar_slot_1_key() -> String {
+    String::from("1")
+}
+
+/// Runs the `default_hotbar_slot_2_key` routine for default hotbar slot 2 key in the `core::config` module.
+fn default_hotbar_slot_2_key() -> String {
+    String::from("2")
+}
+
+/// Runs the `default_hotbar_slot_3_key` routine for default hotbar slot 3 key in the `core::config` module.
+fn default_hotbar_slot_3_key() -> String {
+    String::from("3")
+}
+
+/// Runs the `default_hotbar_slot_4_key` routine for default hotbar slot 4 key in the `core::config` module.
+fn default_hotbar_slot_4_key() -> String {
+    String::from("4")
+}
+
+/// Runs the `default_hotbar_slot_5_key` routine for default hotbar slot 5 key in the `core::config` module.
+fn default_hotbar_slot_5_key() -> String {
+    String::from("5")
+}
+
+/// Runs the `default_hotbar_slot_6_key` routine for default hotbar slot 6 key in the `core::config` module.
+fn default_hotbar_slot_6_key() -> String {
+    String::from("6")
+}
+
+/// Runs the `default_collider_debug_key` routine for default collider debug key in the `core::config` module.
+fn default_collider_debug_key() -> String {
+    String::from("F8")
+}
+
+/// Runs the `default_window_width` routine for default window width in the `core::config` module.
+fn default_window_width() -> u32 {
+    1270
+}
+
+/// Runs the `default_window_height` routine for default window height in the `core::config` module.
+fn default_window_height() -> u32 {
+    720
+}
+
+/// Runs the `default_fullscreen` routine for default fullscreen in the `core::config` module.
+fn default_fullscreen() -> bool {
+    false
+}
+
+/// Runs the `default_vsync` routine for default vsync in the `core::config` module.
+fn default_vsync() -> bool {
+    true
+}
+
+/// Runs the `default_graphic_backend` routine for default graphic backend in the `core::config` module.
+fn default_graphic_backend() -> String {
+    String::from("AUTO")
+}
+
+/// Runs the `default_chunk_range` routine for default chunk range in the `core::config` module.
+fn default_chunk_range() -> i32 {
+    8
+}
+
+/// Runs the `default_chunk_gen_submit_per_frame` routine for default chunk gen submit per frame in the `core::config` module.
+fn default_chunk_gen_submit_per_frame() -> usize {
+    14
+}
+
+/// Runs the `default_chunk_gen_max_inflight` routine for default chunk gen max inflight in the `core::config` module.
+fn default_chunk_gen_max_inflight() -> usize {
+    64
+}
+
+/// Runs the `default_chunk_mesh_max_inflight` routine for default chunk mesh max inflight in the `core::config` module.
+fn default_chunk_mesh_max_inflight() -> usize {
+    64
+}
+
+/// Runs the `default_chunk_mesh_apply_per_frame` routine for default chunk mesh apply per frame in the `core::config` module.
+fn default_chunk_mesh_apply_per_frame() -> usize {
+    28
+}
+
+/// Runs the `default_chunk_collider_max_inflight` routine for default chunk collider max inflight in the `core::config` module.
+fn default_chunk_collider_max_inflight() -> usize {
+    24
+}
+
+/// Runs the `default_chunk_collider_apply_per_frame` routine for default chunk collider apply per frame in the `core::config` module.
+fn default_chunk_collider_apply_per_frame() -> usize {
+    12
+}
+
+/// Runs the `default_chunk_collider_activation_radius_blocks` routine for default chunk collider activation radius blocks in the `core::config` module.
+fn default_chunk_collider_activation_radius_blocks() -> i32 {
+    50
+}
+
+/// Runs the `default_chunk_unload_budget_per_frame` routine for default chunk unload budget per frame in the `core::config` module.
+fn default_chunk_unload_budget_per_frame() -> usize {
+    10
+}
+
+/// Runs the `default_fog_enabled` routine for default fog enabled in the `core::config` module.
+fn default_fog_enabled() -> bool {
+    true
+}
+
+/// Runs the `default_fog_color` routine for default fog color in the `core::config` module.
+fn default_fog_color() -> [f32; 3] {
+    [0.62, 0.72, 0.85]
+}
+
+/// Runs the `default_fog_start_factor` routine for default fog start factor in the `core::config` module.
+fn default_fog_start_factor() -> f32 {
+    0.80
+}
+
+/// Runs the `default_fog_end_factor` routine for default fog end factor in the `core::config` module.
+fn default_fog_end_factor() -> f32 {
+    1.08
+}
+
+/// Runs the `default_far_clip_extra` routine for default far clip extra in the `core::config` module.
+fn default_far_clip_extra() -> f32 {
+    14.0
+}
+
 /// Runs the `default_chat_max_space` routine for default chat max space in the `core::config` module.
 fn default_chat_max_space() -> usize {
     140
+}
+
+/// Runs the `default_locate_search_radius` routine for default locate search radius in the `core::config` module.
+fn default_locate_search_radius() -> i32 {
+    1000
 }
 
 // =======================================================

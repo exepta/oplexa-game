@@ -111,11 +111,16 @@ fn update_underwater_fx(
 
     if state.fog_camera != Some(cam_entity) {
         state.fog_camera = Some(cam_entity);
-        state.base_fog = fog_opt.as_ref().map(|fog| (**fog).clone());
+        state.base_fog = if underwater {
+            None
+        } else {
+            fog_opt.as_ref().map(|fog| (**fog).clone())
+        };
     }
 
+    let mut remove_underwater_only_fog = false;
     if let Some(mut fog) = fog_opt {
-        if state.base_fog.is_none() {
+        if state.base_fog.is_none() && !underwater {
             state.base_fog = Some((*fog).clone());
         }
 
@@ -134,6 +139,8 @@ fn update_underwater_fx(
             };
         } else if let Some(base) = state.base_fog.clone() {
             *fog = base;
+        } else {
+            remove_underwater_only_fog = true;
         }
     } else if underwater {
         commands.entity(cam_entity).insert(DistanceFog {
@@ -144,6 +151,9 @@ fn update_underwater_fx(
             },
             ..default()
         });
+    }
+    if remove_underwater_only_fog && !underwater {
+        commands.entity(cam_entity).remove::<DistanceFog>();
     }
 
     if underwater {

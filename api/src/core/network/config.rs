@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use std::fs;
 use std::io;
 use std::net::{IpAddr, UdpSocket};
@@ -89,6 +89,7 @@ pub struct DedicatedServerSettings {
     pub ip: String,
     pub port: u16,
     pub world_name: String,
+    #[serde(deserialize_with = "deserialize_world_seed")]
     pub world_seed: i32,
     pub server_name: String,
     pub motd: String,
@@ -106,8 +107,12 @@ pub struct DedicatedServerSettings {
     pub chunk_stream_inflight_per_client: usize,
     #[serde(default = "default_chunk_flight_timeout_ms")]
     pub chunk_flight_timeout_ms: u64,
+    #[serde(default = "default_chunk_stream_gen_max_inflight")]
+    pub chunk_stream_gen_max_inflight: usize,
     #[serde(default = "default_max_stream_radius")]
     pub max_stream_radius: i32,
+    #[serde(default = "default_locate_search_radius")]
+    pub locate_search_radius: i32,
     #[serde(default = "default_dead_entity_check_interval_secs")]
     pub dead_entity_check_interval_secs: u64,
 }
@@ -130,7 +135,9 @@ impl Default for DedicatedServerSettings {
             chunk_stream_sends_per_tick_max: default_chunk_stream_sends_per_tick_max(),
             chunk_stream_inflight_per_client: default_chunk_stream_inflight_per_client(),
             chunk_flight_timeout_ms: default_chunk_flight_timeout_ms(),
+            chunk_stream_gen_max_inflight: default_chunk_stream_gen_max_inflight(),
             max_stream_radius: default_max_stream_radius(),
+            locate_search_radius: default_locate_search_radius(),
             dead_entity_check_interval_secs: default_dead_entity_check_interval_secs(),
         }
     }
@@ -216,27 +223,32 @@ fn default_client_timeout() -> u64 {
 
 /// Runs the `default_chunk_stream_sends_per_tick_base` routine for default chunk stream sends per tick base in the `core::network::config` module.
 fn default_chunk_stream_sends_per_tick_base() -> usize {
-    24
+    8
 }
 
 /// Runs the `default_chunk_stream_sends_per_tick_per_client` routine for default chunk stream sends per tick per client in the `core::network::config` module.
 fn default_chunk_stream_sends_per_tick_per_client() -> usize {
-    6
+    2
 }
 
 /// Runs the `default_chunk_stream_sends_per_tick_max` routine for default chunk stream sends per tick max in the `core::network::config` module.
 fn default_chunk_stream_sends_per_tick_max() -> usize {
-    256
+    64
 }
 
 /// Runs the `default_chunk_stream_inflight_per_client` routine for default chunk stream inflight per client in the `core::network::config` module.
 fn default_chunk_stream_inflight_per_client() -> usize {
-    24
+    12
 }
 
 /// Runs the `default_chunk_flight_timeout_ms` routine for default chunk flight timeout ms in the `core::network::config` module.
 fn default_chunk_flight_timeout_ms() -> u64 {
-    500
+    300
+}
+
+/// Runs the `default_chunk_stream_gen_max_inflight` routine for default chunk stream gen max inflight in the `core::network::config` module.
+fn default_chunk_stream_gen_max_inflight() -> usize {
+    16
 }
 
 /// Runs the `default_max_stream_radius` routine for default max stream radius in the `core::network::config` module.
@@ -244,9 +256,48 @@ fn default_max_stream_radius() -> i32 {
     12
 }
 
+/// Runs the `default_locate_search_radius` routine for default locate search radius in the `core::network::config` module.
+fn default_locate_search_radius() -> i32 {
+    1000
+}
+
 /// Runs the `default_dead_entity_check_interval_secs` routine for default dead entity check interval secs in the `core::network::config` module.
 fn default_dead_entity_check_interval_secs() -> u64 {
     20
+}
+
+/// Deserializes world seed from either an integer or a string.
+///
+/// Supported string values:
+/// - `"random"` (case-insensitive): generates a random i32 seed
+/// - any valid integer string (e.g. `"1337"`, `"-42"`)
+fn deserialize_world_seed<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum WorldSeedValue {
+        Int(i32),
+        Str(String),
+    }
+
+    match WorldSeedValue::deserialize(deserializer)? {
+        WorldSeedValue::Int(seed) => Ok(seed),
+        WorldSeedValue::Str(raw) => {
+            let value = raw.trim();
+            if value.eq_ignore_ascii_case("random") {
+                Ok(rand::random::<i32>())
+            } else {
+                value.parse::<i32>().map_err(|_| {
+                    D::Error::custom(format!(
+                        "invalid world-seed value {:?}; expected an i32 or \"random\"",
+                        raw
+                    ))
+                })
+            }
+        }
+    }
 }
 
 /// Runs the `resolve_local_ip` routine for resolve local ip in the `core::network::config` module.

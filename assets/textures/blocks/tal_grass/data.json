@@ -1,0 +1,9 @@
+{
+  "image": "tal_grass.png",
+  "tile_size": 128,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "tal_grass": [0, 0]
+  }
+}

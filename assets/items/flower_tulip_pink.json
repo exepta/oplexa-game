@@ -1,0 +1,19 @@
+{
+  "localized_name": "oplexa:flower_tulip_pink",
+  "name": "Pink tulip",
+  "max_stack_size": -1,
+  "category": "nature",
+  "block_item": true,
+  "placeable": true,
+  "block": "flower_tulip_pink_block",
+  "tags": ["block", "prop", "nature"],
+  "rarity": "common",
+  "texture": "textures/blocks/flower_tulip_pink/flower_pink.png",
+  "render": {
+    "type": "flat",
+    "texture": "textures/blocks/flower_tulip_pink/flower_pink.png"
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

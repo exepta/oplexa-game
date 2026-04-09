@@ -1,0 +1,25 @@
+{
+  "localized_name": "oplexa:snowy_mountains",
+  "name": "Snowy_mountains",
+  "stand_alone": false,
+  "climate": ["cold"],
+  "rarity": 0.18,
+  "sizes": ["Medium", "Large"],
+  "surface": {
+    "top": ["snow_block"],
+    "bottom": ["stone_block"],
+    "sea_floor": ["gravel_block", "sand_block"],
+    "upper_zero": ["stone_block"],
+    "under_zero": ["deep_stone_block"]
+  },
+  "settings": {
+    "height_offset": 80.0,
+    "mount_amp": 76.0,
+    "mount_freq": 0.019
+  },
+  "generation": {
+    "rivers": "tunnel | stop",
+    "river_chance": 0.3,
+    "river_size_between": "18:28"
+  }
+}

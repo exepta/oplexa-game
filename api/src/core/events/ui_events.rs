@@ -11,14 +11,6 @@ pub struct ConnectToServerRequest {
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct DisconnectFromServerRequest;
 
-/// Represents open to lan request used by the `core::events::ui_events` module.
-#[derive(Message, Clone, Copy, Debug, Default)]
-pub struct OpenToLanRequest;
-
-/// Represents stop lan host request used by the `core::events::ui_events` module.
-#[derive(Message, Clone, Copy, Debug, Default)]
-pub struct StopLanHostRequest;
-
 /// Represents chat submit request used by the `core::events::ui_events` module.
 #[derive(Message, Clone, Debug, Default)]
 pub struct ChatSubmitRequest {

@@ -1,0 +1,19 @@
+{
+  "localized_name": "oplexa:mossy_stone_block",
+  "name": "Mossy Stone",
+  "max_stack_size": -1,
+  "category": "block",
+  "block_item": true,
+  "placeable": true,
+  "block": "mossy_stone_block",
+  "tags": ["block"],
+  "rarity": "common",
+  "render": {
+    "type": "block",
+    "block": "mossy_stone_block",
+    "projection": "isometric"
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

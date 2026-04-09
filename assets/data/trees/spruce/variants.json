@@ -1,0 +1,45 @@
+{
+  "name": "spruce",
+  "variants": [
+    {
+      "id": "spruce_small",
+      "weight": 1.1,
+      "trunk_block": "spruce_log_block",
+      "leaves_block": "spruce_leaves_block",
+      "trunk_height": [10, 14],
+      "canopy_radius": [3, 4],
+      "canopy_height": [7, 9],
+      "canopy_density": 0.84
+    },
+    {
+      "id": "spruce_classic",
+      "weight": 1.0,
+      "trunk_block": "spruce_log_block",
+      "leaves_block": "spruce_leaves_block",
+      "trunk_height": [12, 16],
+      "canopy_radius": [3, 4],
+      "canopy_height": [8, 10],
+      "canopy_density": 0.82
+    },
+    {
+      "id": "spruce_tall",
+      "weight": 0.85,
+      "trunk_block": "spruce_log_block",
+      "leaves_block": "spruce_leaves_block",
+      "trunk_height": [14, 20],
+      "canopy_radius": [4, 5],
+      "canopy_height": [9, 12],
+      "canopy_density": 0.80
+    },
+    {
+      "id": "spruce_wide",
+      "weight": 0.7,
+      "trunk_block": "spruce_log_block",
+      "leaves_block": "spruce_leaves_block",
+      "trunk_height": [11, 16],
+      "canopy_radius": [4, 5],
+      "canopy_height": [8, 10],
+      "canopy_density": 0.76
+    }
+  ]
+}

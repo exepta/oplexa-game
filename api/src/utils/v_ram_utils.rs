@@ -6,6 +6,7 @@
 //! with graceful fallbacks when a backend is not available.
 //!
 //! - NVIDIA (Win/Linux): NVML → **per-process** bytes (preferred when available).
+//! - Linux (DRM fdinfo): **per-process** VRAM for DRM clients when exposed by driver.
 //! - Windows (AMD & NVIDIA): DXGI → **adapter-wide** "CurrentUsage" bytes.
 //! - macOS: Metal → **device-wide** current allocated size.
 //!
@@ -32,12 +33,26 @@ pub struct VideoRamInfo {
     pub scope: &'static str,
 }
 
+/// Information about a GPU load reading.
+#[derive(Debug, Clone, Copy)]
+pub struct GpuLoadInfo {
+    /// Utilization in percent (0.0 - 100.0).
+    pub percent: f32,
+    /// Backend name, e.g. "amdgpu-sysfs".
+    pub source: &'static str,
+    /// Scope of the reading, e.g. "device-wide".
+    pub scope: &'static str,
+}
+
 /// Try platform/vendor-specific backends in a sensible order and return the first hit.
 ///
 /// Order of preference:
 /// 1. NVML (NVIDIA, per-process)
-/// 2. DXGI (Windows adapter-wide; works for AMD & NVIDIA)
-/// 3. Metal (macOS device-wide)
+/// 2. Linux AMD debugfs (per-process)
+/// 3. Linux DRM fdinfo (per-process)
+/// 4. Linux AMD sysfs (device-wide)
+/// 5. DXGI (Windows adapter-wide; works for AMD & NVIDIA)
+/// 6. Metal (macOS device-wide)
 pub fn detect_v_ram_best_effort() -> Option<VideoRamInfo> {
     // 1) NVIDIA per-process via NVML
     if let Some(bytes) = query_vram_bytes_nvml_this_process() {
@@ -53,6 +68,15 @@ pub fn detect_v_ram_best_effort() -> Option<VideoRamInfo> {
         return Some(VideoRamInfo {
             bytes,
             source: "amdgpu-debugfs",
+            scope: "per-process",
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Some(bytes) = query_vram_bytes_linux_drm_fdinfo_this_process() {
+        return Some(VideoRamInfo {
+            bytes,
+            source: "linux-drm-fdinfo",
             scope: "per-process",
         });
     }
@@ -81,6 +105,33 @@ pub fn detect_v_ram_best_effort() -> Option<VideoRamInfo> {
         return Some(VideoRamInfo {
             bytes,
             source: "Metal",
+            scope: "device-wide",
+        });
+    }
+
+    None
+}
+
+/// Try platform/vendor-specific backends in a sensible order and return the first hit.
+///
+/// Current best-effort order:
+/// 1. Linux AMDGPU `gpu_busy_percent` (sysfs)
+/// 2. Linux AMDGPU `amdgpu_pm_info` (debugfs)
+pub fn detect_gpu_load_best_effort() -> Option<GpuLoadInfo> {
+    #[cfg(target_os = "linux")]
+    if let Some(percent) = query_gpu_load_percent_linux_amdgpu_sysfs() {
+        return Some(GpuLoadInfo {
+            percent,
+            source: "amdgpu-sysfs",
+            scope: "device-wide",
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Some(percent) = query_gpu_load_percent_linux_amdgpu_debugfs() {
+        return Some(GpuLoadInfo {
+            percent,
+            source: "amdgpu-debugfs",
             scope: "device-wide",
         });
     }
@@ -245,6 +296,203 @@ pub fn query_vram_bytes_linux_amdgpu_per_process(pid: u32) -> Option<u64> {
     None
 }
 
+/// Query per-process VRAM from DRM fdinfo for the current process.
+///
+/// Uses `/proc/<pid>/fdinfo/*` lines such as:
+/// - `drm-memory-vram: 123456 KiB`
+/// - `drm-resident-vram: 123456 KiB`
+#[cfg(target_os = "linux")]
+pub fn query_vram_bytes_linux_drm_fdinfo_this_process() -> Option<u64> {
+    query_vram_bytes_linux_drm_fdinfo_for_pid(std::process::id())
+}
+
+/// Query per-process VRAM from DRM fdinfo for a specific process id.
+#[cfg(target_os = "linux")]
+pub fn query_vram_bytes_linux_drm_fdinfo_for_pid(pid: u32) -> Option<u64> {
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+
+    let root = PathBuf::from(format!("/proc/{pid}/fdinfo"));
+    let entries = fs::read_dir(root).ok()?;
+    let mut per_client_best: HashMap<String, u64> = HashMap::new();
+
+    for entry in entries.flatten() {
+        let content = match fs::read_to_string(entry.path()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if !content.lines().any(|line| {
+            line.trim_start()
+                .to_ascii_lowercase()
+                .starts_with("drm-driver:")
+        }) {
+            continue;
+        }
+
+        let mut client_id: Option<String> = None;
+        let mut pdev: Option<String> = None;
+        let mut fd_vram: Option<u64> = None;
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            let lower = trimmed.to_ascii_lowercase();
+
+            if lower.starts_with("drm-client-id:") {
+                client_id = trimmed
+                    .split_once(':')
+                    .map(|(_, value)| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+                continue;
+            }
+
+            if lower.starts_with("drm-pdev:") {
+                pdev = trimmed
+                    .split_once(':')
+                    .map(|(_, value)| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+                continue;
+            }
+
+            if !(lower.starts_with("drm-memory-vram:") || lower.starts_with("drm-resident-vram:")) {
+                continue;
+            }
+
+            let Some(raw_value) = trimmed.split_once(':').map(|(_, value)| value.trim()) else {
+                continue;
+            };
+            let Some(bytes) = parse_vram_bytes_token(raw_value) else {
+                continue;
+            };
+
+            fd_vram = Some(fd_vram.map_or(bytes, |curr| curr.max(bytes)));
+        }
+
+        let Some(bytes) = fd_vram else {
+            continue;
+        };
+
+        let key = format!(
+            "{}:{}",
+            pdev.unwrap_or_else(|| "unknown-pdev".to_string()),
+            client_id.unwrap_or_else(|| "unknown-client".to_string())
+        );
+        per_client_best
+            .entry(key)
+            .and_modify(|curr| *curr = (*curr).max(bytes))
+            .or_insert(bytes);
+    }
+
+    if per_client_best.is_empty() {
+        None
+    } else {
+        Some(per_client_best.values().copied().sum())
+    }
+}
+
+/// Query AMD GPU load percentage from sysfs.
+///
+/// Uses `/sys/class/drm/card*/device/gpu_busy_percent` and picks the maximum value.
+#[cfg(target_os = "linux")]
+pub fn query_gpu_load_percent_linux_amdgpu_sysfs() -> Option<f32> {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn read_u64_any(path: &Path) -> Option<u64> {
+        let s = fs::read_to_string(path).ok()?;
+        let t = s.trim();
+        if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+            u64::from_str_radix(hex, 16).ok()
+        } else {
+            t.parse::<u64>().ok()
+        }
+    }
+
+    fn is_amdgpu(dev_dir: &Path) -> bool {
+        if let Ok(link) = fs::read_link(dev_dir.join("driver"))
+            && link.file_name().map(|n| n == "amdgpu").unwrap_or(false)
+        {
+            return true;
+        }
+        read_u64_any(&dev_dir.join("vendor")) == Some(0x1002)
+    }
+
+    let drm_path = Path::new("/sys/class/drm");
+    let entries = fs::read_dir(drm_path).ok()?;
+    let mut best: Option<f32> = None;
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("card") || !name[4..].chars().all(|ch| ch.is_ascii_digit()) {
+            continue;
+        }
+
+        let dev_dir: PathBuf = entry.path().join("device");
+        if !is_amdgpu(&dev_dir) {
+            continue;
+        }
+
+        let busy_file = dev_dir.join("gpu_busy_percent");
+        let Some(raw) = read_u64_any(&busy_file) else {
+            continue;
+        };
+        let percent = (raw as f32).clamp(0.0, 100.0);
+        best = Some(best.map_or(percent, |curr| curr.max(percent)));
+    }
+
+    best
+}
+
+/// Query AMD GPU load percentage from debugfs.
+///
+/// Parses `/sys/kernel/debug/dri/*/amdgpu_pm_info` lines like `GPU load: 23 %`.
+#[cfg(target_os = "linux")]
+pub fn query_gpu_load_percent_linux_amdgpu_debugfs() -> Option<f32> {
+    use std::fs;
+    use std::path::Path;
+
+    let root = Path::new("/sys/kernel/debug/dri");
+    let entries = fs::read_dir(root).ok()?;
+    let mut best: Option<f32> = None;
+
+    for entry in entries.flatten() {
+        let pm_info = entry.path().join("amdgpu_pm_info");
+        let Ok(content) = fs::read_to_string(pm_info) else {
+            continue;
+        };
+
+        for line in content.lines() {
+            let lower = line.to_ascii_lowercase();
+            if !lower.contains("gpu load") {
+                continue;
+            }
+            if let Some(percent) = parse_percent_from_line(line) {
+                best = Some(best.map_or(percent, |curr| curr.max(percent)));
+            }
+        }
+    }
+
+    best
+}
+
+#[cfg(target_os = "linux")]
+fn parse_percent_from_line(line: &str) -> Option<f32> {
+    let mut value = String::new();
+    for ch in line.chars() {
+        if ch.is_ascii_digit() {
+            value.push(ch);
+        } else if !value.is_empty() {
+            break;
+        }
+    }
+    if value.is_empty() {
+        return None;
+    }
+    value.parse::<f32>().ok().map(|v| v.clamp(0.0, 100.0))
+}
+
 /// Parses amdgpu vm info for pid for the `utils::v_ram_utils` module.
 #[cfg(target_os = "linux")]
 fn parse_amdgpu_vm_info_for_pid(path: &std::path::Path, pid: u32) -> Option<u64> {
@@ -341,9 +589,36 @@ fn parse_embedded_number_with_unit(t: &str) -> Option<u64> {
     Some(val.saturating_mul(mul))
 }
 
+#[cfg(target_os = "linux")]
+fn parse_vram_bytes_token(value: &str) -> Option<u64> {
+    // Normalize "123 KiB" to "123KiB" and parse common unit suffixes.
+    let compact: String = value.chars().filter(|ch| !ch.is_whitespace()).collect();
+    parse_embedded_number_with_unit(compact.trim_matches(|ch: char| ch == ':' || ch == '='))
+}
+
 /// Runs the `query_vram_bytes_linux_drm_amdgpu` routine for query vram bytes linux drm amdgpu in the `utils::v_ram_utils` module.
 #[cfg(not(target_os = "linux"))]
 pub fn query_vram_bytes_linux_drm_amdgpu() -> Option<u64> {
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn query_gpu_load_percent_linux_amdgpu_sysfs() -> Option<f32> {
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn query_gpu_load_percent_linux_amdgpu_debugfs() -> Option<f32> {
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn query_vram_bytes_linux_drm_fdinfo_this_process() -> Option<u64> {
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn query_vram_bytes_linux_drm_fdinfo_for_pid(_pid: u32) -> Option<u64> {
     None
 }
 

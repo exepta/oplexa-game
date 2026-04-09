@@ -18,9 +18,9 @@ use lightyear::prelude::*;
 
 // ── Channel marker types ──────────────────────────────────────────────────────
 
-/// Reliable and ordered: block interactions, drops, chunk interest
+/// Reliable and ordered: block interactions, drops
 pub struct OrderedReliable;
-/// Reliable but unordered: player join/leave, welcome, chunk data
+/// Reliable but unordered: player join/leave, welcome, chunk data, chunk interest
 pub struct UnorderedReliable;
 /// Unreliable and unordered: position snapshots, keep-alives
 pub struct UnorderedUnreliable;
@@ -70,6 +70,8 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<ClientKeepAlive>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<PlayerSnapshot>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<ServerTeleport>()
             .add_direction(NetworkDirection::ServerToClient);
 
         // Messages – chunks

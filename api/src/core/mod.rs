@@ -14,6 +14,7 @@ pub mod world;
 
 use crate::core::chat::ChatLog;
 use crate::core::config::*;
+use crate::core::debug::BlockColliderGizmoState;
 use crate::core::entities::EntitiesModule;
 use crate::core::events::EventModule;
 use crate::core::inventory::recipe::HandCraftedState;
@@ -21,6 +22,7 @@ use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::ui::{HotbarSelectionState, UiInteractionState};
 use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::*;
+use crate::generator::chunk::trees::registry::TreeRegistry;
 use bevy::prelude::*;
 
 /// Represents core module used by the `core` module.
@@ -31,6 +33,7 @@ impl Plugin for CoreModule {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorldGenConfig>();
         app.init_resource::<CrosshairConfig>();
+        app.init_resource::<BlockColliderGizmoState>();
         app.init_resource::<ChatLog>();
         app.init_resource::<SelectedBlock>();
         app.init_resource::<MiningState>();
@@ -39,6 +42,7 @@ impl Plugin for CoreModule {
         app.init_resource::<UiInteractionState>();
         app.init_resource::<HotbarSelectionState>();
         app.init_resource::<BiomeRegistry>();
+        app.init_resource::<TreeRegistry>();
         app.init_resource::<HandCraftedState>();
         app.add_plugins((EventModule, EntitiesModule));
     }

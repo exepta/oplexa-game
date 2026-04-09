@@ -1,7 +1,8 @@
 {
-  "localized_name": "desert",
+  "localized_name": "oplexa:desert",
   "name": "Desert",
   "stand_alone": true,
+  "subs": ["Desert_Mountains"],
   "climate": ["dry", "hot"],
   "rarity": 0.075,
   "sizes": [ "Large", "Huge" ],

@@ -1,6 +1,6 @@
 {
   "localized_name": "oplexa:stone_block",
-  "name": "Stone Block",
+  "name": "Stone",
   "max_stack_size": -1,
   "category": "block",
   "block_item": true,

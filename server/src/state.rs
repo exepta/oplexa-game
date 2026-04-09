@@ -11,7 +11,8 @@ use api::{
     },
     generator::chunk::{
         cave_utils::{CaveParams, worm_edits_for_chunk},
-        chunk_utils::{encode_chunk, load_or_gen_chunk_async},
+        chunk_utils::{encode_chunk, load_or_gen_chunk_async, save_chunk_at_root_sync},
+        trees::registry::TreeRegistry,
     },
 };
 use bevy::ecs::entity::Entity;
@@ -22,6 +23,7 @@ use futures_lite::future;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 const STREAM_CHUNK_CACHE_LIMIT: usize = 512;
@@ -41,7 +43,9 @@ pub struct ServerRuntimeConfig {
     pub chunk_stream_sends_per_tick_max: usize,
     pub chunk_stream_inflight_per_client: usize,
     pub chunk_flight_timeout_ms: u64,
+    pub chunk_stream_gen_max_inflight: usize,
     pub max_stream_radius: i32,
+    pub locate_search_radius: i32,
     pub dead_entity_check_interval_secs: u64,
 }
 
@@ -49,13 +53,16 @@ pub struct ServerRuntimeConfig {
 #[derive(Resource)]
 pub struct ServerState {
     pub world_root: PathBuf,
-    pub block_registry: BlockRegistry,
-    pub biome_registry: BiomeRegistry,
+    pub block_registry: Arc<BlockRegistry>,
+    pub biome_registry: Arc<BiomeRegistry>,
+    pub tree_registry: Arc<TreeRegistry>,
     pub world_gen_config: WorldGenConfig,
     pub block_overrides: HashMap<[i32; 3], u16>,
     pub streamed_chunk_cache: HashMap<IVec2, Vec<u8>>,
     pub streamed_chunk_cache_order: VecDeque<IVec2>,
-    pub pending_stream_chunk_tasks: HashMap<IVec2, Task<(IVec2, ChunkData)>>,
+    pub pending_stream_chunk_tasks: HashMap<IVec2, Task<(IVec2, Vec<u8>)>>,
+    pub pending_stream_chunk_queue: VecDeque<IVec2>,
+    pub pending_stream_chunk_queued: HashSet<IVec2>,
     pub pending_stream_chunk_waiters: HashMap<IVec2, HashSet<Entity>>,
     pub pending_chunk_sends: VecDeque<(Entity, IVec2)>,
     /// Per-client timestamps of recently sent chunks; used to limit in-flight reliable data.
@@ -71,8 +78,9 @@ pub struct ServerState {
 impl ServerState {
     /// Creates a new instance for the `state` module.
     pub fn new(world_root: PathBuf, world_seed: i32) -> Self {
-        let block_registry = BlockRegistry::load_headless("assets/blocks");
-        let biome_registry = BiomeRegistry::load_from_folder("assets/biomes");
+        let block_registry = Arc::new(BlockRegistry::load_headless("assets/blocks"));
+        let biome_registry = Arc::new(BiomeRegistry::load_from_folder("assets/biomes"));
+        let tree_registry = Arc::new(TreeRegistry::load_from_folder("assets/data/trees"));
         let world_gen_config = WorldGenConfig { seed: world_seed };
         let block_overrides = load_block_overrides(world_root.join("blocks.txt").as_path());
         AsyncComputeTaskPool::get_or_init(TaskPool::default);
@@ -80,11 +88,14 @@ impl ServerState {
             world_root,
             block_registry,
             biome_registry,
+            tree_registry,
             world_gen_config,
             block_overrides,
             streamed_chunk_cache: HashMap::new(),
             streamed_chunk_cache_order: VecDeque::new(),
             pending_stream_chunk_tasks: HashMap::new(),
+            pending_stream_chunk_queue: VecDeque::new(),
+            pending_stream_chunk_queued: HashSet::new(),
             pending_stream_chunk_waiters: HashMap::new(),
             pending_chunk_sends: VecDeque::new(),
             chunk_send_window: HashMap::new(),
@@ -128,47 +139,98 @@ impl ServerState {
             .or_default()
             .insert(entity);
 
-        if self.pending_stream_chunk_tasks.contains_key(&coord) {
+        if !self.pending_stream_chunk_tasks.contains_key(&coord)
+            && self.pending_stream_chunk_queued.insert(coord)
+        {
+            self.pending_stream_chunk_queue.push_back(coord);
+        }
+    }
+
+    /// Spawns new stream chunk generation tasks up to the configured in-flight limit.
+    pub fn pump_stream_chunk_tasks(&mut self, config: &ServerRuntimeConfig) {
+        let max_inflight = config.chunk_stream_gen_max_inflight.max(1);
+        if self.pending_stream_chunk_tasks.len() >= max_inflight {
             return;
         }
 
-        let world_root = self.world_root.clone();
-        let block_registry = self.block_registry.clone();
-        let biome_registry = self.biome_registry.clone();
+        let border_id = self.block_registry.id_opt("border_block").unwrap_or(0);
+        let water_id = self.block_registry.id_opt("water_block").unwrap_or(0);
+        let cave_seed = self.world_gen_config.seed;
         let world_gen_config = self.world_gen_config.clone();
         let pool = AsyncComputeTaskPool::get();
-        let task = pool.spawn(async move {
-            let chunk = load_or_gen_chunk_async(
-                world_root,
-                coord,
-                &block_registry,
-                &biome_registry,
-                world_gen_config,
-            )
-            .await;
-            (coord, chunk)
-        });
 
-        self.pending_stream_chunk_tasks.insert(coord, task);
+        while self.pending_stream_chunk_tasks.len() < max_inflight {
+            let Some(coord) = self.pending_stream_chunk_queue.pop_front() else {
+                break;
+            };
+            self.pending_stream_chunk_queued.remove(&coord);
+
+            if self.streamed_chunk_cache.contains_key(&coord) {
+                if let Some(waiters) = self.pending_stream_chunk_waiters.get(&coord) {
+                    let waiters = waiters.iter().copied().collect::<Vec<_>>();
+                    for entity in waiters {
+                        self.pending_chunk_sends.push_back((entity, coord));
+                    }
+                }
+                continue;
+            }
+
+            if self.pending_stream_chunk_tasks.contains_key(&coord) {
+                continue;
+            }
+
+            let has_waiters = self
+                .pending_stream_chunk_waiters
+                .get(&coord)
+                .is_some_and(|waiters| !waiters.is_empty());
+            if !has_waiters {
+                continue;
+            }
+
+            let world_root = self.world_root.clone();
+            let block_registry = Arc::clone(&self.block_registry);
+            let biome_registry = Arc::clone(&self.biome_registry);
+            let tree_registry = Arc::clone(&self.tree_registry);
+            let chunk_overrides = collect_chunk_overrides_snapshot(&self.block_overrides, coord);
+            let cfg = world_gen_config.clone();
+
+            let task = pool.spawn(async move {
+                let mut chunk = load_or_gen_chunk_async(
+                    world_root.clone(),
+                    coord,
+                    &block_registry,
+                    &biome_registry,
+                    &tree_registry,
+                    cfg,
+                )
+                .await;
+
+                apply_server_caves(&mut chunk, coord, cave_seed, border_id, water_id);
+                if water_id != 0 {
+                    flood_ocean_connected_water(&mut chunk, SEA_LEVEL, water_id);
+                }
+                apply_chunk_overrides_snapshot(&chunk_overrides, &mut chunk);
+                chunk.mark_all_dirty();
+
+                if let Err(error) = save_chunk_at_root_sync(world_root, coord, &chunk) {
+                    log::warn!("Failed to persist streamed chunk {:?}: {}", coord, error);
+                }
+
+                (coord, encode_chunk(&chunk))
+            });
+
+            self.pending_stream_chunk_tasks.insert(coord, task);
+        }
     }
 
     /// Runs the `collect_ready_stream_chunks` routine for collect ready stream chunks in the `state` module.
     pub fn collect_ready_stream_chunks(&mut self) {
         let mut finished = Vec::new();
         let mut ready_chunks = Vec::new();
-        let border_id = self.block_registry.id_opt("border_block").unwrap_or(0);
-        let water_id = self.block_registry.id_opt("water_block").unwrap_or(0);
-        let cave_seed = self.world_gen_config.seed;
 
         for (coord, task) in &mut self.pending_stream_chunk_tasks {
-            if let Some((ready_coord, mut chunk)) = future::block_on(future::poll_once(task)) {
-                apply_server_caves(&mut chunk, ready_coord, cave_seed, border_id, water_id);
-                if water_id != 0 {
-                    flood_ocean_connected_water(&mut chunk, SEA_LEVEL, water_id);
-                }
-                apply_block_overrides(&self.block_overrides, ready_coord, &mut chunk);
-                chunk.mark_all_dirty();
-                ready_chunks.push((ready_coord, encode_chunk(&chunk)));
+            if let Some((ready_coord, encoded)) = future::block_on(future::poll_once(task)) {
+                ready_chunks.push((ready_coord, encoded));
                 finished.push(*coord);
             }
         }
@@ -192,7 +254,12 @@ impl ServerState {
     pub fn invalidate_streamed_chunk(&mut self, coord: IVec2) {
         self.streamed_chunk_cache.remove(&coord);
         self.pending_stream_chunk_tasks.remove(&coord);
+        self.pending_stream_chunk_queued.remove(&coord);
+        self.pending_stream_chunk_queue
+            .retain(|queued| *queued != coord);
         self.pending_stream_chunk_waiters.remove(&coord);
+        self.pending_chunk_sends
+            .retain(|(_, queued)| *queued != coord);
     }
 
     /// Stores stream chunk for the `state` module.
@@ -369,8 +436,12 @@ fn server_cave_params(seed: i32) -> CaveParams {
     }
 }
 
-/// Applies block overrides for the `state` module.
-fn apply_block_overrides(overrides: &HashMap<[i32; 3], u16>, coord: IVec2, chunk: &mut ChunkData) {
+/// Collects block overrides for one chunk into local coordinates.
+fn collect_chunk_overrides_snapshot(
+    overrides: &HashMap<[i32; 3], u16>,
+    coord: IVec2,
+) -> Vec<(usize, usize, usize, u16)> {
+    let mut snapshot = Vec::new();
     for (location, block_id) in overrides {
         let world_y = location[1];
         if !(Y_MIN..=Y_MAX).contains(&world_y) {
@@ -382,10 +453,20 @@ fn apply_block_overrides(overrides: &HashMap<[i32; 3], u16>, coord: IVec2, chunk
             continue;
         }
 
-        let lx = local.x as usize;
-        let lz = local.y as usize;
-        let ly = world_y_to_local(world_y);
-        chunk.set(lx, ly, lz, *block_id);
+        snapshot.push((
+            local.x as usize,
+            world_y_to_local(world_y),
+            local.y as usize,
+            *block_id,
+        ));
+    }
+    snapshot
+}
+
+/// Applies a chunk-local override snapshot to chunk data.
+fn apply_chunk_overrides_snapshot(overrides: &[(usize, usize, usize, u16)], chunk: &mut ChunkData) {
+    for (lx, ly, lz, block_id) in overrides {
+        chunk.set(*lx, *ly, *lz, *block_id);
     }
 }
 

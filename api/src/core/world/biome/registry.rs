@@ -60,7 +60,9 @@ impl BiomeRegistry {
     }
 
     /// Registers the requested data for the `core::world::biome::registry` module.
-    pub fn register(&mut self, biome: Biome) {
+    pub fn register(&mut self, mut biome: Biome) {
+        biome.localized_name =
+            normalize_biome_localized_name(biome.localized_name.as_str(), biome.name.as_str());
         let key = biome.name.clone();
         self.by_name.insert(key, biome);
         self.rebuild_cache();
@@ -69,6 +71,17 @@ impl BiomeRegistry {
     /// Returns the requested data for the `core::world::biome::registry` module.
     pub fn get(&self, name: &str) -> Option<&Biome> {
         self.by_name.get(name)
+    }
+
+    /// Returns a biome by localized key (`name:key`) with case-insensitive matching.
+    pub fn get_by_localized_name(&self, localized_name: &str) -> Option<&Biome> {
+        let needle = localized_name.trim();
+        if needle.is_empty() {
+            return None;
+        }
+        self.by_name
+            .values()
+            .find(|biome| biome.localized_name.eq_ignore_ascii_case(needle))
     }
 
     /// Runs the `iter` routine for iter in the `core::world::biome::registry` module.
@@ -112,5 +125,20 @@ impl BiomeRegistry {
             .collect();
         self.ordered_names = names;
         self.weights = weights;
+    }
+}
+
+fn normalize_biome_localized_name(raw: &str, fallback_name: &str) -> String {
+    let raw = raw.trim();
+    let base = if raw.is_empty() {
+        fallback_name.trim()
+    } else {
+        raw
+    };
+    let lowered = base.to_ascii_lowercase().replace(' ', "_");
+    if lowered.contains(':') {
+        lowered
+    } else {
+        format!("oplexa:{}", lowered)
     }
 }

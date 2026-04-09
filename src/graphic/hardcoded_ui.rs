@@ -1,14 +1,15 @@
 use crate::core::config::{GlobalConfig, WorldGenConfig};
 use crate::core::debug::{
-    BuildInfo, DebugGridState, DebugOverlayState, SysStats, WorldInspectorState,
+    BuildInfo, ChunkDebugStats, DebugGridMode, DebugGridState, DebugOverlayState, RuntimePerfStats,
+    SysStats, WorldInspectorState,
 };
+use crate::core::entities::player::block_selection::SelectionState;
 use crate::core::entities::player::inventory::{
     InventorySlot, PLAYER_INVENTORY_SLOTS, PLAYER_INVENTORY_STACK_MAX, PlayerInventory,
 };
-use crate::core::entities::player::{GameMode, GameModeState, Player};
+use crate::core::entities::player::{FpsController, GameMode, GameModeState, Player};
 use crate::core::events::ui_events::{
     ConnectToServerRequest, CraftHandCraftedRequest, DisconnectFromServerRequest, DropItemRequest,
-    OpenToLanRequest, StopLanHostRequest,
 };
 use crate::core::inventory::creative_panel::{
     CREATIVE_PANEL_COLUMNS, CREATIVE_PANEL_PAGE_SIZE, CreativePanelState,
@@ -28,11 +29,19 @@ use crate::core::states::world_gen::{LoadingPhase, LoadingProgress};
 use crate::core::ui::{HOTBAR_SLOTS, HotbarSelectionState, UiInteractionState};
 use crate::core::world::biome::func::dominant_biome_at_p_chunks;
 use crate::core::world::biome::registry::BiomeRegistry;
-use crate::core::world::block::{BlockRegistry, SelectedBlock};
-use crate::core::world::chunk::ChunkMap;
-use crate::core::world::chunk_dimension::{CX, CZ};
+use crate::core::world::block::{BlockRegistry, SelectedBlock, VOXEL_SIZE};
+use crate::core::world::chunk::{CaveTracker, ChunkMap, LoadCenter};
+use crate::core::world::chunk_dimension::{CX, CZ, SEC_COUNT, world_to_chunk_xz};
 use crate::core::world::fluid::{FluidMap, WaterMeshIndex};
 use crate::core::world::save::{RegionCache, WorldSave, default_saves_root};
+use crate::generator::chunk::cave::cave_builder::CaveJobs;
+use crate::generator::chunk::chunk_builder::{
+    ChunkStageTelemetry, ColliderBacklog, PendingColliderBuild,
+};
+use crate::generator::chunk::chunk_struct::{MeshBacklog, PendingGen, PendingMesh};
+use crate::generator::chunk::water_builder::{
+    PendingWaterLoad, PendingWaterMesh, WaterMeshBacklog, WaterMeshingTodo, WaterReadySet,
+};
 use crate::utils::key_utils::convert;
 use api::core::network::config::NetworkSettings;
 use api::core::network::discovery::{LanDiscoveryClient, LanServerInfo};
@@ -40,13 +49,15 @@ use api::utils::v_ram_utils;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::render::renderer::RenderAdapterInfo;
-use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
-use bevy_extended_ui::styles::CssID;
+use bevy::tasks::{AsyncComputeTaskPool, ComputeTaskPool, IoTaskPool};
+use bevy::window::{CursorGrabMode, CursorIcon, CursorOptions, PrimaryWindow, SystemCursorIcon};
+use bevy_extended_ui::styles::{CssClass, CssID};
 use bevy_extended_ui::widgets::{
     BindToID, Button, Div, Img, InputField, InputType, InputValue, Paragraph, ProgressBar,
     Scrollbar, UIGenID, UIWidgetState,
 };
 use bevy_extended_ui::{ExtendedUiConfiguration, ExtendedUiPlugin, ImageCache};
+use lightyear::prelude::{LocalTimeline, Tick};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -102,12 +113,12 @@ const MULTIPLAYER_CONNECT_TEXT_ID: &str = "multi-player-connect-text";
 const MULTIPLAYER_CONNECT_OK_ID: &str = "multi-player-connect-ok";
 
 const PAUSE_PLAY_ID: &str = "pause-menu-play";
-const PAUSE_CONNECT_ID: &str = "pause-menu-connect";
 const PAUSE_SETTINGS_ID: &str = "pause-menu-settings";
 const PAUSE_CLOSE_ID: &str = "pause-menu-close";
 
 const HUD_SLOT_PREFIX: &str = "hud-hotbar-slot-";
 const HUD_SLOT_BADGE_PREFIX: &str = "hud-hotbar-slot-badge-";
+const HUD_SELECTED_TOOLTIP_ID: &str = "hud-selected-item-tooltip";
 
 const PLAYER_INVENTORY_TOTAL_ID: &str = "player-inventory-total";
 const PLAYER_INVENTORY_FRAME_PREFIX: &str = "player-inventory-frame-";
@@ -119,6 +130,7 @@ const HAND_CRAFTED_RESULT_BADGE_ID: &str = "hand-crafted-result-badge";
 const INVENTORY_TOOLTIP_NAME_ID: &str = "inventory-tooltip-name";
 const INVENTORY_TOOLTIP_KEY_ID: &str = "inventory-tooltip-key";
 const INVENTORY_CURSOR_BADGE_ID: &str = "inventory-cursor-badge";
+const INVENTORY_TRASH_BUTTON_ID: &str = "inventory-trash-button";
 const RECIPE_PREVIEW_TITLE_ID: &str = "recipe-preview-title";
 const RECIPE_PREVIEW_INPUT_FRAME_PREFIX: &str = "recipe-preview-input-frame-";
 const RECIPE_PREVIEW_INPUT_BADGE_PREFIX: &str = "recipe-preview-input-badge-";
@@ -133,16 +145,23 @@ const CREATIVE_PANEL_SLOT_PREFIX: &str = "creative-panel-slot-";
 const CREATIVE_RECIPE_HINT_ID: &str = "creative-recipe-hint";
 
 const WORLD_GEN_PROGRESS_ID: &str = "world-gen-progress";
+const WORLD_GEN_CHUNKS_ID: &str = "world-gen-chunks";
 
 const ID_BUILD: &str = "debug-build";
 const ID_CPU_NAME: &str = "debug-cpu-name";
 const ID_GPU_NAME: &str = "debug-gpu-name";
+const ID_GPU_LOAD: &str = "debug-gpu-load";
 const ID_VRAM: &str = "debug-vram";
 const ID_BIOME: &str = "debug-biome";
+const ID_BIOME_CLIMATE: &str = "debug-biome-climate";
 const ID_GLOBAL_CPU: &str = "debug-global-cpu";
 const ID_APP_CPU: &str = "debug-app-cpu";
 const ID_APP_MEM: &str = "debug-app-mem";
+const ID_FPS: &str = "debug-fps";
+const ID_TICK_SPEED: &str = "debug-tick-speed";
+const ID_LOOK_BLOCK: &str = "debug-look-block";
 const ID_PLAYER_POS: &str = "debug-player-pos";
+const ID_CHUNK_COORD: &str = "debug-chunk-coord";
 const ID_GRID: &str = "debug-grid";
 const ID_INSPECTOR: &str = "debug-world-inspector";
 const ID_OVERLAY: &str = "debug-overlay";
@@ -216,6 +235,9 @@ struct WorldUnloadRoot;
 /// Represents hud root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct HudRoot;
+/// Represents hotbar selection tooltip text used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HotbarSelectionTooltipText;
 /// Represents player inventory root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct PlayerInventoryRoot;
@@ -275,6 +297,7 @@ enum UiTextTone {
     CardPing,
     Normal,
     Darker,
+    HotbarTooltip,
     TooltipName,
     TooltipKey,
 }
@@ -305,6 +328,59 @@ impl Default for WorldGenUiAnimation {
     fn default() -> Self {
         Self { displayed_pct: 0.0 }
     }
+}
+
+/// Represents world generation progress log state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Clone)]
+struct WorldGenProgressLogState {
+    world_sequence: u32,
+    last_logged_percent: Option<u8>,
+    last_phase: LoadingPhase,
+    phase_peak_percent: f32,
+    phase_peak_chunks: usize,
+    timer: Timer,
+}
+
+impl Default for WorldGenProgressLogState {
+    /// Runs the `default` routine for default in the `graphic::hardcoded_ui` module.
+    fn default() -> Self {
+        Self {
+            world_sequence: 0,
+            last_logged_percent: None,
+            last_phase: LoadingPhase::BaseGen,
+            phase_peak_percent: 0.0,
+            phase_peak_chunks: 0,
+            timer: Timer::from_seconds(0.5, TimerMode::Repeating),
+        }
+    }
+}
+
+/// Represents hotbar selection tooltip state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Clone)]
+struct HotbarSelectionTooltipState {
+    visible: bool,
+    text: String,
+    last_selected_index: usize,
+    timer: Timer,
+}
+
+impl Default for HotbarSelectionTooltipState {
+    /// Runs the `default` routine for default in the `graphic::hardcoded_ui` module.
+    fn default() -> Self {
+        Self {
+            visible: false,
+            text: String::new(),
+            last_selected_index: 0,
+            timer: Timer::from_seconds(1.3, TimerMode::Once),
+        }
+    }
+}
+
+/// Represents runtime tick sampling state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Clone, Default)]
+struct RuntimePerfSampleState {
+    last_local_tick: Option<Tick>,
+    last_sample_real_secs: Option<f64>,
 }
 
 /// Represents world unload ui state used by the `graphic::hardcoded_ui` module.
@@ -371,6 +447,14 @@ struct CreativePanelUiState {
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct DebugVramState {
     bytes: Option<u64>,
+    source: Option<&'static str>,
+    scope: Option<&'static str>,
+}
+
+/// Represents debug gpu load state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+struct DebugGpuLoadState {
+    percent: Option<f32>,
     source: Option<&'static str>,
     scope: Option<&'static str>,
 }
@@ -549,7 +633,6 @@ enum MultiplayerAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseMenuAction {
     BackToGame,
-    OpenToLan,
     Settings,
     ExitToMenu,
 }
@@ -584,11 +667,17 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<CreativePanelState>()
             .init_resource::<ChatUiState>()
             .init_resource::<DebugVramState>()
+            .init_resource::<DebugGpuLoadState>()
             .init_resource::<SinglePlayerUiState>()
             .init_resource::<MultiplayerUiState>()
             .init_resource::<DebugOverlayState>()
             .init_resource::<DebugGridState>()
             .init_resource::<SysStats>()
+            .init_resource::<RuntimePerfStats>()
+            .init_resource::<RuntimePerfSampleState>()
+            .init_resource::<HotbarSelectionTooltipState>()
+            .init_resource::<ChunkDebugStats>()
+            .init_resource::<WorldGenProgressLogState>()
             .init_resource::<ActiveInventorySavePath>()
             .insert_non_send_resource(ServerProbeRuntime::default())
             .add_plugins(ExtendedUiPlugin)
@@ -616,7 +705,14 @@ impl Plugin for HardcodedUiPlugin {
                     style_slot_count_badges,
                 ),
             )
-            .add_systems(PostUpdate, style_button_icons)
+            .add_systems(
+                PostUpdate,
+                (
+                    style_button_icons,
+                    style_input_placeholder_and_cursor,
+                    enforce_text_cursor_for_input_hover,
+                ),
+            )
             .add_systems(PostUpdate, suppress_stale_scrollbars)
             .add_systems(Last, style_scroll_div_contents)
             .add_systems(
@@ -695,6 +791,7 @@ impl Plugin for HardcodedUiPlugin {
                     load_inventory_for_world_entry,
                     reset_world_gen_ui_animation,
                     show_world_gen_ui,
+                    log_task_pool_worker_counts_on_world_start,
                 )
                     .chain(),
             )
@@ -739,8 +836,10 @@ impl Plugin for HardcodedUiPlugin {
                 Update,
                 (
                     cycle_hotbar_with_scroll,
+                    select_hotbar_with_number_keys,
                     drop_selected_hotbar_item,
                     sync_hotbar_selected_block,
+                    track_hotbar_selection_tooltip,
                     sync_hud_hotbar_ui,
                 )
                     .run_if(in_state(AppState::InGame(InGameStates::Game))),
@@ -821,6 +920,8 @@ impl Plugin for HardcodedUiPlugin {
                 Update,
                 (
                     toggle_system_last_ui,
+                    sample_runtime_perf_stats,
+                    sample_chunk_debug_stats,
                     refresh_sys_stats,
                     sync_system_last_ui,
                 )
