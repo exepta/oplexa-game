@@ -103,7 +103,7 @@ fn block_break_handler(
         return;
     };
 
-    let id_now = get_block_world(&chunk_map, hit.block_pos);
+    let id_now = hit.block_id;
     if id_now == 0 {
         state.target = None;
         return;
@@ -151,8 +151,9 @@ fn block_break_handler(
     }
 
     let world_loc = hit.block_pos;
-    if let Some(mut access) = world_access_mut(&mut chunk_map, world_loc) {
-        access.set(0);
+    if !remove_hit_block_occupant(&mut chunk_map, world_loc, id_now, hit.is_stacked) {
+        state.target = None;
+        return;
     }
     mark_dirty_block_and_neighbors(&mut chunk_map, world_loc, &mut ev_dirty);
 
@@ -185,6 +186,14 @@ fn block_break_handler(
         drops_item,
     });
 
+    remove_unsupported_props_above(
+        &mut chunk_map,
+        &registry,
+        world_loc,
+        &mut ev_dirty,
+        &mut break_ev,
+    );
+
     if !multiplayer_connected && drops_item {
         spawn_world_item_for_block_break(
             &mut commands,
@@ -198,6 +207,48 @@ fn block_break_handler(
     }
 
     state.target = None;
+}
+
+fn remove_unsupported_props_above(
+    chunk_map: &mut ChunkMap,
+    registry: &BlockRegistry,
+    support_loc: IVec3,
+    ev_dirty: &mut MessageWriter<SubChunkNeedRemeshEvent>,
+    break_ev: &mut MessageWriter<BlockBreakByPlayerEvent>,
+) {
+    let mut world_loc = support_loc + IVec3::Y;
+    while world_loc.y <= Y_MAX {
+        let prop_id = get_block_world(chunk_map, world_loc);
+        if prop_id == 0 || !registry.is_prop(prop_id) {
+            break;
+        }
+
+        let below_id = get_block_world(chunk_map, world_loc + IVec3::NEG_Y);
+        if registry.prop_allows_ground(prop_id, below_id) {
+            break;
+        }
+
+        if let Some(mut access) = world_access_mut(chunk_map, world_loc) {
+            access.set(0);
+        }
+        mark_dirty_block_and_neighbors(chunk_map, world_loc, ev_dirty);
+
+        let (chunk_coord, l) = world_to_chunk_xz(world_loc.x, world_loc.z);
+        let ly = (world_loc.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+        break_ev.write(BlockBreakByPlayerEvent {
+            chunk_coord,
+            location: world_loc,
+            chunk_x: l.x as u8,
+            chunk_y: ly as u16,
+            chunk_z: l.y as u8,
+            block_id: prop_id,
+            drop_item_id: 0,
+            block_name: registry.name_opt(prop_id).unwrap_or("").to_string(),
+            drops_item: false,
+        });
+
+        world_loc += IVec3::Y;
+    }
 }
 
 /// Runs the `block_place_handler` routine for block place handler in the `logic::events::block_event_handler` module.
@@ -248,8 +299,14 @@ fn block_place_handler(
     let Some(hit) = sel.hit else {
         return;
     };
-
-    let world_pos = hit.place_pos;
+    let mut place_id = resolve_placement_block_id(id, hit.face, &registry);
+    let mut world_pos = hit.place_pos;
+    let mut place_into_stacked = false;
+    if let Some((stack_pos, stack_id)) = try_resolve_slab_stack(id, hit, &chunk_map, &registry) {
+        world_pos = stack_pos;
+        place_id = stack_id;
+        place_into_stacked = true;
+    }
     let (chunk_coord, l) = world_to_chunk_xz(world_pos.x, world_pos.z);
     let lx = l.x.clamp(0, (CX as i32 - 1) as u32) as usize;
     let lz = l.y.clamp(0, (CZ as i32 - 1) as u32) as usize;
@@ -258,16 +315,23 @@ fn block_place_handler(
     let can_place = chunk_map
         .chunks
         .get(&chunk_coord)
-        .map(|ch| ch.get(lx, ly, lz) == 0)
+        .map(|ch| {
+            let current = ch.get(lx, ly, lz);
+            if place_into_stacked {
+                current != 0 && ch.get_stacked(lx, ly, lz) == 0
+            } else {
+                current == 0
+            }
+        })
         .unwrap_or(false);
     if !can_place {
         return;
     }
 
-    if registry.is_prop(id) {
+    if registry.is_prop(place_id) {
         let ground_pos = world_pos + IVec3::NEG_Y;
         let ground_id = get_block_world(&chunk_map, ground_pos);
-        if !registry.prop_allows_ground(id, ground_id) {
+        if !registry.prop_allows_ground(place_id, ground_id) {
             return;
         }
     }
@@ -277,7 +341,11 @@ fn block_place_handler(
     }
 
     if let Some(mut access) = world_access_mut(&mut chunk_map, world_pos) {
-        access.set(id);
+        if place_into_stacked {
+            access.set_stacked(place_id);
+        } else {
+            access.set(place_id);
+        }
     }
 
     if !creative_mode {
@@ -291,12 +359,235 @@ fn block_place_handler(
 
     mark_dirty_block_and_neighbors(&mut chunk_map, world_pos, &mut ev_dirty);
 
-    let name = registry.name_opt(id).unwrap_or("").to_string();
+    let name = registry.name_opt(place_id).unwrap_or("").to_string();
     place_ev.write(BlockPlaceByPlayerEvent {
         location: world_pos,
-        block_id: id,
+        block_id: place_id,
         block_name: name,
     });
+}
+
+#[inline]
+fn resolve_placement_block_id(requested_id: BlockId, face: Face, registry: &BlockRegistry) -> BlockId {
+    let Some(name) = registry.name_opt(requested_id) else {
+        return requested_id;
+    };
+    let Some(prefix) = slab_family_prefix(name) else {
+        return requested_id;
+    };
+
+    let variant_name = match face {
+        Face::Top => format!("{prefix}_slab_block"),
+        Face::Bottom => format!("{prefix}_slab_top_block"),
+        Face::East => format!("{prefix}_slab_west_block"),
+        Face::West => format!("{prefix}_slab_east_block"),
+        Face::South => format!("{prefix}_slab_north_block"),
+        Face::North => format!("{prefix}_slab_south_block"),
+    };
+    registry.id_opt(variant_name.as_str()).unwrap_or(requested_id)
+}
+
+#[inline]
+fn slab_family_prefix(name: &str) -> Option<&str> {
+    const SUFFIXES: [&str; 6] = [
+        "_slab_block",
+        "_slab_top_block",
+        "_slab_north_block",
+        "_slab_south_block",
+        "_slab_east_block",
+        "_slab_west_block",
+    ];
+
+    SUFFIXES
+        .iter()
+        .find_map(|suffix| name.strip_suffix(suffix))
+}
+
+fn try_resolve_slab_stack(
+    selected_id: BlockId,
+    hit: crate::core::entities::player::block_selection::BlockHit,
+    chunk_map: &ChunkMap,
+    registry: &BlockRegistry,
+) -> Option<(IVec3, BlockId)> {
+    let selected_name = registry.name_opt(selected_id)?;
+    let slab_prefix = slab_family_prefix(selected_name)?;
+    let same_variant = slab_variant_from_face_same_block(hit.face);
+    let adjacent_variant = slab_variant_from_face_adjacent_block(hit.face);
+
+    // Case 1: clicked block is a slab and can receive the complementary half.
+    let hit_existing_id = get_block_world(chunk_map, hit.block_pos);
+    let hit_stacked_id = get_stacked_block_world(chunk_map, hit.block_pos);
+    if slab_pair_can_stack(
+        hit_existing_id,
+        hit_stacked_id,
+        same_variant,
+        registry,
+    ) && let Some(stack_id) = slab_block_id_for_variant(slab_prefix, same_variant, registry)
+    {
+        return Some((hit.block_pos, stack_id));
+    }
+
+    // Case 2: place target is a slab and can receive the complementary half.
+    let place_existing_id = get_block_world(chunk_map, hit.place_pos);
+    let place_stacked_id = get_stacked_block_world(chunk_map, hit.place_pos);
+    if slab_pair_can_stack(
+        place_existing_id,
+        place_stacked_id,
+        adjacent_variant,
+        registry,
+    ) && let Some(stack_id) = slab_block_id_for_variant(slab_prefix, adjacent_variant, registry)
+    {
+        return Some((hit.place_pos, stack_id));
+    }
+
+    None
+}
+
+#[inline]
+fn slab_pair_can_stack(
+    existing_id: BlockId,
+    existing_stacked_id: BlockId,
+    incoming_variant: SlabVariant,
+    registry: &BlockRegistry,
+) -> bool {
+    if existing_id == 0 {
+        return false;
+    }
+    if existing_stacked_id != 0 {
+        return false;
+    }
+    let Some(existing_name) = registry.name_opt(existing_id) else {
+        return false;
+    };
+    let Some(existing_variant) = slab_variant_from_name(existing_name) else {
+        return false;
+    };
+    slabs_are_complementary(existing_variant, incoming_variant)
+}
+
+#[inline]
+fn slab_variant_from_face_adjacent_block(face: Face) -> SlabVariant {
+    match face {
+        Face::Top => SlabVariant::Bottom,
+        Face::Bottom => SlabVariant::Top,
+        Face::East => SlabVariant::West,
+        Face::West => SlabVariant::East,
+        Face::South => SlabVariant::North,
+        Face::North => SlabVariant::South,
+    }
+}
+
+#[inline]
+fn slab_variant_from_face_same_block(face: Face) -> SlabVariant {
+    match face {
+        Face::Top => SlabVariant::Top,
+        Face::Bottom => SlabVariant::Bottom,
+        Face::East => SlabVariant::East,
+        Face::West => SlabVariant::West,
+        Face::South => SlabVariant::South,
+        Face::North => SlabVariant::North,
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SlabVariant {
+    Bottom,
+    Top,
+    North,
+    South,
+    East,
+    West,
+}
+
+#[inline]
+fn slab_variant_from_name(name: &str) -> Option<SlabVariant> {
+    if name.ends_with("_slab_block") {
+        return Some(SlabVariant::Bottom);
+    }
+    if name.ends_with("_slab_top_block") {
+        return Some(SlabVariant::Top);
+    }
+    if name.ends_with("_slab_north_block") {
+        return Some(SlabVariant::North);
+    }
+    if name.ends_with("_slab_south_block") {
+        return Some(SlabVariant::South);
+    }
+    if name.ends_with("_slab_east_block") {
+        return Some(SlabVariant::East);
+    }
+    if name.ends_with("_slab_west_block") {
+        return Some(SlabVariant::West);
+    }
+    None
+}
+
+#[inline]
+fn slab_block_id_for_variant(
+    slab_prefix: &str,
+    variant: SlabVariant,
+    registry: &BlockRegistry,
+) -> Option<BlockId> {
+    let name = match variant {
+        SlabVariant::Bottom => format!("{slab_prefix}_slab_block"),
+        SlabVariant::Top => format!("{slab_prefix}_slab_top_block"),
+        SlabVariant::North => format!("{slab_prefix}_slab_north_block"),
+        SlabVariant::South => format!("{slab_prefix}_slab_south_block"),
+        SlabVariant::East => format!("{slab_prefix}_slab_east_block"),
+        SlabVariant::West => format!("{slab_prefix}_slab_west_block"),
+    };
+    registry.id_opt(name.as_str())
+}
+
+#[inline]
+fn slabs_are_complementary(a: SlabVariant, b: SlabVariant) -> bool {
+    matches!(
+        (a, b),
+        (SlabVariant::Bottom, SlabVariant::Top)
+            | (SlabVariant::Top, SlabVariant::Bottom)
+            | (SlabVariant::North, SlabVariant::South)
+            | (SlabVariant::South, SlabVariant::North)
+            | (SlabVariant::East, SlabVariant::West)
+            | (SlabVariant::West, SlabVariant::East)
+    )
+}
+
+fn remove_hit_block_occupant(
+    chunk_map: &mut ChunkMap,
+    world_loc: IVec3,
+    hit_id: BlockId,
+    hit_is_stacked: bool,
+) -> bool {
+    let Some(mut access) = world_access_mut(chunk_map, world_loc) else {
+        return false;
+    };
+
+    let primary = access.get();
+    let stacked = access.get_stacked();
+
+    if hit_is_stacked {
+        if stacked == 0 {
+            return false;
+        }
+        access.set_stacked(0);
+        return true;
+    }
+
+    if primary != hit_id {
+        if stacked == hit_id {
+            access.set_stacked(0);
+            return true;
+        }
+        return false;
+    }
+
+    if stacked != 0 {
+        access.set(stacked);
+        access.set_stacked(0);
+    } else {
+        access.set(0);
+    }
+    true
 }
 
 /// Checks whether place from selected slot in the `logic::events::block_event_handler` module.

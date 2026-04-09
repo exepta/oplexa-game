@@ -1,5 +1,6 @@
 {
-  "name": "golden_shower_log_block",
+  "localized_name": "golden_shower_log_block",
+  "name": "Golden Shower Log",
   "texture_dir": "textures/blocks/golden_shower_log",
   "texture": {
     "vertical": "log_top",

@@ -1,5 +1,6 @@
 {
-  "name": "grass_block",
+  "localized_name": "grass_block",
+  "name": "Grass",
   "texture_dir": "textures/blocks/grass",
   "texture": {
     "top": "grass_top",

@@ -1325,13 +1325,17 @@ fn receive_world_messages(
                 for z in 0..CZ {
                     for x in 0..CX {
                         let id = chunk.get(x, y, z);
+                        let stacked_id = chunk.get_stacked(x, y, z);
                         let local_id = remap_server_block_id(&block_remap, registry, id);
+                        let local_stacked_id =
+                            remap_server_block_id(&block_remap, registry, stacked_id);
                         if water_local_id != 0 && local_id == water_local_id {
                             chunk.set(x, y, z, 0);
                             fluid_chunk.set(x, y, z, true);
                         } else {
                             chunk.set(x, y, z, local_id);
                         }
+                        chunk.set_stacked(x, y, z, local_stacked_id);
                     }
                 }
             }
@@ -1975,8 +1979,13 @@ fn apply_remote_block_break(
 
     let mut changed = false;
     if let Some(mut access) = world_access_mut(chunk_map, world_pos) {
-        if access.get() != 0 {
-            access.set(0);
+        if access.get() != 0 || access.get_stacked() != 0 {
+            if access.get_stacked() != 0 {
+                access.set(access.get_stacked());
+                access.set_stacked(0);
+            } else {
+                access.set(0);
+            }
             changed = true;
         }
     }
@@ -2022,7 +2031,14 @@ fn apply_remote_block_place(
     let is_fluid = registry.is_fluid(block_id);
 
     if let Some(mut access) = world_access_mut(chunk_map, world_pos) {
-        access.set(if is_fluid { 0 } else { block_id });
+        if is_fluid {
+            access.set(0);
+            access.set_stacked(0);
+        } else if can_stack_remote_slab(access.get(), access.get_stacked(), block_id, registry) {
+            access.set_stacked(block_id);
+        } else {
+            access.set(block_id);
+        }
         mark_dirty_block_and_neighbors(chunk_map, world_pos, ev_dirty);
     }
 
@@ -2035,6 +2051,55 @@ fn apply_remote_block_place(
     } else {
         fluid_chunk.set(lx, ly, lz, false);
     }
+}
+
+fn can_stack_remote_slab(
+    existing_id: u16,
+    stacked_id: u16,
+    incoming_id: u16,
+    registry: &BlockRegistry,
+) -> bool {
+    if existing_id == 0 || stacked_id != 0 {
+        return false;
+    }
+    let Some(existing_name) = registry.name_opt(existing_id) else {
+        return false;
+    };
+    let Some(incoming_name) = registry.name_opt(incoming_id) else {
+        return false;
+    };
+    let Some(existing_variant) = slab_variant_from_name_sync(existing_name) else {
+        return false;
+    };
+    let Some(incoming_variant) = slab_variant_from_name_sync(incoming_name) else {
+        return false;
+    };
+    matches!(
+        (existing_variant, incoming_variant),
+        (0, 1) | (1, 0) | (2, 3) | (3, 2) | (4, 5) | (5, 4)
+    )
+}
+
+fn slab_variant_from_name_sync(name: &str) -> Option<u8> {
+    if name.ends_with("_slab_block") {
+        return Some(0);
+    }
+    if name.ends_with("_slab_top_block") {
+        return Some(1);
+    }
+    if name.ends_with("_slab_north_block") {
+        return Some(2);
+    }
+    if name.ends_with("_slab_south_block") {
+        return Some(3);
+    }
+    if name.ends_with("_slab_east_block") {
+        return Some(4);
+    }
+    if name.ends_with("_slab_west_block") {
+        return Some(5);
+    }
+    None
 }
 
 /// Spawns multiplayer drop for the `client` module.

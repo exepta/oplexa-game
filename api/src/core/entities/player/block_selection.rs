@@ -22,6 +22,10 @@ pub struct SelectionState {
 pub struct BlockHit {
     /// World-space integer coordinates of the hit block.
     pub block_pos: IVec3,
+    /// Block id of the actually hit occupant.
+    pub block_id: u16,
+    /// True when the hit came from the stacked (secondary) occupant.
+    pub is_stacked: bool,
     /// The face of the hit block that was intersected.
     pub face: Face,
     /// Neighbor cell where a new block would be placed when clicking this face.

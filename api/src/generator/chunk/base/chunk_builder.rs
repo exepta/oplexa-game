@@ -1310,8 +1310,7 @@ fn collect_meshed_subchunks(
                 continue;
             }
 
-            // Fluids (e.g. water) are rendered but must not become solid colliders.
-            if reg.is_solid_for_collision(bid) {
+            if reg.collision_uses_render_mesh(bid) {
                 let base = phys_positions.len() as u32;
                 phys_positions.extend_from_slice(&mb.pos);
                 phys_indices.extend(mb.idx.iter().map(|i| base + *i));
@@ -1342,6 +1341,16 @@ fn collect_meshed_subchunks(
                 .mesh_index
                 .map
                 .insert((coord, sub as u8, bid), ent);
+        }
+        if let Some(chunk) = apply_state.chunk_map.chunks.get(&coord) {
+            append_custom_box_colliders_for_subchunk(
+                chunk,
+                &reg,
+                sub,
+                VOXEL_SIZE,
+                &mut phys_positions,
+                &mut phys_indices,
+            );
         }
 
         // ----- Physics collider handling -----
@@ -1829,16 +1838,17 @@ fn schedule_remesh_tasks_from_events(
             by_chunk.entry(e.coord).or_default().push(e.sub);
         }
     }
+    for subs in by_chunk.values_mut() {
+        subs.sort_unstable();
+        subs.dedup();
+    }
     let total_sub_events = by_chunk.values().map(Vec::len).sum::<usize>();
     let can_run_immediate = in_game_immediate && total_sub_events <= 2 && pending_mesh.0.len() < 4;
     if can_run_immediate {
-        immediate_budget = 1;
+        immediate_budget = total_sub_events.max(1);
     }
 
-    for (coord, mut subs) in by_chunk {
-        subs.sort_unstable();
-        subs.dedup();
-
+    for (coord, subs) in by_chunk {
         let Some(chunk) = chunk_map.chunks.get(&coord) else {
             for sub in subs {
                 let key = (coord, sub);
@@ -2140,6 +2150,98 @@ fn collect_chunk_save_tasks(mut pending: ResMut<PendingChunkSave>) {
     for coord in done {
         pending.0.remove(&coord);
     }
+}
+
+fn append_custom_box_colliders_for_subchunk(
+    chunk: &ChunkData,
+    reg: &BlockRegistry,
+    sub: usize,
+    voxel_size: f32,
+    positions: &mut Vec<[f32; 3]>,
+    indices: &mut Vec<u32>,
+) {
+    let y0 = sub * SEC_H;
+    let y1 = (y0 + SEC_H).min(CY);
+    if y0 >= y1 {
+        return;
+    }
+
+    for ly in y0..y1 {
+        for z in 0..CZ {
+            for x in 0..CX {
+                let id = chunk.get(x, ly, z);
+                let Some((size_m, offset_m)) = reg.collision_box(id) else {
+                    continue;
+                };
+                let center = Vec3::new(
+                    (x as f32 + 0.5 + offset_m[0]) * voxel_size,
+                    (ly as f32 + 0.5 + offset_m[1]) * voxel_size,
+                    (z as f32 + 0.5 + offset_m[2]) * voxel_size,
+                );
+                let half = Vec3::new(
+                    size_m[0] * voxel_size * 0.5,
+                    size_m[1] * voxel_size * 0.5,
+                    size_m[2] * voxel_size * 0.5,
+                )
+                .max(Vec3::splat(0.001));
+                append_box_collider_triangles(center, half, positions, indices);
+            }
+        }
+    }
+
+    for ly in y0..y1 {
+        for z in 0..CZ {
+            for x in 0..CX {
+                let id = chunk.get_stacked(x, ly, z);
+                let Some((size_m, offset_m)) = reg.collision_box(id) else {
+                    continue;
+                };
+                let center = Vec3::new(
+                    (x as f32 + 0.5 + offset_m[0]) * voxel_size,
+                    (ly as f32 + 0.5 + offset_m[1]) * voxel_size,
+                    (z as f32 + 0.5 + offset_m[2]) * voxel_size,
+                );
+                let half = Vec3::new(
+                    size_m[0] * voxel_size * 0.5,
+                    size_m[1] * voxel_size * 0.5,
+                    size_m[2] * voxel_size * 0.5,
+                )
+                .max(Vec3::splat(0.001));
+                append_box_collider_triangles(center, half, positions, indices);
+            }
+        }
+    }
+}
+
+fn append_box_collider_triangles(
+    center: Vec3,
+    half: Vec3,
+    positions: &mut Vec<[f32; 3]>,
+    indices: &mut Vec<u32>,
+) {
+    const BOX_INDICES: [u32; 36] = [
+        0, 1, 2, 0, 2, 3, // -Z
+        4, 6, 5, 4, 7, 6, // +Z
+        0, 3, 7, 0, 7, 4, // -X
+        1, 5, 6, 1, 6, 2, // +X
+        3, 2, 6, 3, 6, 7, // +Y
+        0, 4, 5, 0, 5, 1, // -Y
+    ];
+
+    let min = center - half;
+    let max = center + half;
+    let base = positions.len() as u32;
+    positions.extend_from_slice(&[
+        [min.x, min.y, min.z],
+        [max.x, min.y, min.z],
+        [max.x, max.y, min.z],
+        [min.x, max.y, min.z],
+        [min.x, min.y, max.z],
+        [max.x, min.y, max.z],
+        [max.x, max.y, max.z],
+        [min.x, max.y, max.z],
+    ]);
+    indices.extend(BOX_INDICES.iter().map(|idx| base + *idx));
 }
 
 /// Builds trimesh collider for the `generator::chunk::chunk_builder` module.

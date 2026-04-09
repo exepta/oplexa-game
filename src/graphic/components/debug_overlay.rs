@@ -215,7 +215,7 @@ fn sync_system_last_ui(
     world_gen_config: Res<WorldGenConfig>,
     biomes: Res<BiomeRegistry>,
     selection_state: Res<SelectionState>,
-    chunk_map: Res<ChunkMap>,
+    _chunk_map: Res<ChunkMap>,
     block_registry: Res<BlockRegistry>,
     player: Query<(&Transform, Option<&FpsController>), With<Player>>,
     mut paragraphs: Query<(&CssID, &mut Paragraph)>,
@@ -308,11 +308,14 @@ fn sync_system_last_ui(
     let looked_block_name = selection_state
         .hit
         .map(|hit| {
-            let id = crate::core::world::block::get_block_world(&chunk_map, hit.block_pos);
+            let id = hit.block_id;
             if id == 0 {
                 "air".to_string()
             } else {
-                block_registry.name_opt(id).unwrap_or("unknown").to_string()
+                block_registry
+                    .display_name_opt(id)
+                    .unwrap_or("unknown")
+                    .to_string()
             }
         })
         .unwrap_or_else(|| "n/a".to_string());

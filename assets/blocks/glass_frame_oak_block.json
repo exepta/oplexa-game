@@ -1,5 +1,6 @@
 {
-  "name": "glass_frame_oak_block",
+  "localized_name": "glass_frame_oak_block",
+  "name": "Framed Oak Glass",
   "texture_dir": "textures/blocks/glass_oak_frame",
   "texture": {
     "all": "glass"

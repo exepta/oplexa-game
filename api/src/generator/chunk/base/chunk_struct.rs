@@ -35,6 +35,7 @@ pub struct RegLiteEntry {
     pub fluid: bool,
     pub foliage: bool,
     pub prop: Option<PropDefinition>,
+    pub custom_mesh_box: Option<([f32; 3], [f32; 3])>,
 }
 /// Represents reg lite used by the `generator::chunk::chunk_struct` module.
 #[derive(Clone)]
@@ -63,6 +64,16 @@ impl RegLite {
                     fluid: reg.def(id).stats.fluid,
                     foliage: reg.def(id).stats.foliage,
                     prop: reg.def(id).prop.clone(),
+                    custom_mesh_box: if reg.def(id).prop.is_none() {
+                        match reg.def(id).collider.kind {
+                            BlockColliderKind::Box => {
+                                Some((reg.def(id).collider.size_m, reg.def(id).collider.offset_m))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    },
                 },
             );
         }
@@ -100,6 +111,13 @@ impl RegLite {
     #[inline]
     pub fn prop(&self, id: BlockId) -> Option<&PropDefinition> {
         self.map.get(&id).and_then(|entry| entry.prop.as_ref())
+    }
+    /// Runs the `custom_mesh_box` routine for custom mesh box in the `generator::chunk::chunk_struct` module.
+    #[inline]
+    pub fn custom_mesh_box(&self, id: BlockId) -> Option<([f32; 3], [f32; 3])> {
+        self.map
+            .get(&id)
+            .and_then(|entry| entry.custom_mesh_box.as_ref().copied())
     }
     /// Runs the `is_crossed_prop` routine for is crossed prop in the `generator::chunk::chunk_struct` module.
     #[inline]

@@ -1,5 +1,6 @@
 {
-  "name": "deep_stone_block",
+  "localized_name": "deep_stone_block",
+  "name": "Deep Stone",
   "texture_dir": "textures/blocks/deep_stone",
   "texture": {
     "all": "deep_stone"

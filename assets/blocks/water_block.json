@@ -1,5 +1,6 @@
 {
-  "name": "water_block",
+  "localized_name": "water_block",
+  "name": "Water",
   "texture_dir": "textures/blocks/water",
   "texture": {
     "all": "water"

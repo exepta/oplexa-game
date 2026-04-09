@@ -1,5 +1,6 @@
 {
-  "name": "golden_shower_leaves_block",
+  "localized_name": "golden_shower_leaves_block",
+  "name": "Golden Shower Leaves",
   "texture_dir": "textures/blocks/golden_shower_leaves",
   "texture": {
     "all": "leaves"

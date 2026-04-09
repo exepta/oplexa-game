@@ -20,6 +20,9 @@ pub const PER_HARDNESS: f32 = 0.45;
 
 pub const MIN_BREAK_TIME: f32 = 0.2;
 pub const MAX_BREAK_TIME: f32 = 60.0;
+const BLOCK_COLLIDER_MIN_SIZE_METERS: f32 = 0.01;
+const BLOCK_COLLIDER_MAX_SIZE_METERS: f32 = 1.0;
+const BLOCK_COLLIDER_MAX_OFFSET_METERS: f32 = 1.0;
 
 /* ---------------- types ---------------- */
 
@@ -49,9 +52,11 @@ pub struct UvRect {
 /// Represents block def used by the `core::world::block` module.
 #[derive(Clone)]
 pub struct BlockDef {
+    pub localized_name: String,
     pub name: String,
     pub stats: BlockStats,
     pub prop: Option<PropDefinition>,
+    pub collider: BlockColliderDefinition,
     pub uv_top: UvRect,
     pub uv_bottom: UvRect,
     pub uv_north: UvRect,
@@ -82,6 +87,61 @@ pub struct BlockStats {
     pub solid: bool,
     #[serde(default)]
     pub emissive: f32,
+}
+
+/// Defines collider behavior for one block.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockColliderKind {
+    /// Legacy/default behavior: solid non-fluid blocks collide with their meshed geometry.
+    #[default]
+    Auto,
+    /// No collider.
+    None,
+    /// Full block collider (1x1x1) regardless of render mesh.
+    FullBlock,
+    /// Axis-aligned box collider with explicit size/offset.
+    Box,
+}
+
+/// Runtime collider definition attached to one block entry.
+#[derive(Clone, Debug, Deserialize)]
+pub struct BlockColliderDefinition {
+    #[serde(default)]
+    pub kind: BlockColliderKind,
+    #[serde(default = "d_true")]
+    pub block_entities: bool,
+    #[serde(default = "default_block_collider_size_m")]
+    pub size_m: [f32; 3],
+    #[serde(default)]
+    pub offset_m: [f32; 3],
+}
+
+impl Default for BlockColliderDefinition {
+    fn default() -> Self {
+        Self {
+            kind: BlockColliderKind::Auto,
+            block_entities: true,
+            size_m: default_block_collider_size_m(),
+            offset_m: [0.0, 0.0, 0.0],
+        }
+    }
+}
+
+impl BlockColliderDefinition {
+    pub fn sanitized(mut self) -> Self {
+        self.size_m = [
+            self.size_m[0].clamp(BLOCK_COLLIDER_MIN_SIZE_METERS, BLOCK_COLLIDER_MAX_SIZE_METERS),
+            self.size_m[1].clamp(BLOCK_COLLIDER_MIN_SIZE_METERS, BLOCK_COLLIDER_MAX_SIZE_METERS),
+            self.size_m[2].clamp(BLOCK_COLLIDER_MIN_SIZE_METERS, BLOCK_COLLIDER_MAX_SIZE_METERS),
+        ];
+        self.offset_m = [
+            self.offset_m[0].clamp(-BLOCK_COLLIDER_MAX_OFFSET_METERS, BLOCK_COLLIDER_MAX_OFFSET_METERS),
+            self.offset_m[1].clamp(-BLOCK_COLLIDER_MAX_OFFSET_METERS, BLOCK_COLLIDER_MAX_OFFSET_METERS),
+            self.offset_m[2].clamp(-BLOCK_COLLIDER_MAX_OFFSET_METERS, BLOCK_COLLIDER_MAX_OFFSET_METERS),
+        ];
+        self
+    }
 }
 
 /// Represents selected block used by the `core::world::block` module.
@@ -119,12 +179,24 @@ impl BlockRegistry {
     /// Runs the `name` routine for name in the `core::world::block` module.
     #[inline]
     pub fn name(&self, id: BlockId) -> &str {
-        self.def(id).name.as_str()
+        self.def(id).localized_name.as_str()
     }
 
     /// Runs the `name_opt` routine for name opt in the `core::world::block` module.
     #[inline]
     pub fn name_opt(&self, id: BlockId) -> Option<&str> {
+        self.defs.get(id as usize).map(|d| d.localized_name.as_str())
+    }
+
+    /// Runs the `display_name` routine for display name in the `core::world::block` module.
+    #[inline]
+    pub fn display_name(&self, id: BlockId) -> &str {
+        self.def(id).name.as_str()
+    }
+
+    /// Runs the `display_name_opt` routine for display name opt in the `core::world::block` module.
+    #[inline]
+    pub fn display_name_opt(&self, id: BlockId) -> Option<&str> {
         self.defs.get(id as usize).map(|d| d.name.as_str())
     }
 
@@ -193,10 +265,57 @@ impl BlockRegistry {
         };
         prop.allows_ground_name(ground_name)
     }
+    /// Returns true when this block should use the render mesh for collision.
+    #[inline]
+    pub fn collision_uses_render_mesh(&self, id: BlockId) -> bool {
+        let collider = &self.def(id).collider;
+        if !collider.block_entities {
+            return false;
+        }
+        match collider.kind {
+            BlockColliderKind::Auto => !self.is_air(id) && !self.is_fluid(id) && self.stats(id).solid,
+            BlockColliderKind::None | BlockColliderKind::FullBlock | BlockColliderKind::Box => false,
+        }
+    }
+    /// Returns optional box collider size/offset (both in block units).
+    #[inline]
+    pub fn collision_box(&self, id: BlockId) -> Option<([f32; 3], [f32; 3])> {
+        let collider = &self.def(id).collider;
+        if !collider.block_entities {
+            return None;
+        }
+        match collider.kind {
+            BlockColliderKind::Auto | BlockColliderKind::None => None,
+            BlockColliderKind::FullBlock => Some(([1.0, 1.0, 1.0], [0.0, 0.0, 0.0])),
+            BlockColliderKind::Box => Some((collider.size_m, collider.offset_m)),
+        }
+    }
     /// Returns true when this block should participate in world collision meshes.
     #[inline]
     pub fn is_solid_for_collision(&self, id: BlockId) -> bool {
-        !self.is_air(id) && !self.is_fluid(id) && self.stats(id).solid
+        self.collision_uses_render_mesh(id) || self.collision_box(id).is_some()
+    }
+    /// Returns selection hitbox size/offset (both in block units), independent from physics passability.
+    #[inline]
+    pub fn selection_box(&self, id: BlockId) -> Option<([f32; 3], [f32; 3])> {
+        let collider = &self.def(id).collider;
+        match collider.kind {
+            BlockColliderKind::FullBlock => return Some(([1.0, 1.0, 1.0], [0.0, 0.0, 0.0])),
+            BlockColliderKind::Box => return Some((collider.size_m, collider.offset_m)),
+            BlockColliderKind::Auto => {
+                if !self.is_air(id) && !self.is_fluid(id) && self.stats(id).solid {
+                    return Some(([1.0, 1.0, 1.0], [0.0, 0.0, 0.0]));
+                }
+            }
+            BlockColliderKind::None => {}
+        }
+        if let Some(prop) = self.prop(id) {
+            let height = prop.height_m;
+            let width = prop.width_m;
+            let offset_y = (height * 0.5) - 0.5;
+            return Some(([width, height, width], [0.0, offset_y, 0.0]));
+        }
+        None
     }
     /// Runs the `emissive` routine for emissive in the `core::world::block` module.
     #[inline]
@@ -254,9 +373,11 @@ impl BlockRegistry {
         let mut name_to_id = HashMap::new();
 
         defs.push(BlockDef {
+            localized_name: "air".into(),
             name: "air".into(),
             stats: BlockStats::default(),
             prop: None,
+            collider: BlockColliderDefinition::default(),
             uv_top: Z,
             uv_bottom: Z,
             uv_north: Z,
@@ -270,10 +391,13 @@ impl BlockRegistry {
 
         for path in block_json_paths(blocks_dir) {
             let block_json: BlockJson = read_json(path.to_str().unwrap());
+            let (localized_name, display_name) =
+                normalize_block_identity(&block_json.localized_name, &block_json.name);
+            let collider = block_json.collider.sanitized();
             let tex_dir = block_json
                 .texture_dir
                 .clone()
-                .unwrap_or_else(|| guess_tex_dir_from_block_name(&block_json.name));
+                .unwrap_or_else(|| guess_tex_dir_from_block_name(&localized_name));
 
             // tileset is read from disk (not via asset server)
             let tileset_path = format!("assets/{}/data.json", tex_dir);
@@ -285,31 +409,30 @@ impl BlockRegistry {
 
             // resolve faces (supports: specific keys, 'all', 'vertical', 'horizontal', and 'nord' fallback)
             let faces = block_json.texture.resolve();
-            let uv_top =
-                tile_uv(&tileset, require_face(&faces.top, "top", &block_json.name)).unwrap();
+            let uv_top = tile_uv(&tileset, require_face(&faces.top, "top", &localized_name)).unwrap();
             let uv_bottom = tile_uv(
                 &tileset,
-                require_face(&faces.bottom, "bottom", &block_json.name),
+                require_face(&faces.bottom, "bottom", &localized_name),
             )
             .unwrap();
             let uv_north = tile_uv(
                 &tileset,
-                require_face(&faces.north, "north", &block_json.name),
+                require_face(&faces.north, "north", &localized_name),
             )
             .unwrap();
             let uv_east = tile_uv(
                 &tileset,
-                require_face(&faces.east, "east", &block_json.name),
+                require_face(&faces.east, "east", &localized_name),
             )
             .unwrap();
             let uv_south = tile_uv(
                 &tileset,
-                require_face(&faces.south, "south", &block_json.name),
+                require_face(&faces.south, "south", &localized_name),
             )
             .unwrap();
             let uv_west = tile_uv(
                 &tileset,
-                require_face(&faces.west, "west", &block_json.name),
+                require_face(&faces.west, "west", &localized_name),
             )
             .unwrap();
 
@@ -327,11 +450,13 @@ impl BlockRegistry {
             });
 
             let id = defs.len() as BlockId;
-            name_to_id.insert(block_json.name.clone(), id);
+            name_to_id.insert(localized_name.clone(), id);
             defs.push(BlockDef {
-                name: block_json.name,
+                localized_name,
+                name: display_name,
                 stats: block_json.stats,
                 prop: block_json.prop.map(PropDefinition::sanitized),
+                collider,
                 uv_top,
                 uv_bottom,
                 uv_north,
@@ -341,6 +466,7 @@ impl BlockRegistry {
                 image,
                 material,
             });
+            append_auto_slab_variants(&mut defs, &mut name_to_id, id);
         }
 
         Self { defs, name_to_id }
@@ -352,9 +478,11 @@ impl BlockRegistry {
         let mut name_to_id = HashMap::new();
 
         defs.push(BlockDef {
+            localized_name: "air".into(),
             name: "air".into(),
             stats: BlockStats::default(),
             prop: None,
+            collider: BlockColliderDefinition::default(),
             uv_top: Z,
             uv_bottom: Z,
             uv_north: Z,
@@ -368,12 +496,17 @@ impl BlockRegistry {
 
         for path in block_json_paths(blocks_dir) {
             let block_json: BlockJson = read_json(path.to_str().unwrap());
+            let (localized_name, display_name) =
+                normalize_block_identity(&block_json.localized_name, &block_json.name);
+            let collider = block_json.collider.sanitized();
             let id = defs.len() as BlockId;
-            name_to_id.insert(block_json.name.clone(), id);
+            name_to_id.insert(localized_name.clone(), id);
             defs.push(BlockDef {
-                name: block_json.name,
+                localized_name,
+                name: display_name,
                 stats: block_json.stats,
                 prop: block_json.prop.map(PropDefinition::sanitized),
+                collider,
                 uv_top: Z,
                 uv_bottom: Z,
                 uv_north: Z,
@@ -383,9 +516,88 @@ impl BlockRegistry {
                 image: Handle::default(),
                 material: Handle::default(),
             });
+            append_auto_slab_variants(&mut defs, &mut name_to_id, id);
         }
 
         Self { defs, name_to_id }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AutoSlabVariant {
+    Bottom,
+    Top,
+    North,
+    South,
+    East,
+    West,
+}
+
+fn append_auto_slab_variants(
+    defs: &mut Vec<BlockDef>,
+    name_to_id: &mut HashMap<String, BlockId>,
+    base_id: BlockId,
+) {
+    let base_index = base_id as usize;
+    let Some(base_name_prefix) = defs[base_index]
+        .localized_name
+        .strip_suffix("_slab_block")
+        .map(str::to_string)
+    else {
+        return;
+    };
+    if defs[base_index].collider.kind != BlockColliderKind::Box {
+        return;
+    }
+
+    let source = defs[base_index].clone();
+    defs[base_index].collider = slab_variant_collider(&source.collider, AutoSlabVariant::Bottom);
+
+    let variants = [
+        ("_slab_top_block", AutoSlabVariant::Top),
+        ("_slab_north_block", AutoSlabVariant::North),
+        ("_slab_south_block", AutoSlabVariant::South),
+        ("_slab_east_block", AutoSlabVariant::East),
+        ("_slab_west_block", AutoSlabVariant::West),
+    ];
+
+    for (suffix, variant) in variants {
+        let localized_name = format!("{base_name_prefix}{suffix}");
+        if name_to_id.contains_key(localized_name.as_str()) {
+            continue;
+        }
+
+        let mut def = source.clone();
+        def.localized_name = localized_name.clone();
+        def.collider = slab_variant_collider(&source.collider, variant);
+        let id = defs.len() as BlockId;
+        defs.push(def);
+        name_to_id.insert(localized_name, id);
+    }
+}
+
+fn slab_variant_collider(
+    source: &BlockColliderDefinition,
+    variant: AutoSlabVariant,
+) -> BlockColliderDefinition {
+    let thickness = source.size_m[1].clamp(
+        BLOCK_COLLIDER_MIN_SIZE_METERS,
+        BLOCK_COLLIDER_MAX_SIZE_METERS,
+    );
+    let side_offset = (1.0 - thickness).max(0.0) * 0.5;
+    let (size_m, offset_m) = match variant {
+        AutoSlabVariant::Bottom => ([1.0, thickness, 1.0], [0.0, -side_offset, 0.0]),
+        AutoSlabVariant::Top => ([1.0, thickness, 1.0], [0.0, side_offset, 0.0]),
+        AutoSlabVariant::North => ([1.0, 1.0, thickness], [0.0, 0.0, -side_offset]),
+        AutoSlabVariant::South => ([1.0, 1.0, thickness], [0.0, 0.0, side_offset]),
+        AutoSlabVariant::East => ([thickness, 1.0, 1.0], [side_offset, 0.0, 0.0]),
+        AutoSlabVariant::West => ([thickness, 1.0, 1.0], [-side_offset, 0.0, 0.0]),
+    };
+    BlockColliderDefinition {
+        kind: BlockColliderKind::Box,
+        block_entities: source.block_entities,
+        size_m,
+        offset_m,
     }
 }
 
@@ -595,6 +807,22 @@ pub fn get_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
     chunk.get(lx, ly, lz)
 }
 
+/// Returns stacked block world for the `core::world::block` module.
+#[inline]
+pub fn get_stacked_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
+    if wp.y < Y_MIN || wp.y > Y_MAX {
+        return 0;
+    }
+    let (cc, local) = world_to_chunk_xz(wp.x, wp.z);
+    let Some(chunk) = chunk_map.chunks.get(&cc) else {
+        return 0;
+    };
+    let lx = local.x as usize;
+    let lz = local.y as usize;
+    let ly = world_y_to_local(wp.y);
+    chunk.get_stacked(lx, ly, lz)
+}
+
 /// Returns id world for the `core::world::block` module.
 #[inline]
 pub fn get_id_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
@@ -608,6 +836,16 @@ pub fn set_id_world(chunk_map: &mut ChunkMap, wp: IVec3, id: BlockId) -> Option<
     };
     let old = access.get();
     access.set(id);
+    Some(old)
+}
+
+/// Sets stacked id world for the `core::world::block` module.
+pub fn set_stacked_id_world(chunk_map: &mut ChunkMap, wp: IVec3, id: BlockId) -> Option<BlockId> {
+    let Some(mut access) = world_access_mut(chunk_map, wp) else {
+        return None;
+    };
+    let old = access.get_stacked();
+    access.set_stacked(id);
     Some(old)
 }
 
@@ -742,6 +980,9 @@ struct BlockTileset {
 /// Represents block json used by the `core::world::block` module.
 #[derive(Deserialize)]
 struct BlockJson {
+    #[serde(default)]
+    pub localized_name: String,
+    #[serde(default)]
     pub name: String,
     pub texture_dir: Option<String>,
     pub texture: TextureFacesJson,
@@ -749,6 +990,8 @@ struct BlockJson {
     pub stats: BlockStats,
     #[serde(default)]
     pub prop: Option<PropDefinition>,
+    #[serde(default)]
+    pub collider: BlockColliderDefinition,
 }
 
 /// Represents texture faces json used by the `core::world::block` module.
@@ -882,6 +1125,53 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &str) -> T {
 fn guess_tex_dir_from_block_name(block_name: &str) -> String {
     let base = block_name.strip_suffix("_block").unwrap_or(block_name);
     format!("textures/blocks/{}", base)
+}
+
+#[inline]
+fn default_block_collider_size_m() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
+}
+
+/// Normalizes block identity fields loaded from JSON.
+///
+/// Supports both schemas:
+/// - legacy: `name = "stone_block"`
+/// - new: `localized_name = "stone_block", name = "Stone Block"`
+fn normalize_block_identity(raw_localized_name: &str, raw_name: &str) -> (String, String) {
+    let mut localized_name = raw_localized_name.trim().to_string();
+    let mut display_name = raw_name.trim().to_string();
+
+    if localized_name.is_empty() {
+        localized_name = display_name.clone();
+    }
+    if display_name.is_empty() || display_name == localized_name {
+        display_name = prettify_localized_block_name(&localized_name);
+    }
+    if localized_name.is_empty() {
+        panic!("block JSON identity is invalid: missing both 'localized_name' and 'name'");
+    }
+
+    (localized_name, display_name)
+}
+
+fn prettify_localized_block_name(value: &str) -> String {
+    value
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => {
+                    let mut word = String::new();
+                    word.extend(first.to_uppercase());
+                    word.push_str(&chars.as_str().to_ascii_lowercase());
+                    word
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /* ---------------- uv helpers ---------------- */

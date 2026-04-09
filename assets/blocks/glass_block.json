@@ -1,5 +1,6 @@
 {
-  "name": "glass_block",
+  "localized_name": "glass_block",
+  "name": "Glass",
   "texture_dir": "textures/blocks/glass",
   "texture": {
     "all": "glass"

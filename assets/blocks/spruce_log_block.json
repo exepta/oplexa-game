@@ -1,5 +1,6 @@
 {
-  "name": "spruce_log_block",
+  "localized_name": "spruce_log_block",
+  "name": "Spruce Log",
   "texture_dir": "textures/blocks/spruce_log",
   "texture": {
     "vertical": "log_top",

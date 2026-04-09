@@ -34,6 +34,17 @@ impl<'a> WorldMutAccess<'a> {
         self.chunk.set(self.lx, self.ly, self.lz, id);
         self.chunk.mark_dirty_local_y(self.sub);
     }
+    /// Returns stacked block data for the `core::world` module.
+    #[inline]
+    pub fn get_stacked(&self) -> BlockId {
+        self.chunk.get_stacked(self.lx, self.ly, self.lz)
+    }
+    /// Sets stacked block data for the `core::world` module.
+    #[inline]
+    pub fn set_stacked(&mut self, id: BlockId) {
+        self.chunk.set_stacked(self.lx, self.ly, self.lz, id);
+        self.chunk.mark_dirty_local_y(self.sub);
+    }
 }
 
 /// Runs the `world_access_mut` routine for world access mut in the `core::world` module.
@@ -112,6 +123,7 @@ pub fn ray_cast_voxels(
     dir_in: Vec3,
     max_dist: f32,
     chunk_map: &ChunkMap,
+    registry: &BlockRegistry,
 ) -> Option<BlockHit> {
     let dir = dir_in.normalize_or_zero();
     if dir == Vec3::ZERO {
@@ -184,28 +196,46 @@ pub fn ray_cast_voxels(
         f32::INFINITY
     };
 
-    let mut last_empty = IVec3::new(x, y, z);
     let mut t: f32;
 
     for _ in 0..512 {
-        let id = get_block_world(chunk_map, IVec3::new(x, y, z));
-        if id != 0 {
-            let face = if t_max_x < t_max_y && t_max_x < t_max_z {
-                if step_x > 0 { Face::West } else { Face::East }
-            } else if t_max_y < t_max_z {
-                if step_y > 0 { Face::Bottom } else { Face::Top }
-            } else {
-                if step_z > 0 { Face::North } else { Face::South }
-            };
+        let block_pos = IVec3::new(x, y, z);
+        let mut best_hit: Option<(f32, Face, BlockId, bool)> = None;
 
-            return Some(BlockHit {
-                block_pos: IVec3::new(x, y, z),
-                face,
-                place_pos: last_empty,
-            });
+        let id = get_block_world(chunk_map, block_pos);
+        if id != 0
+            && let Some((t_hit, face)) =
+                ray_hits_block_collider_face(origin, dir, max_dist, block_pos, id, registry)
+        {
+            best_hit = Some((t_hit, face, id, false));
         }
 
-        last_empty = IVec3::new(x, y, z);
+        let stacked_id = get_stacked_block_world(chunk_map, block_pos);
+        if stacked_id != 0
+            && let Some((t_hit, face)) = ray_hits_block_collider_face(
+                origin,
+                dir,
+                max_dist,
+                block_pos,
+                stacked_id,
+                registry,
+            )
+        {
+            match best_hit {
+                Some((best_t, _, _, _)) if best_t <= t_hit => {}
+                _ => best_hit = Some((t_hit, face, stacked_id, true)),
+            }
+        }
+
+        if let Some((_, face, hit_id, is_stacked)) = best_hit {
+            return Some(BlockHit {
+                block_pos,
+                block_id: hit_id,
+                is_stacked,
+                face,
+                place_pos: block_pos + face_offset(face),
+            });
+        }
 
         if t_max_x < t_max_y && t_max_x < t_max_z {
             x += step_x;
@@ -230,4 +260,143 @@ pub fn ray_cast_voxels(
     }
 
     None
+}
+
+fn ray_hits_block_collider_face(
+    origin: Vec3,
+    dir: Vec3,
+    max_dist: f32,
+    block_pos: IVec3,
+    id: BlockId,
+    registry: &BlockRegistry,
+) -> Option<(f32, Face)> {
+    let (size, offset) = registry.selection_box(id)?;
+
+    let center = Vec3::new(
+        block_pos.x as f32 + 0.5 + offset[0],
+        block_pos.y as f32 + 0.5 + offset[1],
+        block_pos.z as f32 + 0.5 + offset[2],
+    );
+    let half = Vec3::new(size[0], size[1], size[2]) * 0.5;
+    ray_intersect_aabb_face(origin, dir, center - half, center + half, max_dist)
+}
+
+fn ray_intersect_aabb_face(
+    origin: Vec3,
+    dir: Vec3,
+    min: Vec3,
+    max: Vec3,
+    max_dist: f32,
+) -> Option<(f32, Face)> {
+    const EPS: f32 = 1e-6;
+
+    let mut t_enter = f32::NEG_INFINITY;
+    let mut t_exit = f32::INFINITY;
+    let mut enter_axis: Option<usize> = None;
+    let mut exit_axis: Option<usize> = None;
+
+    for axis in 0..3 {
+        let (o, d, min_axis, max_axis) = match axis {
+            0 => (origin.x, dir.x, min.x, max.x),
+            1 => (origin.y, dir.y, min.y, max.y),
+            _ => (origin.z, dir.z, min.z, max.z),
+        };
+
+        if d.abs() < EPS {
+            if o < min_axis || o > max_axis {
+                return None;
+            }
+            continue;
+        }
+
+        let t1 = (min_axis - o) / d;
+        let t2 = (max_axis - o) / d;
+        let near = t1.min(t2);
+        let far = t1.max(t2);
+
+        if near > t_enter {
+            t_enter = near;
+            enter_axis = Some(axis);
+        }
+        if far < t_exit {
+            t_exit = far;
+            exit_axis = Some(axis);
+        }
+
+        if t_exit < t_enter {
+            return None;
+        }
+    }
+
+    if t_exit < 0.0 {
+        return None;
+    }
+
+    if t_enter >= 0.0 {
+        if t_enter > max_dist {
+            return None;
+        }
+        let axis = enter_axis?;
+        Some((t_enter, entry_face_for_axis(axis, dir)))
+    } else {
+        let axis = exit_axis?;
+        if t_exit > max_dist {
+            return None;
+        }
+        Some((t_exit, exit_face_for_axis(axis, dir)))
+    }
+}
+
+#[inline]
+fn entry_face_for_axis(axis: usize, dir: Vec3) -> Face {
+    match axis {
+        0 => {
+            if dir.x >= 0.0 {
+                Face::West
+            } else {
+                Face::East
+            }
+        }
+        1 => {
+            if dir.y >= 0.0 {
+                Face::Bottom
+            } else {
+                Face::Top
+            }
+        }
+        _ => {
+            if dir.z >= 0.0 {
+                Face::North
+            } else {
+                Face::South
+            }
+        }
+    }
+}
+
+#[inline]
+fn exit_face_for_axis(axis: usize, dir: Vec3) -> Face {
+    match axis {
+        0 => {
+            if dir.x >= 0.0 {
+                Face::East
+            } else {
+                Face::West
+            }
+        }
+        1 => {
+            if dir.y >= 0.0 {
+                Face::Top
+            } else {
+                Face::Bottom
+            }
+        }
+        _ => {
+            if dir.z >= 0.0 {
+                Face::South
+            } else {
+                Face::North
+            }
+        }
+    }
 }

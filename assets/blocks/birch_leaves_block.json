@@ -1,5 +1,6 @@
 {
-  "name": "birch_leaves_block",
+  "localized_name": "birch_leaves_block",
+  "name": "Birch Leaves",
   "texture_dir": "textures/blocks/birch_leaves",
   "texture": {
     "all": "leaves"

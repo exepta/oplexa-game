@@ -1,5 +1,6 @@
 {
-  "name": "mossy_cobble_stone_block",
+  "localized_name": "mossy_cobble_stone_block",
+  "name": "Mossy Cobble Stone",
   "texture_dir": "textures/blocks/mossy_cobble_stone",
   "texture": {
     "all": "mossy_cobble"

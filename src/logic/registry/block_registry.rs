@@ -3,6 +3,7 @@ use crate::core::inventory::recipe::{RecipeTypeRegistry, load_recipe_registry};
 use crate::core::states::states::{AppState, BeforeUiState};
 use crate::core::world::block::BlockRegistry;
 use bevy::prelude::*;
+use std::collections::BTreeMap;
 
 /// Represents block internal registry used by the `logic::registry::block_registry` module.
 pub struct BlockInternalRegistry;
@@ -32,11 +33,19 @@ fn start_block_registry(
     let recipe_registry =
         load_recipe_registry("assets/recipes", &item_registry, &recipe_type_registry);
 
-    let block_names = block_registry
-        .defs
-        .iter()
-        .skip(1)
-        .map(|block| block.name.as_str())
+    let mut block_name_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for block in block_registry.defs.iter().skip(1) {
+        *block_name_counts.entry(block.name.clone()).or_insert(0) += 1;
+    }
+    let block_names = block_name_counts
+        .into_iter()
+        .map(|(name, count)| {
+            if count > 1 {
+                format!("{name} (x{count})")
+            } else {
+                name
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let item_keys = item_registry
