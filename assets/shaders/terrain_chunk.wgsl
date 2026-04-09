@@ -23,6 +23,8 @@ struct TerrainParams {
   leaf_cfg: vec4<f32>,
   // xyz: leaf tint multiplier, w: per-pixel color variation strength
   leaf_tint: vec4<f32>,
+  // x: prop nearest sampling flag, y: wind strength, z: wind frequency, w: time
+  material_cfg: vec4<f32>,
 };
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: TerrainParams;
@@ -49,6 +51,23 @@ fn vertex(v: VertexInput) -> VOut {
     // Requested overhang: approx. 0.20..0.40 block units.
     let push = (0.20 + 0.20 * puff) * max(params.leaf_cfg.z, 0.0);
     world_pos = world_pos + normal_ws * push;
+  }
+
+  // Gentle wind sway for props and foliage blocks.
+  if (params.material_cfg.y > 0.0001) {
+    var bend = 1.0;
+    // Props (crossed planes) stay anchored at the bottom and bend more near their tips.
+    if (params.material_cfg.x > 0.5) {
+      let tip = clamp(fract(v.position.y), 0.0, 1.0);
+      bend = tip * tip;
+    }
+    let t = params.material_cfg.w;
+    let f = max(params.material_cfg.z, 0.01);
+    let phase = world_pos.x * (0.72 * f) + world_pos.z * (0.54 * f);
+    let gust = sin(phase + t * 1.45) + 0.45 * sin(world_pos.x * (1.37 * f) - world_pos.z * (0.93 * f) + t * 2.15);
+    let sway = gust * max(params.material_cfg.y, 0.0) * bend;
+    world_pos.x = world_pos.x + sway;
+    world_pos.z = world_pos.z + sway * 0.58;
   }
 
   out.clip = position_world_to_clip(world_pos);
@@ -81,7 +100,14 @@ fn fragment(in: VOut) -> @location(0) vec4<f32> {
   // Provide explicit gradients from unwrapped UVs to avoid seam artifacts from fract()-based derivatives.
   let duvdx = dpdx(in.uv_local) * safe_tile_size;
   let duvdy = dpdy(in.uv_local) * safe_tile_size;
-  let tex = textureSampleGrad(atlas_tex, atlas_smp, atlas_uv, duvdx, duvdy);
+  var tex: vec4<f32>;
+  if (params.material_cfg.x > 0.5) {
+    // Pixel-art props: sample exact texel centers at LOD0 for crisp visuals.
+    let px_uv = (floor(atlas_uv * atlas_dims) + vec2<f32>(0.5, 0.5)) / atlas_dims;
+    tex = textureSampleLevel(atlas_tex, atlas_smp, px_uv, 0.0);
+  } else {
+    tex = textureSampleGrad(atlas_tex, atlas_smp, atlas_uv, duvdx, duvdy);
+  }
 
   let n = normalize(in.normal_ws);
   let l = normalize(vec3<f32>(0.35, 1.0, 0.2));

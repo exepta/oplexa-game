@@ -1,6 +1,6 @@
 {
   "localized_name": "oplexa:grass_block",
-  "name": "Grass Block",
+  "name": "Grass",
   "max_stack_size": -1,
   "category": "block",
   "block_item": true,

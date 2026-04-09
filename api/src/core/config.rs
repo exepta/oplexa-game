@@ -117,6 +117,13 @@ pub struct InterfaceConfig {
     /// Maximum number of chat lines kept in local history.
     #[serde(default = "default_chat_max_space")]
     pub chat_max_space: usize,
+    /// Max block distance used by local `/locate` biome search.
+    #[serde(
+        default = "default_locate_search_radius",
+        rename = "locate-search-radius",
+        alias = "locate_search_radius"
+    )]
+    pub locate_search_radius: i32,
 }
 
 impl Default for InterfaceConfig {
@@ -124,6 +131,7 @@ impl Default for InterfaceConfig {
     fn default() -> Self {
         Self {
             chat_max_space: default_chat_max_space(),
+            locate_search_radius: default_locate_search_radius(),
         }
     }
 }
@@ -189,6 +197,10 @@ pub struct GraphicsConfig {
     #[serde(default = "default_chunk_collider_apply_per_frame")]
     pub chunk_collider_apply_per_frame: usize,
 
+    /// Activation radius for chunk colliders around entities (in blocks).
+    #[serde(default = "default_chunk_collider_activation_radius_blocks")]
+    pub chunk_collider_activation_radius_blocks: i32,
+
     /// Maximum number of chunks unloaded per frame.
     #[serde(default = "default_chunk_unload_budget_per_frame")]
     pub chunk_unload_budget_per_frame: usize,
@@ -230,6 +242,8 @@ impl Default for GraphicsConfig {
             chunk_mesh_apply_per_frame: default_chunk_mesh_apply_per_frame(),
             chunk_collider_max_inflight: default_chunk_collider_max_inflight(),
             chunk_collider_apply_per_frame: default_chunk_collider_apply_per_frame(),
+            chunk_collider_activation_radius_blocks:
+                default_chunk_collider_activation_radius_blocks(),
             chunk_unload_budget_per_frame: default_chunk_unload_budget_per_frame(),
             fog_enabled: default_fog_enabled(),
             fog_color: default_fog_color(),
@@ -327,9 +341,37 @@ pub struct InputConfig {
     #[serde(default = "default_inventory_recipe_open_key")]
     pub inventory_recipe_open: String,
 
+    /// Key or button mapping to select hotbar slot 1.
+    #[serde(default = "default_hotbar_slot_1_key")]
+    pub hotbar_slot_1: String,
+
+    /// Key or button mapping to select hotbar slot 2.
+    #[serde(default = "default_hotbar_slot_2_key")]
+    pub hotbar_slot_2: String,
+
+    /// Key or button mapping to select hotbar slot 3.
+    #[serde(default = "default_hotbar_slot_3_key")]
+    pub hotbar_slot_3: String,
+
+    /// Key or button mapping to select hotbar slot 4.
+    #[serde(default = "default_hotbar_slot_4_key")]
+    pub hotbar_slot_4: String,
+
+    /// Key or button mapping to select hotbar slot 5.
+    #[serde(default = "default_hotbar_slot_5_key")]
+    pub hotbar_slot_5: String,
+
+    /// Key or button mapping to select hotbar slot 6.
+    #[serde(default = "default_hotbar_slot_6_key")]
+    pub hotbar_slot_6: String,
+
     // Debug
     /// Shows system stats
     pub debug_overlay: String,
+
+    /// Toggle for block collider debug gizmos.
+    #[serde(default = "default_collider_debug_key")]
+    pub collider_debug: String,
 
     /// Toggle chunk grid.
     pub chunk_grid: String,
@@ -358,8 +400,15 @@ impl Default for InputConfig {
             ui_close_back: String::from("Escape"),
             open_chat: default_open_chat_key(),
             inventory_recipe_open: default_inventory_recipe_open_key(),
+            hotbar_slot_1: default_hotbar_slot_1_key(),
+            hotbar_slot_2: default_hotbar_slot_2_key(),
+            hotbar_slot_3: default_hotbar_slot_3_key(),
+            hotbar_slot_4: default_hotbar_slot_4_key(),
+            hotbar_slot_5: default_hotbar_slot_5_key(),
+            hotbar_slot_6: default_hotbar_slot_6_key(),
 
             debug_overlay: String::from("F3"),
+            collider_debug: default_collider_debug_key(),
             chunk_grid: String::from("F9"),
             world_inspector: String::from("F1"),
         }
@@ -379,6 +428,41 @@ fn default_open_chat_key() -> String {
 /// Runs the `default_inventory_recipe_open_key` routine for default inventory recipe open key in the `core::config` module.
 fn default_inventory_recipe_open_key() -> String {
     String::from("R")
+}
+
+/// Runs the `default_hotbar_slot_1_key` routine for default hotbar slot 1 key in the `core::config` module.
+fn default_hotbar_slot_1_key() -> String {
+    String::from("1")
+}
+
+/// Runs the `default_hotbar_slot_2_key` routine for default hotbar slot 2 key in the `core::config` module.
+fn default_hotbar_slot_2_key() -> String {
+    String::from("2")
+}
+
+/// Runs the `default_hotbar_slot_3_key` routine for default hotbar slot 3 key in the `core::config` module.
+fn default_hotbar_slot_3_key() -> String {
+    String::from("3")
+}
+
+/// Runs the `default_hotbar_slot_4_key` routine for default hotbar slot 4 key in the `core::config` module.
+fn default_hotbar_slot_4_key() -> String {
+    String::from("4")
+}
+
+/// Runs the `default_hotbar_slot_5_key` routine for default hotbar slot 5 key in the `core::config` module.
+fn default_hotbar_slot_5_key() -> String {
+    String::from("5")
+}
+
+/// Runs the `default_hotbar_slot_6_key` routine for default hotbar slot 6 key in the `core::config` module.
+fn default_hotbar_slot_6_key() -> String {
+    String::from("6")
+}
+
+/// Runs the `default_collider_debug_key` routine for default collider debug key in the `core::config` module.
+fn default_collider_debug_key() -> String {
+    String::from("F8")
 }
 
 /// Runs the `default_window_width` routine for default window width in the `core::config` module.
@@ -441,6 +525,11 @@ fn default_chunk_collider_apply_per_frame() -> usize {
     12
 }
 
+/// Runs the `default_chunk_collider_activation_radius_blocks` routine for default chunk collider activation radius blocks in the `core::config` module.
+fn default_chunk_collider_activation_radius_blocks() -> i32 {
+    50
+}
+
 /// Runs the `default_chunk_unload_budget_per_frame` routine for default chunk unload budget per frame in the `core::config` module.
 fn default_chunk_unload_budget_per_frame() -> usize {
     10
@@ -458,22 +547,27 @@ fn default_fog_color() -> [f32; 3] {
 
 /// Runs the `default_fog_start_factor` routine for default fog start factor in the `core::config` module.
 fn default_fog_start_factor() -> f32 {
-    0.72
+    0.80
 }
 
 /// Runs the `default_fog_end_factor` routine for default fog end factor in the `core::config` module.
 fn default_fog_end_factor() -> f32 {
-    0.96
+    1.08
 }
 
 /// Runs the `default_far_clip_extra` routine for default far clip extra in the `core::config` module.
 fn default_far_clip_extra() -> f32 {
-    10.0
+    14.0
 }
 
 /// Runs the `default_chat_max_space` routine for default chat max space in the `core::config` module.
 fn default_chat_max_space() -> usize {
     140
+}
+
+/// Runs the `default_locate_search_radius` routine for default locate search radius in the `core::config` module.
+fn default_locate_search_radius() -> i32 {
+    1000
 }
 
 // =======================================================

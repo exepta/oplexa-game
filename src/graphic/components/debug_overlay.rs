@@ -49,6 +49,7 @@ fn refresh_sys_stats(
     overlay: Res<DebugOverlayState>,
     mut stats: ResMut<SysStats>,
     mut vram_state: ResMut<DebugVramState>,
+    mut gpu_load_state: ResMut<DebugGpuLoadState>,
 ) {
     if !overlay.show {
         return;
@@ -80,10 +81,20 @@ fn refresh_sys_stats(
     vram_state.bytes = vram.map(|value| value.bytes);
     vram_state.source = vram.map(|value| value.source);
     vram_state.scope = vram.map(|value| value.scope);
+
+    let gpu_load = v_ram_utils::detect_gpu_load_best_effort();
+    gpu_load_state.percent = gpu_load.map(|value| value.percent);
+    gpu_load_state.source = gpu_load.map(|value| value.source);
+    gpu_load_state.scope = gpu_load.map(|value| value.scope);
 }
 
 /// Samples runtime FPS and update tick speed for the debug overlay.
-fn sample_runtime_perf_stats(time: Res<Time>, mut perf: ResMut<RuntimePerfStats>) {
+fn sample_runtime_perf_stats(
+    time: Res<Time<bevy::time::Real>>,
+    local_timeline: Option<Res<LocalTimeline>>,
+    mut perf: ResMut<RuntimePerfStats>,
+    mut sample_state: ResMut<RuntimePerfSampleState>,
+) {
     let dt = time.delta_secs().max(0.0001);
     let raw = (1.0 / dt).clamp(0.0, 10000.0);
     let alpha = 0.15;
@@ -94,10 +105,26 @@ fn sample_runtime_perf_stats(time: Res<Time>, mut perf: ResMut<RuntimePerfStats>
         perf.fps += (raw - perf.fps) * alpha;
     }
 
-    if perf.tick_speed <= 0.0 {
-        perf.tick_speed = raw;
-    } else {
-        perf.tick_speed += (raw - perf.tick_speed) * alpha;
+    if let Some(local_timeline) = local_timeline {
+        let now_secs = time.elapsed_secs_f64();
+        let current_tick = local_timeline.tick();
+
+        if let (Some(last_tick), Some(last_secs)) = (
+            sample_state.last_local_tick,
+            sample_state.last_sample_real_secs,
+        ) {
+            let elapsed = (now_secs - last_secs).max(0.001) as f32;
+            let delta_ticks = (current_tick - last_tick).max(0) as f32;
+            let raw_ticks = delta_ticks / elapsed;
+            if perf.tick_speed <= 0.0 {
+                perf.tick_speed = raw_ticks;
+            } else {
+                perf.tick_speed += (raw_ticks - perf.tick_speed) * alpha;
+            }
+        }
+
+        sample_state.last_local_tick = Some(current_tick);
+        sample_state.last_sample_real_secs = Some(now_secs);
     }
 }
 
@@ -182,12 +209,15 @@ fn sync_system_last_ui(
     world_inspector: Res<WorldInspectorState>,
     stats: Res<SysStats>,
     perf: Res<RuntimePerfStats>,
-    chunk_debug: Res<ChunkDebugStats>,
     vram_state: Res<DebugVramState>,
+    gpu_load_state: Res<DebugGpuLoadState>,
     gpu_adapter: Option<Res<RenderAdapterInfo>>,
     world_gen_config: Res<WorldGenConfig>,
     biomes: Res<BiomeRegistry>,
-    player: Query<&Transform, With<Player>>,
+    selection_state: Res<SelectionState>,
+    chunk_map: Res<ChunkMap>,
+    block_registry: Res<BlockRegistry>,
+    player: Query<(&Transform, Option<&FpsController>), With<Player>>,
     mut paragraphs: Query<(&CssID, &mut Paragraph)>,
 ) {
     if !overlay.show {
@@ -208,16 +238,52 @@ fn sync_system_last_ui(
         .map(|adapter| adapter.name.as_str())
         .filter(|name| !name.is_empty())
         .unwrap_or("Unknown GPU");
-    let vram_text = vram_state
-        .bytes
-        .map(v_ram_utils::fmt_bytes)
-        .unwrap_or_else(|| "n/a".to_string());
-    let vram_backend = match (vram_state.source, vram_state.scope) {
-        (Some(source), Some(scope)) => format!("{source}/{scope}"),
-        (Some(source), None) => source.to_string(),
-        _ => "unavailable".to_string(),
+    let (vram_text, vram_backend) = if let Some(bytes) = vram_state.bytes {
+        let backend = match (vram_state.source, vram_state.scope) {
+            (Some(source), Some(scope)) => format!("{source}/{scope}"),
+            (Some(source), None) => source.to_string(),
+            _ => "unknown".to_string(),
+        };
+        (v_ram_utils::fmt_bytes(bytes), backend)
+    } else if cfg!(target_os = "macos") {
+        (
+            format!("~{}", v_ram_utils::fmt_bytes(stats.app_mem_bytes)),
+            "fallback/app-rss".to_string(),
+        )
+    } else {
+        ("n/a".to_string(), "unavailable".to_string())
     };
-    let player_pos = player.iter().next().map(|transform| transform.translation);
+    let (gpu_load_text, gpu_load_backend) = if let Some(percent) = gpu_load_state.percent {
+        let backend = match (gpu_load_state.source, gpu_load_state.scope) {
+            (Some(source), Some(scope)) => format!("{source}/{scope}"),
+            (Some(source), None) => source.to_string(),
+            _ => "unknown".to_string(),
+        };
+        (format!("{percent:.1}%"), backend)
+    } else if cfg!(any(target_os = "macos", windows)) {
+        let fps = perf.fps.max(1.0);
+        let estimated_percent = (60.0 / fps * 100.0).clamp(0.0, 100.0);
+        (
+            format!("~{estimated_percent:.1}%"),
+            "fallback/fps-estimate".to_string(),
+        )
+    } else {
+        ("n/a".to_string(), "unavailable".to_string())
+    };
+    let (player_pos, player_yaw_pitch) = player
+        .iter()
+        .next()
+        .map(|(transform, fps)| {
+            let yaw_pitch = fps.map_or_else(
+                || {
+                    let yaw = transform.rotation.to_euler(EulerRot::YXZ).0.to_degrees();
+                    (yaw, 0.0)
+                },
+                |fps| (fps.yaw.to_degrees(), fps.pitch.to_degrees()),
+            );
+            (Some(transform.translation), Some(yaw_pitch))
+        })
+        .unwrap_or((None, None));
     let player_chunk = player_pos.map(|pos| {
         let (c, _) = world_to_chunk_xz(
             (pos.x / VOXEL_SIZE).floor() as i32,
@@ -225,66 +291,77 @@ fn sync_system_last_ui(
         );
         c
     });
-    let biome_name = player_pos.map(|pos| {
+    let biome = player_pos.map(|pos| {
         let p_chunks = Vec2::new(pos.x / CX as f32, pos.z / CZ as f32);
         dominant_biome_at_p_chunks(&biomes, world_gen_config.seed, p_chunks)
-            .name
-            .clone()
     });
+    let biome_name = biome.map(|b| b.name.as_str()).unwrap_or("n/a");
+    let biome_climate = biome
+        .map(|b| {
+            if b.climate.is_empty() {
+                "n/a".to_string()
+            } else {
+                b.climate.join(", ")
+            }
+        })
+        .unwrap_or_else(|| "n/a".to_string());
+    let looked_block_name = selection_state
+        .hit
+        .map(|hit| {
+            let id = crate::core::world::block::get_block_world(&chunk_map, hit.block_pos);
+            if id == 0 {
+                "air".to_string()
+            } else {
+                block_registry.name_opt(id).unwrap_or("unknown").to_string()
+            }
+        })
+        .unwrap_or_else(|| "n/a".to_string());
 
     for (css_id, mut paragraph) in &mut paragraphs {
         paragraph.text = match css_id.0.as_str() {
             ID_BUILD => format!(
-                "{} v{} | Bevy {}",
+                "Game Version: {} v{} | Bevy {}",
                 build.app_name, build.app_version, build.bevy_version
             ),
-            ID_CPU_NAME => format!("CPU: {}", cpu_name),
-            ID_GPU_NAME => format!("GPU: {}", gpu_name),
-            ID_VRAM => format!("VRAM: {} ({})", vram_text, vram_backend),
-            ID_BIOME => format!("Biome: {}", biome_name.as_deref().unwrap_or("n/a")),
-            ID_GLOBAL_CPU => format!("System CPU: {:.1}%", stats.cpu_percent),
-            ID_APP_CPU => format!("Game CPU: {:.1}%", app_cpu_normalized),
-            ID_APP_MEM => format!("Game RAM: {:.1} MiB", bytes_to_mib(stats.app_mem_bytes)),
             ID_FPS => format!("FPS: {:.1}", perf.fps),
-            ID_TICK_SPEED => format!("Tick Speed: {:.1} t/s", perf.tick_speed),
+            ID_TICK_SPEED => format!("Ticks: {:.1} t/s", perf.tick_speed),
+            ID_CPU_NAME => format!("CPU Name: {}", cpu_name),
+            ID_APP_CPU => format!(
+                "CPU Last (Game / System): {:.1}% / {:.1}%",
+                app_cpu_normalized, stats.cpu_percent
+            ),
+            ID_GLOBAL_CPU => format!("System CPU: {:.1}%", stats.cpu_percent),
+            ID_APP_MEM => format!("RAM: {:.1} MiB", bytes_to_mib(stats.app_mem_bytes)),
+            ID_GPU_NAME => format!("GPU Name: {}", gpu_name),
+            ID_GPU_LOAD => format!("GPU Load: {} ({})", gpu_load_text, gpu_load_backend),
+            ID_VRAM => format!("VRAM: {} ({})", vram_text, vram_backend),
+            ID_BIOME => format!("Biome Name: {}", biome_name),
+            ID_BIOME_CLIMATE => format!("Biome Klima: {}", biome_climate),
+            ID_LOOK_BLOCK => format!("Block Name: {}", looked_block_name),
             ID_PLAYER_POS => {
-                if let Some(pos) = player_pos {
-                    format!("Player XYZ: {:.2} / {:.2} / {:.2}", pos.x, pos.y, pos.z)
+                if let (Some(pos), Some((yaw, pitch))) = (player_pos, player_yaw_pitch) {
+                    format!(
+                        "Location (Player): {:.2} / {:.2} / {:.2} (yaw {:.1} / pitch {:.1})",
+                        pos.x, pos.y, pos.z, yaw, pitch
+                    )
                 } else {
-                    "Player XYZ: n/a".to_string()
+                    "Location (Player): n/a".to_string()
                 }
             }
             ID_CHUNK_COORD => {
                 if let Some(c) = player_chunk {
-                    format!("Chunk (x, y): {} / {}", c.x, c.y)
+                    format!("Chunk: {} / {}", c.x, c.y)
                 } else {
-                    "Chunk (x, y): n/a".to_string()
+                    "Chunk: n/a".to_string()
                 }
             }
-            ID_CHUNK_LOADING => format!(
-                "Chunks: loaded {} | queue {}",
-                chunk_debug.loaded_chunks,
-                chunk_debug.queue_chunks
-            ),
-            ID_CHUNK_STAGE => format!(
-                "Stage ms: gen {:.2} | mesh {:.2} | col {:.2}/{:.2}",
-                chunk_debug.stage_gen_collect_ms,
-                chunk_debug.stage_mesh_apply_ms,
-                chunk_debug.stage_collider_schedule_ms,
-                chunk_debug.stage_collider_apply_ms
-            ),
-            ID_CHUNK_LATENCY => format!(
-                "Chunk-ready: avg {:.0}ms | p95 {:.0}ms",
-                chunk_debug.chunk_ready_latency_ms,
-                chunk_debug.chunk_ready_latency_p95_ms
-            ),
             ID_GRID => format!(
-                "Chunk Grid: {} (Y={:.1})",
+                "Chunk Grid State: {} (Y={:.1})",
                 grid_mode_label(grid.mode),
                 grid.plane_y
             ),
-            ID_INSPECTOR => format!("World Inspector: {}", bool_label(world_inspector.0)),
-            ID_OVERLAY => format!("Debug Overlay: {}", bool_label(overlay.show)),
+            ID_INSPECTOR => format!("World Inspector State: {}", bool_label(world_inspector.0)),
+            ID_OVERLAY => format!("Debug Overlay State: {}", bool_label(overlay.show)),
             _ => continue,
         };
     }

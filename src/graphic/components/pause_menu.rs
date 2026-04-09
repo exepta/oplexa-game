@@ -63,18 +63,6 @@ fn sync_pause_menu_labels(
     mut buttons: Query<(&CssID, &mut Button)>,
 ) {
     for (css_id, mut button) in &mut buttons {
-        if css_id.0 == PAUSE_CONNECT_ID {
-            let target = if multiplayer_connection.connected {
-                "Disconnect"
-            } else {
-                "Open to LAN"
-            };
-            if button.text != target {
-                button.text = target.to_string();
-            }
-            continue;
-        }
-
         if css_id.0 == PAUSE_CLOSE_ID {
             let target = if multiplayer_connection.connected {
                 "Disconnect"
@@ -102,9 +90,7 @@ fn handle_pause_menu_buttons(
     mut world_unload_state: ResMut<WorldUnloadUiState>,
     mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut next_state: ResMut<NextState<AppState>>,
-    mut open_to_lan_writer: MessageWriter<OpenToLanRequest>,
     mut disconnect_writer: MessageWriter<DisconnectFromServerRequest>,
-    mut stop_host_writer: MessageWriter<StopLanHostRequest>,
 ) {
     if !pause_menu.open {
         return;
@@ -123,19 +109,6 @@ fn handle_pause_menu_buttons(
             }
             set_pause_menu_cursor(false, &mut cursor_q);
         }
-        PauseMenuAction::OpenToLan => {
-            if multiplayer_connection.connected {
-                disconnect_writer.write(DisconnectFromServerRequest);
-            } else {
-                open_to_lan_writer.write(OpenToLanRequest);
-            }
-            pause_menu.open = false;
-            ui_interaction.menu_open = false;
-            if let Ok(mut visible) = roots.p0().single_mut() {
-                *visible = Visibility::Hidden;
-            }
-            set_pause_menu_cursor(false, &mut cursor_q);
-        }
         PauseMenuAction::Settings => {
             info!("Settings button clicked (not implemented yet).");
         }
@@ -143,7 +116,6 @@ fn handle_pause_menu_buttons(
             if multiplayer_connection.connected {
                 disconnect_writer.write(DisconnectFromServerRequest);
             }
-            stop_host_writer.write(StopLanHostRequest);
             pause_menu.open = false;
             ui_interaction.menu_open = false;
             if let Ok(mut visible) = roots.p0().single_mut() {
@@ -228,7 +200,6 @@ fn consume_pause_menu_action(
 
         match css_id.0.as_str() {
             PAUSE_PLAY_ID => Some(PauseMenuAction::BackToGame),
-            PAUSE_CONNECT_ID => Some(PauseMenuAction::OpenToLan),
             PAUSE_SETTINGS_ID => Some(PauseMenuAction::Settings),
             PAUSE_CLOSE_ID => Some(PauseMenuAction::ExitToMenu),
             _ => None,

@@ -1,6 +1,7 @@
 use crate::core::world::chunk::*;
 use crate::core::world::chunk_dimension::*;
 use crate::core::world::fluid::FluidMap;
+use crate::core::world::prop::PropDefinition;
 use crate::core::world::world_access_mut;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -50,6 +51,7 @@ pub struct UvRect {
 pub struct BlockDef {
     pub name: String,
     pub stats: BlockStats,
+    pub prop: Option<PropDefinition>,
     pub uv_top: UvRect,
     pub uv_bottom: UvRect,
     pub uv_north: UvRect,
@@ -76,6 +78,8 @@ pub struct BlockStats {
     pub fluid: bool,
     #[serde(default)]
     pub foliage: bool,
+    #[serde(default = "d_true")]
+    pub solid: bool,
     #[serde(default)]
     pub emissive: f32,
 }
@@ -153,6 +157,11 @@ impl BlockRegistry {
     pub fn stats(&self, id: BlockId) -> &BlockStats {
         &self.def(id).stats
     }
+    /// Returns prop metadata for one block id.
+    #[inline]
+    pub fn prop(&self, id: BlockId) -> Option<&PropDefinition> {
+        self.def(id).prop.as_ref()
+    }
     /// Checks whether air in the `core::world::block` module.
     #[inline]
     pub fn is_air(&self, id: BlockId) -> bool {
@@ -167,6 +176,27 @@ impl BlockRegistry {
     #[inline]
     pub fn is_fluid(&self, id: BlockId) -> bool {
         self.stats(id).fluid
+    }
+    /// Checks whether this block has a prop render definition.
+    #[inline]
+    pub fn is_prop(&self, id: BlockId) -> bool {
+        self.prop(id).is_some()
+    }
+    /// Returns true when the given prop block can be placed on the given ground block.
+    #[inline]
+    pub fn prop_allows_ground(&self, prop_id: BlockId, ground_id: BlockId) -> bool {
+        let Some(prop) = self.prop(prop_id) else {
+            return true;
+        };
+        let Some(ground_name) = self.name_opt(ground_id) else {
+            return false;
+        };
+        prop.allows_ground_name(ground_name)
+    }
+    /// Returns true when this block should participate in world collision meshes.
+    #[inline]
+    pub fn is_solid_for_collision(&self, id: BlockId) -> bool {
+        !self.is_air(id) && !self.is_fluid(id) && self.stats(id).solid
     }
     /// Runs the `emissive` routine for emissive in the `core::world::block` module.
     #[inline]
@@ -226,6 +256,7 @@ impl BlockRegistry {
         defs.push(BlockDef {
             name: "air".into(),
             stats: BlockStats::default(),
+            prop: None,
             uv_top: Z,
             uv_bottom: Z,
             uv_north: Z,
@@ -300,6 +331,7 @@ impl BlockRegistry {
             defs.push(BlockDef {
                 name: block_json.name,
                 stats: block_json.stats,
+                prop: block_json.prop.map(PropDefinition::sanitized),
                 uv_top,
                 uv_bottom,
                 uv_north,
@@ -322,6 +354,7 @@ impl BlockRegistry {
         defs.push(BlockDef {
             name: "air".into(),
             stats: BlockStats::default(),
+            prop: None,
             uv_top: Z,
             uv_bottom: Z,
             uv_north: Z,
@@ -340,6 +373,7 @@ impl BlockRegistry {
             defs.push(BlockDef {
                 name: block_json.name,
                 stats: block_json.stats,
+                prop: block_json.prop.map(PropDefinition::sanitized),
                 uv_top: Z,
                 uv_bottom: Z,
                 uv_north: Z,
@@ -713,6 +747,8 @@ struct BlockJson {
     pub texture: TextureFacesJson,
     #[serde(default)]
     pub stats: BlockStats,
+    #[serde(default)]
+    pub prop: Option<PropDefinition>,
 }
 
 /// Represents texture faces json used by the `core::world::block` module.

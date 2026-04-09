@@ -9,6 +9,7 @@ use crate::generator::chunk::chunk_utils::map01;
 use crate::generator::chunk::river_utils::RiverSystem;
 use crate::generator::chunk::trees::registry::TreeRegistry;
 use crate::generator::chunk::trees::tree_gen::populate_trees_in_chunk;
+use crate::generator::chunk::vegetation::prop_gen::populate_vegetation_props_in_chunk;
 use bevy::prelude::*;
 use fastnoise_lite::*;
 /* ========================= Generator =================================== */
@@ -117,9 +118,9 @@ pub(crate) async fn generate_chunk_async_biome(
         let s_site = p_chunks.distance(site_pos) / site_r.max(1.0);
 
         if site_biome.stand_alone && s_site.is_finite() && s_site < SUB_COAST_LIMIT {
-            if let Some((sub_b, s_sub)) =
-                pick_sub_biome_in_host(biomes, site_biome, site_pos, site_r, p_chunks, cfg_seed)
-            {
+            if let Some((sub_b, s_sub)) = pick_relief_sub_biome_in_host(
+                biomes, site_biome, site_pos, site_r, p_chunks, cfg_seed,
+            ) {
                 // core weight with a little edge noise
                 let edge_jit =
                     (map01(sub_edge_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0 * SUB_EDGE_NOISE_AMP;
@@ -555,6 +556,7 @@ pub(crate) async fn generate_chunk_async_biome(
                 pick(&ocean_biome.surface.under_zero, wx, wz, pick_seed ^ 0x77);
             let id_ocean_upper_zero = reg.id_or_air(ocean_upper_zero_name);
             let id_ocean_under_zero = reg.id_or_air(ocean_under_zero_name);
+            let id_deep_stone = reg.id_opt("deep_stone_block").unwrap_or(0);
 
             // Beach cap width with detail noise
             let bw_noise = map01(coast_d.get_noise_2d(wxf, wzf));
@@ -610,7 +612,7 @@ pub(crate) async fn generate_chunk_async_biome(
 
                 let underwater = h_final < SEA_LEVEL;
 
-                let id: BlockId = if underwater {
+                let mut id: BlockId = if underwater {
                     // OCEAN: seabed is at h_final; enforce ≥3 blocks of sea_floor.
                     let depth_from_seabed = (h_final - wy).max(0);
                     if depth_from_seabed <= 2 {
@@ -666,6 +668,31 @@ pub(crate) async fn generate_chunk_async_biome(
                     }
                 };
 
+                // Enforce deep_stone only below Y -20.
+                if id_deep_stone != 0 && id == id_deep_stone && wy > -20 {
+                    id = if underwater {
+                        if id_ocean_under_zero != 0 && id_ocean_under_zero != id_deep_stone {
+                            id_ocean_under_zero
+                        } else if id_sea_floor != 0 && id_sea_floor != id_deep_stone {
+                            id_sea_floor
+                        } else if id_sand != 0 {
+                            id_sand
+                        } else {
+                            id_gravel
+                        }
+                    } else if id_under_zero != 0 && id_under_zero != id_deep_stone {
+                        id_under_zero
+                    } else if id_bottom != 0 && id_bottom != id_deep_stone {
+                        id_bottom
+                    } else if id_upper_zero != 0 && id_upper_zero != id_deep_stone {
+                        id_upper_zero
+                    } else if id_dirt != 0 {
+                        id_dirt
+                    } else {
+                        id_gravel
+                    };
+                }
+
                 if id != 0 {
                     chunk.set(lx, ly, lz, id);
                 }
@@ -678,6 +705,7 @@ pub(crate) async fn generate_chunk_async_biome(
 
     carve_caves_into_chunk(&mut chunk, coord, cfg_seed, id_air, id_water, id_border);
     populate_trees_in_chunk(&mut chunk, coord, reg, biomes, trees, cfg_seed);
+    populate_vegetation_props_in_chunk(&mut chunk, coord, reg, biomes, cfg_seed);
     chunk
 }
 

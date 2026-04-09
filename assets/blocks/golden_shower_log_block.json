@@ -1,6 +1,6 @@
 {
-  "name": "oak_log_block",
-  "texture_dir": "textures/blocks/log",
+  "name": "golden_shower_log_block",
+  "texture_dir": "textures/blocks/golden_shower_log",
   "texture": {
     "vertical": "log_top",
     "horizontal": "log_side"

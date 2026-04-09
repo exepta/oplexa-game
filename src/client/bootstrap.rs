@@ -7,6 +7,9 @@ pub(super) fn init_bevy_app(
     multiplayer_settings: NetworkSettings,
     client_identity: ClientIdentity,
 ) {
+    let cpu_cores = bevy::tasks::available_parallelism().max(1);
+    let (gameplay_workers, chunk_workers, io_workers) = task_pool_workers_for_cores(cpu_cores);
+
     let client_uuid = client_identity.uuid.clone();
     let build = BuildInfo {
         app_name: "Game Version",
@@ -36,11 +39,37 @@ pub(super) fn init_bevy_app(
                         present_mode: if config.graphics.vsync {
                             PresentMode::AutoVsync
                         } else {
-                            PresentMode::Immediate
+                            PresentMode::AutoNoVsync
                         },
                         ..default()
                     }),
                     ..default()
+                })
+                .set(TaskPoolPlugin {
+                    task_pool_options: TaskPoolOptions {
+                        io: bevy::app::TaskPoolThreadAssignmentPolicy {
+                            min_threads: io_workers,
+                            max_threads: io_workers,
+                            percent: (io_workers as f32 / cpu_cores as f32).clamp(0.0, 1.0),
+                            on_thread_spawn: None,
+                            on_thread_destroy: None,
+                        },
+                        async_compute: bevy::app::TaskPoolThreadAssignmentPolicy {
+                            min_threads: chunk_workers,
+                            max_threads: chunk_workers,
+                            percent: (chunk_workers as f32 / cpu_cores as f32).clamp(0.0, 1.0),
+                            on_thread_spawn: None,
+                            on_thread_destroy: None,
+                        },
+                        compute: bevy::app::TaskPoolThreadAssignmentPolicy {
+                            min_threads: gameplay_workers,
+                            max_threads: gameplay_workers,
+                            percent: (gameplay_workers as f32 / cpu_cores as f32).clamp(0.0, 1.0),
+                            on_thread_spawn: None,
+                            on_thread_destroy: None,
+                        },
+                        ..default()
+                    },
                 })
                 .set(RenderPlugin {
                     render_creation: RenderCreation::Automatic(create_gpu_settings(
@@ -81,7 +110,6 @@ pub(super) fn init_bevy_app(
         client_identity,
     ))
     .insert_non_send_resource(LanDiscoveryRuntime::new(&multiplayer_settings))
-    .insert_non_send_resource(LocalLanHost::default())
     .init_resource::<RemoteChunkStreamState>()
     .init_state::<AppState>()
     .add_plugins(EguiPlugin::default())
@@ -141,15 +169,15 @@ fn check_world_inspector_state(world_inspector_state: Res<WorldInspectorState>) 
     world_inspector_state.0
 }
 
-/// Runs the `log_file_appender` routine for log file appender in the `client` module.
+/// Runs the `log_file_appender` routine for oak_log file appender in the `client` module.
 fn log_file_appender(_app: &mut App) -> Option<BoxedLayer> {
     let log_dir = PathBuf::from("logs");
     if let Err(error) = std::fs::create_dir_all(&log_dir) {
-        eprintln!("Failed to create log directory: {}", error);
+        eprintln!("Failed to create oak_log directory: {}", error);
         return None;
     }
 
-    let timestamp = Utc::now().format("bevy-%d-%m-%Y.log").to_string();
+    let timestamp = Utc::now().format("bevy-%d-%m-%Y.oak_log").to_string();
     let log_path = log_dir.join(timestamp);
     let file = OpenOptions::new()
         .create(true)
@@ -167,7 +195,7 @@ fn log_file_appender(_app: &mut App) -> Option<BoxedLayer> {
             .lock()
             .unwrap()
             .try_clone()
-            .expect("Failed to clone log file handle");
+            .expect("Failed to clone oak_log file handle");
         Box::new(file) as Box<dyn Write + Send>
     });
 
@@ -179,7 +207,7 @@ fn log_file_appender(_app: &mut App) -> Option<BoxedLayer> {
     ))
 }
 
-/// Loads log env filter for the `client` module.
+/// Loads oak_log env filter for the `client` module.
 fn load_log_env_filter() -> String {
     dotenv().ok();
     let base = env::var("LOG_ENV_FILTER").unwrap_or_else(|_| "error".to_string());
@@ -190,7 +218,40 @@ fn load_log_env_filter() -> String {
     }
 }
 
-/// Represents start log text used by the `client` module.
+/// Returns fixed task-pool worker counts based on logical core count (including SMT/HT threads).
+///
+/// Target mapping (as requested):
+/// - 4 cores:  gameplay=1, chunks=2, io=1
+/// - 6 cores:  gameplay=1, chunks=3, io=1
+/// - 8 cores:  gameplay=1, chunks=5, io=1
+/// - 10 cores: gameplay=2, chunks=6, io=1
+/// - 12..14:   gameplay=2, chunks=7, io=2
+/// - 16 cores: gameplay=3, chunks=10, io=2
+/// - >16 cores: continue from 16-core baseline with additional workers.
+fn task_pool_workers_for_cores(logical_cores: usize) -> (usize, usize, usize) {
+    match logical_cores {
+        0..=4 => (1, 2, 1),
+        5..=6 => (1, 3, 1),
+        7..=8 => (1, 5, 1),
+        9..=10 => (2, 6, 1),
+        11..=14 => (2, 7, 2),
+        15..=16 => (3, 10, 2),
+        _ => {
+            // For larger systems, scale beyond the 16-core profile while keeping one logical
+            // core effectively free for the main/render thread.
+            let extra = logical_cores - 16;
+            let gameplay = 3 + (extra / 8);
+            let io = 2 + (extra / 8);
+            let reserved_main = 1usize;
+            let chunk = logical_cores
+                .saturating_sub(gameplay + io + reserved_main)
+                .max(1);
+            (gameplay.max(1), chunk, io.max(1))
+        }
+    }
+}
+
+/// Represents start oak_log text used by the `client` module.
 struct StartLogText {
     file: std::sync::Arc<std::sync::Mutex<File>>,
 }

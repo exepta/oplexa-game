@@ -1,6 +1,6 @@
 {
   "localized_name": "oplexa:sand_block",
-  "name": "Sand Block",
+  "name": "Sand",
   "max_stack_size": -1,
   "category": "block",
   "block_item": true,

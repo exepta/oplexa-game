@@ -13,15 +13,14 @@ use crate::core::events::block::block_player_events::{
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
 use crate::core::events::ui_events::{
     ChatSubmitRequest, ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest,
-    OpenToLanRequest, StopLanHostRequest,
 };
 use crate::core::inventory::items::{ItemRegistry, build_world_item_drop_visual};
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
 use crate::core::states::states::{AppState, BeforeUiState, LoadingStates};
-use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, get_block_world};
 use crate::core::world::biome::func::locate_biome_chunk_by_localized_name;
 use crate::core::world::biome::registry::BiomeRegistry;
-use crate::core::world::chunk::{ChunkMap, LoadCenter, SEA_LEVEL};
+use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, get_block_world};
+use crate::core::world::chunk::{ChunkMap, LoadCenter, SEA_LEVEL, VoxelStage};
 use crate::core::world::chunk_dimension::{
     CX, CY, CZ, SEC_COUNT, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local,
 };
@@ -30,7 +29,7 @@ use crate::core::world::save::RegionCache;
 use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
 use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use api::core::network::{
-    config::{DedicatedServerSettings, NetworkSettings},
+    config::NetworkSettings,
     discovery::{LanDiscoveryClient, LanServerInfo},
     protocols::{
         Auth, ClientBlockBreak, ClientBlockPlace, ClientChatMessage, ClientChunkInterest,
@@ -68,7 +67,6 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -189,6 +187,31 @@ struct MultiplayerDropIndex {
 struct RemoteChunkStreamState {
     last_requested_center: Option<IVec2>,
     last_requested_radius: Option<i32>,
+    progressive_radius: Option<i32>,
+    next_radius_step_at: f32,
+}
+
+impl RemoteChunkStreamState {
+    /// Runs the `reset` routine for reset in the `client` module.
+    fn reset(&mut self) {
+        self.last_requested_center = None;
+        self.last_requested_radius = None;
+        self.progressive_radius = None;
+        self.next_radius_step_at = 0.0;
+    }
+}
+
+/// Represents remote chunk decode queue used by the `client` module.
+#[derive(Resource, Default)]
+struct RemoteChunkDecodeQueue {
+    queued: VecDeque<ServerChunkData>,
+}
+
+impl RemoteChunkDecodeQueue {
+    /// Runs the `reset` routine for reset in the `client` module.
+    fn reset(&mut self) {
+        self.queued.clear();
+    }
 }
 
 /// Represents block id remap used by the `client` module.
@@ -288,12 +311,47 @@ const REMOTE_PLAYER_INTERP_BACK_TIME_SECS: f32 = 0.10;
 const REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS: f32 = 0.08;
 const REMOTE_PLAYER_MAX_SNAPSHOT_POINTS: usize = 24;
 const REMOTE_PLAYER_SMOOTHING_HZ: f32 = 18.0;
-const LOCATE_MAX_RADIUS_CHUNKS: i32 = 256;
+const MULTIPLAYER_CHUNK_INTEREST_BOOTSTRAP_RADIUS: i32 = 3;
+const MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS: f32 = 0.12;
+const MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE: usize = 2;
+const LOCATE_MAX_RADIUS_BLOCKS_CAP: i32 = 1000;
 const NETWORK_CONFIG_PATH: &str = "config/network.toml";
 const CTRL_C_GRACEFUL_EXIT_DELAY_SECS: f64 = 0.25;
 const SERVER_TIMEOUT_ERROR_TEXT: &str = "Server time out!";
 
 static TERMINAL_INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Converts locate radius from blocks into chunks and clamps it to safe bounds.
+fn locate_radius_chunks_from_blocks(radius_blocks: i32) -> i32 {
+    let clamped_blocks = radius_blocks.clamp(1, LOCATE_MAX_RADIUS_BLOCKS_CAP);
+    let chunk_span = (CX as i32).max(CZ as i32);
+    (clamped_blocks + (chunk_span - 1)) / chunk_span
+}
+
+/// Dynamic decode budget for streamed multiplayer chunks.
+fn multiplayer_chunk_decode_budget(backlog_len: usize, frame_secs: f32) -> usize {
+    let mut budget = MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE;
+    if backlog_len >= 64 {
+        budget = 4;
+    }
+    if backlog_len >= 160 {
+        budget = 8;
+    }
+    if backlog_len >= 320 {
+        budget = 12;
+    }
+    if backlog_len >= 640 {
+        budget = 20;
+    }
+
+    if frame_secs > 0.033 {
+        budget = budget.min(4);
+    } else if frame_secs > 0.024 {
+        budget = budget.min(8);
+    }
+
+    budget.max(MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE)
+}
 
 /// Runs the main routine for the `client` module.
 pub fn run() {
@@ -332,6 +390,7 @@ impl Plugin for MultiplayerClientPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MultiplayerDropIndex>()
             .init_resource::<RemoteChunkStreamState>()
+            .init_resource::<RemoteChunkDecodeQueue>()
             .init_resource::<BlockIdRemap>()
             .init_resource::<TerminalInterruptExitState>()
             .add_systems(Startup, setup_remote_player_visuals)
@@ -344,9 +403,6 @@ impl Plugin for MultiplayerClientPlugin {
                     poll_lan_servers,
                     connect_to_server_requested,
                     disconnect_from_server_requested,
-                    open_to_lan_requested,
-                    finish_open_to_lan_connect,
-                    stop_lan_host_requested,
                     handle_chat_submit_requests,
                     send_local_block_break_events,
                     send_local_block_place_events,
@@ -354,7 +410,7 @@ impl Plugin for MultiplayerClientPlugin {
                     send_client_keepalive,
                     receive_player_messages,
                     receive_chat_messages,
-                    receive_world_messages,
+                    receive_world_messages.in_set(VoxelStage::WorldEdit),
                     receive_drop_messages,
                     update_connection_state,
                     simulate_multiplayer_drop_items,
@@ -363,7 +419,6 @@ impl Plugin for MultiplayerClientPlugin {
                     send_local_player_pose,
                 ),
             )
-            .add_systems(Update, stop_lan_host_after_disconnect)
             .add_systems(Update, smooth_remote_players);
     }
 }
@@ -376,6 +431,7 @@ fn handle_terminal_interrupt_exit(
     mut block_remap: ResMut<BlockIdRemap>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     mut commands: Commands,
     mut app_exit: MessageWriter<AppExit>,
 ) {
@@ -388,8 +444,8 @@ fn handle_terminal_interrupt_exit(
         runtime.disconnected_remote_players.clear();
         runtime.remote_player_smoothing.clear();
         block_remap.reset();
-        chunk_stream.last_requested_center = None;
-        chunk_stream.last_requested_radius = None;
+        chunk_stream.reset();
+        chunk_decode_queue.reset();
         multiplayer_connection.clear_session();
         interrupt_state.started_at = Some(time.elapsed_secs_f64());
         return;
@@ -455,6 +511,7 @@ fn on_server_disconnected(
     mut block_remap: ResMut<BlockIdRemap>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     mut chat_log: ResMut<ChatLog>,
     mut drops: ResMut<MultiplayerDropIndex>,
     mut next_state: ResMut<NextState<AppState>>,
@@ -484,8 +541,8 @@ fn on_server_disconnected(
     runtime.player_names.clear();
     runtime.disconnected_remote_players.clear();
     block_remap.reset();
-    chunk_stream.last_requested_center = None;
-    chunk_stream.last_requested_radius = None;
+    chunk_stream.reset();
+    chunk_decode_queue.reset();
 
     // If we disconnect while the world is loading or in-game, reset to the menu.
     // Without this, check_base_gen_world_ready would see uses_local_save_data()=true
@@ -560,6 +617,7 @@ fn connect_to_server_requested(
     mut connect_requests: MessageReader<ConnectToServerRequest>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     mut block_remap: ResMut<BlockIdRemap>,
     q_active: Query<
         (),
@@ -614,8 +672,8 @@ fn connect_to_server_requested(
     multiplayer_connection.spawn_translation = None;
     multiplayer_connection.known_player_names.clear();
     multiplayer_connection.last_error = None;
-    chunk_stream.last_requested_center = None;
-    chunk_stream.last_requested_radius = None;
+    chunk_stream.reset();
+    chunk_decode_queue.reset();
 }
 
 /// Runs the `disconnect_from_server_requested` routine for disconnect from server requested in the `client` module.
@@ -623,6 +681,7 @@ fn disconnect_from_server_requested(
     mut disconnect_requests: MessageReader<DisconnectFromServerRequest>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     mut block_remap: ResMut<BlockIdRemap>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut commands: Commands,
@@ -634,161 +693,8 @@ fn disconnect_from_server_requested(
     do_disconnect(&mut runtime, &mut commands);
     block_remap.reset();
     multiplayer_connection.clear_session();
-    chunk_stream.last_requested_center = None;
-    chunk_stream.last_requested_radius = None;
-}
-
-/// Runs the `open_to_lan_requested` routine for open to lan requested in the `client` module.
-fn open_to_lan_requested(
-    mut requests: MessageReader<OpenToLanRequest>,
-    q_active: Query<
-        (),
-        Or<(
-            With<Connected>,
-            With<lightyear::prelude::client::Connecting>,
-        )>,
-    >,
-    mut runtime: ResMut<MultiplayerClientRuntime>,
-    mut local_host: NonSendMut<LocalLanHost>,
-) {
-    if requests.read().next().is_none() {
-        return;
-    }
-
-    local_host.refresh();
-
-    if let Some(entity) = runtime.connection_entity {
-        if q_active.get(entity).is_ok() {
-            warn!("Open to LAN ignored because the client is already connected.");
-            return;
-        }
-    }
-
-    let settings = DedicatedServerSettings::load_or_create("server.settings.toml");
-    let session_url = settings.session_url();
-
-    if local_host.child.is_none() {
-        match spawn_lan_host_process() {
-            Ok(child) => {
-                info!("Started LAN host at {}", session_url);
-                local_host.child = Some(child);
-                local_host.stop_pending = false;
-            }
-            Err(error) => {
-                warn!("Failed to start LAN host: {}", error);
-                return;
-            }
-        }
-    }
-
-    local_host.session_url = Some(session_url.clone());
-    local_host.connect_timer = Some(Timer::from_seconds(0.75, TimerMode::Once));
-    runtime.auto_connect_lan = false;
-}
-
-/// Runs the `finish_open_to_lan_connect` routine for finish open to lan connect in the `client` module.
-fn finish_open_to_lan_connect(
-    time: Res<Time>,
-    mut runtime: ResMut<MultiplayerClientRuntime>,
-    mut local_host: NonSendMut<LocalLanHost>,
-    mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
-    mut chunk_stream: ResMut<RemoteChunkStreamState>,
-    mut block_remap: ResMut<BlockIdRemap>,
-    mut commands: Commands,
-) {
-    local_host.refresh();
-
-    let Some(timer) = local_host.connect_timer.as_mut() else {
-        return;
-    };
-    timer.tick(time.delta());
-    if !timer.is_finished() {
-        return;
-    }
-
-    let Some(session_url) = local_host.session_url.clone() else {
-        local_host.connect_timer = None;
-        return;
-    };
-
-    block_remap.reset();
-    do_connect(&mut runtime, session_url.clone(), &mut commands);
-    multiplayer_connection.connected = false;
-    multiplayer_connection.phase = MultiplayerConnectionPhase::Connecting;
-    multiplayer_connection.set_world_data_mode_remote();
-    multiplayer_connection.active_session_url = Some(session_url);
-    multiplayer_connection.server_name = None;
-    multiplayer_connection.world_name = None;
-    multiplayer_connection.world_seed = None;
-    multiplayer_connection.spawn_translation = None;
-    multiplayer_connection.known_player_names.clear();
-    multiplayer_connection.last_error = None;
-    chunk_stream.last_requested_center = None;
-    chunk_stream.last_requested_radius = None;
-    local_host.connect_timer = None;
-}
-
-/// Runs the `stop_lan_host_requested` routine for stop lan host requested in the `client` module.
-fn stop_lan_host_requested(
-    mut requests: MessageReader<StopLanHostRequest>,
-    runtime: Res<MultiplayerClientRuntime>,
-    q_active: Query<
-        (),
-        Or<(
-            With<Connected>,
-            With<lightyear::prelude::client::Connecting>,
-        )>,
-    >,
-    mut local_host: NonSendMut<LocalLanHost>,
-) {
-    if requests.read().next().is_none() {
-        return;
-    }
-
-    let connection_active = runtime
-        .connection_entity
-        .map(|entity| q_active.get(entity).is_ok())
-        .unwrap_or(false);
-
-    if connection_active {
-        local_host.stop_pending = true;
-        return;
-    }
-
-    local_host.stop();
-}
-
-/// Stops local LAN host after disconnect is fully complete.
-fn stop_lan_host_after_disconnect(
-    runtime: Res<MultiplayerClientRuntime>,
-    q_active: Query<
-        (),
-        Or<(
-            With<Connected>,
-            With<lightyear::prelude::client::Connecting>,
-        )>,
-    >,
-    mut local_host: NonSendMut<LocalLanHost>,
-) {
-    if !local_host.stop_pending {
-        return;
-    }
-
-    local_host.refresh();
-    if local_host.child.is_none() {
-        local_host.stop_pending = false;
-        return;
-    }
-
-    let connection_active = runtime
-        .connection_entity
-        .map(|entity| q_active.get(entity).is_ok())
-        .unwrap_or(false);
-    if connection_active {
-        return;
-    }
-
-    local_host.stop();
+    chunk_stream.reset();
+    chunk_decode_queue.reset();
 }
 
 /// Polls connection state and updates `MultiplayerConnectionState`.
@@ -827,6 +733,7 @@ fn receive_player_messages(
     mut next_state: ResMut<NextState<AppState>>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     mut block_remap: ResMut<BlockIdRemap>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut q: Query<(
@@ -866,8 +773,8 @@ fn receive_player_messages(
         runtime.player_names.clear();
         runtime.disconnected_remote_players.clear();
         block_remap.reset();
-        chunk_stream.last_requested_center = None;
-        chunk_stream.last_requested_radius = None;
+        chunk_stream.reset();
+        chunk_decode_queue.reset();
 
         if matches!(
             app_state.get(),
@@ -926,8 +833,8 @@ fn receive_player_messages(
             &mut next_state,
         );
         multiplayer_connection.spawn_translation = Some(spawn_translation);
-        chunk_stream.last_requested_center = None;
-        chunk_stream.last_requested_radius = None;
+        chunk_stream.reset();
+        chunk_decode_queue.reset();
     }
 
     for message in recv_joined.receive() {
@@ -1057,10 +964,14 @@ fn handle_chat_submit_requests(
     mut chat_log: ResMut<ChatLog>,
     mut game_mode: ResMut<GameModeState>,
     mut flight_state: Query<&mut FlightState>,
+    global_config: Res<GlobalConfig>,
     world_gen_config: Res<WorldGenConfig>,
     biomes: Res<BiomeRegistry>,
     mut q_player: Query<&mut Transform, With<Player>>,
 ) {
+    let locate_max_radius_chunks =
+        locate_radius_chunks_from_blocks(global_config.interface.locate_search_radius);
+
     for request in submit_requests.read() {
         let text = request.text.trim();
         if text.is_empty() {
@@ -1193,13 +1104,27 @@ fn handle_chat_submit_requests(
                     let world_z = player_transform.translation.z.floor() as i32;
                     let (origin_chunk, _) = world_to_chunk_xz(world_x, world_z);
 
-                    let Some(found_chunk) = locate_biome_chunk_by_localized_name(
-                        &biomes,
-                        world_gen_config.seed,
-                        origin_chunk,
-                        target,
-                        LOCATE_MAX_RADIUS_CHUNKS,
-                    ) else {
+                    let locate_result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            locate_biome_chunk_by_localized_name(
+                                &biomes,
+                                world_gen_config.seed,
+                                origin_chunk,
+                                target,
+                                locate_max_radius_chunks,
+                            )
+                        }));
+                    let Some(found_chunk) = (match locate_result {
+                        Ok(found) => found,
+                        Err(_) => {
+                            push_system_chat(
+                                &mut chat_log,
+                                SystemMessageLevel::Warn,
+                                "Locate failed due to an internal error.".to_string(),
+                            );
+                            continue;
+                        }
+                    }) else {
                         push_system_chat(
                             &mut chat_log,
                             SystemMessageLevel::Warn,
@@ -1246,7 +1171,8 @@ fn handle_chat_submit_requests(
                                 );
                                 continue;
                             };
-                            player_transform.translation = Vec3::new(target[0], target[1], target[2]);
+                            player_transform.translation =
+                                Vec3::new(target[0], target[1], target[2]);
                             push_system_chat(
                                 &mut chat_log,
                                 SystemMessageLevel::Info,
@@ -1331,11 +1257,13 @@ fn sync_known_player_names(
 /// Handles ServerChunkData, ServerBlockBreak, ServerBlockPlace messages.
 #[allow(clippy::too_many_arguments)]
 fn receive_world_messages(
+    time: Res<Time>,
     registry: Option<Res<BlockRegistry>>,
     block_remap: Res<BlockIdRemap>,
     mut chunk_map: ResMut<ChunkMap>,
     mut fluids: ResMut<FluidMap>,
     mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     runtime: Res<MultiplayerClientRuntime>,
     mut q: Query<(
         &mut MessageReceiver<ServerChunkData>,
@@ -1344,75 +1272,92 @@ fn receive_world_messages(
     )>,
 ) {
     let Some(entity) = runtime.connection_entity else {
+        chunk_decode_queue.reset();
         return;
     };
     if !block_remap.is_ready() {
+        chunk_decode_queue.reset();
         return;
     }
 
     let Ok((mut recv_chunk, mut recv_block_break, mut recv_block_place)) = q.get_mut(entity) else {
+        chunk_decode_queue.reset();
         return;
     };
 
     for message in recv_chunk.receive() {
-        let Some(registry) = registry.as_ref() else {
-            continue;
-        };
+        chunk_decode_queue.queued.push_back(message);
+    }
 
+    let decode_budget =
+        multiplayer_chunk_decode_budget(chunk_decode_queue.queued.len(), time.delta_secs());
+
+    let mut dirty_coords = HashSet::new();
+    if let Some(registry) = registry.as_ref() {
         let water_local_id = registry
             .id_opt("water_block")
             .or_else(|| registry.id_opt("water"))
             .unwrap_or(0);
-        let coord = IVec2::new(message.coord[0], message.coord[1]);
-        let Ok(mut chunk) = crate::generator::chunk::chunk_utils::decode_chunk(&message.blocks)
-        else {
-            warn!("Failed to decode streamed chunk {},{}", coord.x, coord.y);
-            continue;
-        };
+        for _ in 0..decode_budget {
+            let Some(message) = chunk_decode_queue.queued.pop_front() else {
+                break;
+            };
 
-        let mut fluid_chunk = FluidChunk::new(SEA_LEVEL);
-        for y in 0..CY {
-            for z in 0..CZ {
-                for x in 0..CX {
-                    let id = chunk.get(x, y, z);
-                    let local_id = remap_server_block_id(&block_remap, registry, id);
-                    if water_local_id != 0 && local_id == water_local_id {
-                        chunk.set(x, y, z, 0);
-                        fluid_chunk.set(x, y, z, true);
-                    } else {
-                        chunk.set(x, y, z, local_id);
+            // Keep only the newest queued payload per chunk coord to avoid stale
+            // rebuild work when the same chunk was streamed multiple times.
+            if chunk_decode_queue
+                .queued
+                .iter()
+                .any(|queued| queued.coord == message.coord)
+            {
+                continue;
+            }
+
+            let coord = IVec2::new(message.coord[0], message.coord[1]);
+            let Ok(mut chunk) = crate::generator::chunk::chunk_utils::decode_chunk(&message.blocks)
+            else {
+                warn!("Failed to decode streamed chunk {},{}", coord.x, coord.y);
+                continue;
+            };
+
+            let mut fluid_chunk = FluidChunk::new(SEA_LEVEL);
+            for y in 0..CY {
+                for z in 0..CZ {
+                    for x in 0..CX {
+                        let id = chunk.get(x, y, z);
+                        let local_id = remap_server_block_id(&block_remap, registry, id);
+                        if water_local_id != 0 && local_id == water_local_id {
+                            chunk.set(x, y, z, 0);
+                            fluid_chunk.set(x, y, z, true);
+                        } else {
+                            chunk.set(x, y, z, local_id);
+                        }
                     }
                 }
             }
-        }
 
-        debug!(
-            "[MP] Received ServerChunkData for chunk {:?} (total: {})",
-            coord,
-            chunk_map.chunks.len() + 1
-        );
-        chunk.mark_all_dirty();
-        chunk_map.chunks.insert(coord, chunk);
-        fluids.0.insert(coord, fluid_chunk);
+            chunk.mark_all_dirty();
+            chunk_map.chunks.insert(coord, chunk);
+            fluids.0.insert(coord, fluid_chunk);
 
-        for sub in 0..SEC_COUNT {
-            ev_dirty.write(SubChunkNeedRemeshEvent { coord, sub });
-        }
+            dirty_coords.insert(coord);
 
-        for neighbor in [
-            IVec2::new(coord.x + 1, coord.y),
-            IVec2::new(coord.x - 1, coord.y),
-            IVec2::new(coord.x, coord.y + 1),
-            IVec2::new(coord.x, coord.y - 1),
-        ] {
-            if chunk_map.chunks.contains_key(&neighbor) {
-                for sub in 0..SEC_COUNT {
-                    ev_dirty.write(SubChunkNeedRemeshEvent {
-                        coord: neighbor,
-                        sub,
-                    });
+            for neighbor in [
+                IVec2::new(coord.x + 1, coord.y),
+                IVec2::new(coord.x - 1, coord.y),
+                IVec2::new(coord.x, coord.y + 1),
+                IVec2::new(coord.x, coord.y - 1),
+            ] {
+                if chunk_map.chunks.contains_key(&neighbor) {
+                    dirty_coords.insert(neighbor);
                 }
             }
+        }
+    }
+
+    for coord in dirty_coords {
+        for sub in 0..SEC_COUNT {
+            ev_dirty.write(SubChunkNeedRemeshEvent { coord, sub });
         }
     }
 
@@ -1517,27 +1462,31 @@ fn receive_drop_messages(
 
 /// Runs the `send_chunk_interest_updates` routine for send chunk interest updates in the `client` module.
 fn send_chunk_interest_updates(
+    time: Res<Time>,
     game_config: Res<GlobalConfig>,
     q_player: Query<&Transform, With<Player>>,
     multiplayer_connection: Res<MultiplayerConnectionState>,
     q_connected: Query<Has<Connected>>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
+    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     runtime: Res<MultiplayerClientRuntime>,
     mut q_sender: Query<&mut MessageSender<ClientChunkInterest>>,
 ) {
     let Some(entity) = runtime.connection_entity else {
-        chunk_stream.last_requested_center = None;
-        chunk_stream.last_requested_radius = None;
+        chunk_stream.reset();
+        chunk_decode_queue.reset();
         return;
     };
 
     if !q_connected.get(entity).unwrap_or(false)
         || multiplayer_connection.active_session_url.is_none()
     {
+        chunk_stream.reset();
+        chunk_decode_queue.reset();
         return;
     }
 
-    let radius = game_config.graphics.chunk_range.max(1);
+    let target_radius = game_config.graphics.chunk_range.max(1);
     let center = if let Ok(transform) = q_player.single() {
         world_to_chunk_xz(
             (transform.translation.x / VOXEL_SIZE).floor() as i32,
@@ -1553,6 +1502,40 @@ fn send_chunk_interest_updates(
     } else {
         return;
     };
+    let now = time.elapsed_secs();
+
+    let should_reset_progressive = match chunk_stream.last_requested_center {
+        None => true,
+        Some(last_center) => {
+            let dx = (center.x - last_center.x).abs();
+            let dz = (center.y - last_center.y).abs();
+            dx.max(dz) > 2
+        }
+    };
+
+    if should_reset_progressive {
+        let bootstrap_radius = target_radius
+            .min(MULTIPLAYER_CHUNK_INTEREST_BOOTSTRAP_RADIUS)
+            .max(1);
+        chunk_stream.progressive_radius = Some(bootstrap_radius);
+        chunk_stream.next_radius_step_at = now + MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS;
+    } else if chunk_stream.progressive_radius.is_none() {
+        let carry_radius = chunk_stream.last_requested_radius.unwrap_or(target_radius);
+        chunk_stream.progressive_radius = Some(carry_radius.clamp(1, target_radius));
+    }
+
+    let mut radius = chunk_stream
+        .progressive_radius
+        .unwrap_or(target_radius)
+        .clamp(1, target_radius);
+
+    if radius < target_radius && now >= chunk_stream.next_radius_step_at {
+        radius += 1;
+        chunk_stream.progressive_radius = Some(radius);
+        chunk_stream.next_radius_step_at = now + MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS;
+    } else {
+        chunk_stream.progressive_radius = Some(radius);
+    }
 
     if chunk_stream.last_requested_center == Some(center)
         && chunk_stream.last_requested_radius == Some(radius)
@@ -1561,12 +1544,7 @@ fn send_chunk_interest_updates(
     }
 
     if let Ok(mut sender) = q_sender.get_mut(entity) {
-        debug!(
-            "[MP] Sending ClientChunkInterest: center={:?}, radius={}",
-            [center.x, center.y],
-            radius
-        );
-        sender.send::<OrderedReliable>(ClientChunkInterest::new([center.x, center.y], radius));
+        sender.send::<UnorderedReliable>(ClientChunkInterest::new([center.x, center.y], radius));
         chunk_stream.last_requested_center = Some(center);
         chunk_stream.last_requested_radius = Some(radius);
     }

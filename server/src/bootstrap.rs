@@ -10,6 +10,7 @@ use lightyear::connection::server::Start;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use log::info;
+use rand::RngExt;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -75,7 +76,9 @@ pub fn load_bootstrap() -> BootstrapResult {
             chunk_stream_sends_per_tick_max: server_settings.chunk_stream_sends_per_tick_max,
             chunk_stream_inflight_per_client: server_settings.chunk_stream_inflight_per_client,
             chunk_flight_timeout_ms: server_settings.chunk_flight_timeout_ms,
+            chunk_stream_gen_max_inflight: server_settings.chunk_stream_gen_max_inflight,
             max_stream_radius: server_settings.max_stream_radius,
+            locate_search_radius: server_settings.locate_search_radius,
             dead_entity_check_interval_secs: server_settings.dead_entity_check_interval_secs,
         },
         world_root,
@@ -155,6 +158,10 @@ fn prepare_server_world(settings: &DedicatedServerSettings) -> (PathBuf, i32, [f
 /// Reads world seed for the `bootstrap` module.
 fn read_world_seed(path: &Path) -> Option<i32> {
     let text = fs::read_to_string(path).ok()?;
+    if text.contains("random") {
+        let mut random = rand::rng();
+        return Some(random.random());
+    }
     text.trim().parse::<i32>().ok()
 }
 

@@ -66,6 +66,12 @@ pub struct DebugGridState {
     pub plane_y: f32,
 }
 
+/// Runtime toggle state for block-collider gizmo rendering.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct BlockColliderGizmoState {
+    pub show: bool,
+}
+
 /// Periodically sampled system/application performance metrics.
 ///
 /// The underlying collector is `sysinfo::System` (`sys` field). Values are

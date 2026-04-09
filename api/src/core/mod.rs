@@ -14,6 +14,7 @@ pub mod world;
 
 use crate::core::chat::ChatLog;
 use crate::core::config::*;
+use crate::core::debug::BlockColliderGizmoState;
 use crate::core::entities::EntitiesModule;
 use crate::core::events::EventModule;
 use crate::core::inventory::recipe::HandCraftedState;
@@ -32,6 +33,7 @@ impl Plugin for CoreModule {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorldGenConfig>();
         app.init_resource::<CrosshairConfig>();
+        app.init_resource::<BlockColliderGizmoState>();
         app.init_resource::<ChatLog>();
         app.init_resource::<SelectedBlock>();
         app.init_resource::<MiningState>();

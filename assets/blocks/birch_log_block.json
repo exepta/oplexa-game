@@ -1,0 +1,15 @@
+{
+  "name": "birch_log_block",
+  "texture_dir": "textures/blocks/birch_log",
+  "texture": {
+    "vertical": "log_top",
+    "horizontal": "log_side"
+  },
+  "stats": {
+    "hardness": 2.7,
+    "blast_resistance": 1.5,
+    "level": "0",
+    "opaque": true,
+    "emissive": 0.0
+  }
+}

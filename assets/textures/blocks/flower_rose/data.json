@@ -1,0 +1,9 @@
+{
+  "image": "flower_rose.png",
+  "tile_size": 128,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "flower": [0, 0]
+  }
+}

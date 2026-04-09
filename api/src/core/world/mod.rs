@@ -3,6 +3,7 @@ pub mod block;
 pub mod chunk;
 pub mod chunk_dimension;
 pub mod fluid;
+pub mod prop;
 pub mod save;
 pub mod spawn;
 

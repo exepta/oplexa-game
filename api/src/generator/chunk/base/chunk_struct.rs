@@ -1,5 +1,6 @@
 use crate::core::world::block::*;
 use crate::core::world::chunk::*;
+use crate::core::world::prop::PropDefinition;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
@@ -22,7 +23,7 @@ pub struct PendingMesh(
 );
 
 /// Represents reg lite entry used by the `generator::chunk::chunk_struct` module.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RegLiteEntry {
     pub top: UvRect,
     pub bottom: UvRect,
@@ -33,6 +34,7 @@ pub struct RegLiteEntry {
     pub opaque: bool,
     pub fluid: bool,
     pub foliage: bool,
+    pub prop: Option<PropDefinition>,
 }
 /// Represents reg lite used by the `generator::chunk::chunk_struct` module.
 #[derive(Clone)]
@@ -60,6 +62,7 @@ impl RegLite {
                     opaque: reg.def(id).stats.opaque,
                     fluid: reg.def(id).stats.fluid,
                     foliage: reg.def(id).stats.foliage,
+                    prop: reg.def(id).prop.clone(),
                 },
             );
         }
@@ -92,6 +95,18 @@ impl RegLite {
     #[inline]
     pub fn foliage(&self, id: BlockId) -> bool {
         self.map.get(&id).map(|e| e.foliage).unwrap_or(false)
+    }
+    /// Runs the `prop` routine for prop in the `generator::chunk::chunk_struct` module.
+    #[inline]
+    pub fn prop(&self, id: BlockId) -> Option<&PropDefinition> {
+        self.map.get(&id).and_then(|entry| entry.prop.as_ref())
+    }
+    /// Runs the `is_crossed_prop` routine for is crossed prop in the `generator::chunk::chunk_struct` module.
+    #[inline]
+    pub fn is_crossed_prop(&self, id: BlockId) -> bool {
+        self.prop(id)
+            .map(PropDefinition::is_crossed_planes)
+            .unwrap_or(false)
     }
 }
 

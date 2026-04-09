@@ -19,7 +19,7 @@ vram_metal = ["api/vram_metal"]
 
 [profile.release]
 panic = "unwind"
-opt-level = "s"
+opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
@@ -40,6 +40,7 @@ features = [
     "bevy_state",
     "bevy_core_pipeline",
     "bevy_gizmos",
+    "bevy_gizmos_render",
     "bevy_log",
     "bevy_render",
     "bevy_window",
@@ -119,3 +120,9 @@ version = "0.5.0"
 [dependencies]
 api = { path = "api" }
 lightyear = { version = "0.26.4", features = ["websocket", "netcode"] }
+
+[target.'cfg(windows)'.dependencies]
+api = { path = "api", features = ["vram_dxgi"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+api = { path = "api", features = ["vram_metal"] }

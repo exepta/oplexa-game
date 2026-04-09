@@ -1,0 +1,10 @@
+{
+  "image": "golden_shower_log.png",
+  "tile_size": 128,
+  "columns": 2,
+  "rows": 2,
+  "tiles": {
+    "log_top": [0, 0],
+    "log_side": [0, 1]
+  }
+}

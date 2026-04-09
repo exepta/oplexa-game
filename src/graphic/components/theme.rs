@@ -265,6 +265,7 @@ fn style_paragraphs(
         color.0 = match tone {
             Some(UiTextTone::Darker) => color_text_darker(),
             Some(UiTextTone::CardPing) => color_text_darker(),
+            Some(UiTextTone::HotbarTooltip) => color_text(),
             Some(UiTextTone::TooltipName) => color_accent(),
             Some(UiTextTone::TooltipKey) => Color::srgb_u8(0xc5, 0xc7, 0xcd),
             _ => color_text(),
@@ -273,6 +274,7 @@ fn style_paragraphs(
             Some(UiTextTone::Heading) => 14.0,
             Some(UiTextTone::CardName) => 13.0,
             Some(UiTextTone::CardPing) => 11.0,
+            Some(UiTextTone::HotbarTooltip) => 15.0,
             Some(UiTextTone::TooltipName) => 12.0,
             Some(UiTextTone::TooltipKey) => 11.0,
             _ => 12.0,
@@ -288,7 +290,6 @@ fn style_pause_menu_button_texts(
     let mut pause_ids = HashSet::new();
     for (id, css_id) in &buttons {
         if css_id.0 == PAUSE_PLAY_ID
-            || css_id.0 == PAUSE_CONNECT_ID
             || css_id.0 == PAUSE_SETTINGS_ID
             || css_id.0 == PAUSE_CLOSE_ID
         {
@@ -328,6 +329,89 @@ fn style_button_icons(mut images: Query<(&Name, &mut Node), With<ImageNode>>) {
         node.justify_self = JustifySelf::Center;
         node.align_self = AlignSelf::Center;
     }
+}
+
+/// Applies placeholder/caret color overrides for input fields.
+fn style_input_placeholder_and_cursor(
+    input_fields: Query<(&UIGenID, &InputField, &UIWidgetState), With<InputField>>,
+    mut text_nodes: Query<(&BindToID, &CssClass, &mut TextColor), With<Text>>,
+    mut cursor_nodes: Query<(&CssClass, &mut BackgroundColor)>,
+) {
+    let mut placeholder_active = HashMap::new();
+    for (ui_id, input, state) in &input_fields {
+        let is_placeholder = input.text.is_empty() && state.focused && !state.disabled;
+        placeholder_active.insert(ui_id.get(), is_placeholder);
+    }
+
+    for (bind, classes, mut color) in &mut text_nodes {
+        if !css_has_class(classes, "input-text") {
+            continue;
+        }
+        let is_placeholder = placeholder_active
+            .get(&bind.get())
+            .copied()
+            .unwrap_or(false);
+        color.0 = if is_placeholder {
+            color_text_darker()
+        } else {
+            color_text()
+        };
+    }
+
+    for (classes, mut bg) in &mut cursor_nodes {
+        if !css_has_class(classes, "input-cursor") {
+            continue;
+        }
+        bg.0 = Color::srgba(1.0, 1.0, 1.0, bg.0.alpha());
+    }
+}
+
+/// Forces text cursor icon while hovering any input field.
+fn enforce_text_cursor_for_input_hover(
+    mut commands: Commands,
+    input_states: Query<&UIWidgetState, With<InputField>>,
+    button_states: Query<&UIWidgetState, With<Button>>,
+    mut window_q: Query<(Entity, &CursorOptions, Option<&mut CursorIcon>), With<PrimaryWindow>>,
+) {
+    let hovered_input = input_states.iter().any(|state| state.hovered && !state.disabled);
+    let hovered_button = button_states
+        .iter()
+        .any(|state| state.hovered && !state.disabled);
+
+    let Ok((window_entity, cursor_options, mut cursor_icon)) = window_q.single_mut() else {
+        return;
+    };
+    if !cursor_options.visible || cursor_options.grab_mode != CursorGrabMode::None {
+        return;
+    }
+
+    if hovered_input {
+        let desired = CursorIcon::from(SystemCursorIcon::Text);
+        if let Some(icon) = cursor_icon.as_deref_mut() {
+            if *icon != desired {
+                *icon = desired;
+            }
+        } else {
+            commands.entity(window_entity).insert(desired);
+        }
+        return;
+    }
+
+    if hovered_button {
+        return;
+    }
+
+    let Some(icon) = cursor_icon.as_deref_mut() else {
+        return;
+    };
+    if matches!(icon, CursorIcon::System(SystemCursorIcon::Text)) {
+        *icon = CursorIcon::from(SystemCursorIcon::Default);
+    }
+}
+
+#[inline]
+fn css_has_class(classes: &CssClass, wanted: &str) -> bool {
+    classes.0.iter().any(|class_name| class_name == wanted)
 }
 
 /// Runs the `style_slot_count_badges` routine for style slot count badges in the `graphic::components::theme` module.

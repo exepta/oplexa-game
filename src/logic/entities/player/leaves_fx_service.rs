@@ -5,12 +5,18 @@ use crate::core::world::chunk::ChunkMap;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::math::primitives::Rectangle;
 use bevy::prelude::*;
+use std::collections::HashSet;
 
-const MAX_LEAF_PARTICLES: usize = 140;
-const SPAWN_INTERVAL_SECS: f32 = 0.16;
+const MAX_LEAF_PARTICLES: usize = 180;
+const SPAWN_INTERVAL_SECS: f32 = 0.28;
 const SPAWN_RADIUS_BLOCKS: i32 = 14;
-const SPAWN_ATTEMPTS: usize = 18;
-const LEAF_SCAN_DEPTH: i32 = 12;
+const SPAWN_ATTEMPTS: usize = 28;
+const LEAF_SCAN_DEPTH: i32 = 26;
+const SHED_INTERVAL_SECS: f32 = 1.10;
+const SHED_RADIUS_BLOCKS: i32 = 11;
+const SHED_ATTEMPTS: usize = 24;
+const SHED_SCAN_DEPTH: i32 = 30;
+const LEAF_SIZE_MULTIPLIER: f32 = 1.25;
 
 /// Ambient leaves VFX plugin.
 pub struct LeavesAmbientFxPlugin;
@@ -42,13 +48,18 @@ struct LeavesFxAssets {
     quad: Handle<Mesh>,
     oak_material: Handle<StandardMaterial>,
     spruce_material: Handle<StandardMaterial>,
+    golden_shower_material: Handle<StandardMaterial>,
     oak_leaves_id: BlockId,
     spruce_leaves_id: BlockId,
+    golden_shower_leaves_id: BlockId,
+    leaf_block_ids: Vec<BlockId>,
+    leaf_block_set: HashSet<BlockId>,
 }
 
 #[derive(Resource, Default)]
 struct LeavesFxState {
     spawn_accumulator: f32,
+    shed_accumulator: f32,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -74,12 +85,23 @@ fn ensure_leaves_fx_assets(
 
     fx_assets.oak_leaves_id = id_any(&reg, &["oak_leaves_block", "leaves_block"]);
     fx_assets.spruce_leaves_id = id_any(&reg, &["spruce_leaves_block"]);
+    fx_assets.golden_shower_leaves_id = id_any(&reg, &["golden_shower_leaves_block"]);
+    fx_assets.leaf_block_ids.clear();
+    fx_assets.leaf_block_set.clear();
+    for id in 1..reg.defs.len() as u16 {
+        if reg.stats(id).foliage && !reg.is_prop(id) {
+            fx_assets.leaf_block_ids.push(id);
+            fx_assets.leaf_block_set.insert(id);
+        }
+    }
     fx_assets.quad = meshes.add(Mesh::from(Rectangle::new(0.20, 0.20)));
 
     let oak_tex: Handle<Image> =
         asset_server.load("textures/blocks/oak_leaves/oak_leaf_particle.png");
     let spruce_tex: Handle<Image> =
         asset_server.load("textures/blocks/spruce_leaves/spruce_leaf_particle.png");
+    let golden_shower_tex: Handle<Image> =
+        asset_server.load("textures/blocks/golden_shower_leaves/oak_leaf_particle.png");
 
     fx_assets.oak_material = materials.add(StandardMaterial {
         base_color_texture: Some(oak_tex),
@@ -95,6 +117,17 @@ fn ensure_leaves_fx_assets(
     fx_assets.spruce_material = materials.add(StandardMaterial {
         base_color_texture: Some(spruce_tex),
         base_color: Color::srgba(0.93, 0.97, 0.93, 0.95),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        cull_mode: None,
+        reflectance: 0.0,
+        metallic: 0.0,
+        perceptual_roughness: 1.0,
+        ..default()
+    });
+    fx_assets.golden_shower_material = materials.add(StandardMaterial {
+        base_color_texture: Some(golden_shower_tex),
+        base_color: Color::srgba(1.0, 0.96, 0.86, 0.95),
         alpha_mode: AlphaMode::Blend,
         unlit: true,
         cull_mode: None,
@@ -148,51 +181,36 @@ fn spawn_falling_leaves(
         }
 
         // Keep ambience subtle.
-        if rand_f32() > 0.55 {
+        if rand_f32() > 0.30 {
             continue;
         }
 
-        let Some((spawn_pos, spruce)) = find_leaf_spawn(
-            cam_pos,
-            &chunk_map,
-            fx_assets.oak_leaves_id,
-            fx_assets.spruce_leaves_id,
-        ) else {
+        let Some((spawn_pos, leaf_id)) = find_leaf_spawn(cam_pos, &chunk_map, &fx_assets) else {
             continue;
         };
 
-        let velocity = Vec3::new(
-            rand_range(-0.22, 0.22),
-            rand_range(-0.08, 0.02),
-            rand_range(-0.22, 0.22),
-        );
-        let size = rand_range(0.09, 0.16);
-        let spin_phase = rand_range(0.0, std::f32::consts::TAU);
-        let spin_rate = rand_range(1.3, 3.2);
-        let lifetime = rand_range(4.6, 9.2);
-        let material = if spruce {
-            fx_assets.spruce_material.clone()
-        } else {
-            fx_assets.oak_material.clone()
+        spawn_leaf_particle(&mut commands, &fx_assets, spawn_pos, leaf_id, false);
+        alive += 1;
+    }
+
+    fx_state.shed_accumulator += time.delta_secs();
+    while fx_state.shed_accumulator >= SHED_INTERVAL_SECS {
+        fx_state.shed_accumulator -= SHED_INTERVAL_SECS;
+        if alive >= MAX_LEAF_PARTICLES {
+            break;
+        }
+
+        // Occasional shedding from exposed canopy edges.
+        if rand_f32() > 0.45 {
+            continue;
+        }
+
+        let Some((spawn_pos, leaf_id)) = find_leaf_shed_spawn(cam_pos, &chunk_map, &fx_assets)
+        else {
+            continue;
         };
 
-        commands.spawn((
-            FallingLeafParticle {
-                velocity,
-                age: 0.0,
-                lifetime,
-                size,
-                spin_rate,
-                spin_phase,
-            },
-            Mesh3d(fx_assets.quad.clone()),
-            MeshMaterial3d(material),
-            Transform::from_translation(spawn_pos).with_scale(Vec3::splat(size)),
-            Visibility::default(),
-            NotShadowCaster,
-            NotShadowReceiver,
-            Name::new("FallingLeafParticle"),
-        ));
+        spawn_leaf_particle(&mut commands, &fx_assets, spawn_pos, leaf_id, true);
         alive += 1;
     }
 }
@@ -280,10 +298,9 @@ fn cleanup_falling_leaves(
 fn find_leaf_spawn(
     cam_pos: Vec3,
     chunk_map: &ChunkMap,
-    oak_id: BlockId,
-    spruce_id: BlockId,
-) -> Option<(Vec3, bool)> {
-    if oak_id == 0 && spruce_id == 0 {
+    fx_assets: &LeavesFxAssets,
+) -> Option<(Vec3, BlockId)> {
+    if fx_assets.leaf_block_ids.is_empty() {
         return None;
     }
 
@@ -296,27 +313,141 @@ fn find_leaf_spawn(
     for _ in 0..SPAWN_ATTEMPTS {
         let sx = base.x + rand_i32(-SPAWN_RADIUS_BLOCKS, SPAWN_RADIUS_BLOCKS);
         let sz = base.z + rand_i32(-SPAWN_RADIUS_BLOCKS, SPAWN_RADIUS_BLOCKS);
-        let start_y = base.y + rand_i32(2, 16);
+        let start_y = base.y + rand_i32(6, 26);
 
         for d in 0..LEAF_SCAN_DEPTH {
             let sy = start_y - d;
             let id = get_block_world(chunk_map, IVec3::new(sx, sy, sz));
-            let is_oak = oak_id != 0 && id == oak_id;
-            let is_spruce = spruce_id != 0 && id == spruce_id;
-            if !is_oak && !is_spruce {
+            if !fx_assets.leaf_block_set.contains(&id) {
                 continue;
             }
 
+            let below = IVec3::new(sx, sy - 1, sz);
+            if get_block_world(chunk_map, below) != 0 {
+                continue;
+            }
+
+            // Spawn in air directly below the leaf block.
             let spawn_pos = Vec3::new(
-                (sx as f32 + rand_range(0.12, 0.88)) * VOXEL_SIZE,
-                (sy as f32 + rand_range(0.18, 0.95)) * VOXEL_SIZE,
-                (sz as f32 + rand_range(0.12, 0.88)) * VOXEL_SIZE,
+                (sx as f32 + rand_range(0.18, 0.82)) * VOXEL_SIZE,
+                ((sy - 1) as f32 + rand_range(0.72, 0.98)) * VOXEL_SIZE,
+                (sz as f32 + rand_range(0.18, 0.82)) * VOXEL_SIZE,
             );
-            return Some((spawn_pos, is_spruce));
+            return Some((spawn_pos, id));
         }
     }
 
     None
+}
+
+fn find_leaf_shed_spawn(
+    cam_pos: Vec3,
+    chunk_map: &ChunkMap,
+    fx_assets: &LeavesFxAssets,
+) -> Option<(Vec3, BlockId)> {
+    if fx_assets.leaf_block_ids.is_empty() {
+        return None;
+    }
+
+    let base = IVec3::new(
+        (cam_pos.x / VOXEL_SIZE).floor() as i32,
+        (cam_pos.y / VOXEL_SIZE).floor() as i32,
+        (cam_pos.z / VOXEL_SIZE).floor() as i32,
+    );
+
+    for _ in 0..SHED_ATTEMPTS {
+        let sx = base.x + rand_i32(-SHED_RADIUS_BLOCKS, SHED_RADIUS_BLOCKS);
+        let sz = base.z + rand_i32(-SHED_RADIUS_BLOCKS, SHED_RADIUS_BLOCKS);
+        let start_y = base.y + rand_i32(2, 30);
+
+        for d in 0..SHED_SCAN_DEPTH {
+            let sy = start_y - d;
+            let pos = IVec3::new(sx, sy, sz);
+            let id = get_block_world(chunk_map, pos);
+            if !fx_assets.leaf_block_set.contains(&id) {
+                continue;
+            }
+
+            let below = pos + IVec3::new(0, -1, 0);
+            let below_air = get_block_world(chunk_map, below) == 0;
+            let side_air = get_block_world(chunk_map, pos + IVec3::new(1, 0, 0)) == 0
+                || get_block_world(chunk_map, pos + IVec3::new(-1, 0, 0)) == 0
+                || get_block_world(chunk_map, pos + IVec3::new(0, 0, 1)) == 0
+                || get_block_world(chunk_map, pos + IVec3::new(0, 0, -1)) == 0;
+            if !below_air || !side_air {
+                continue;
+            }
+
+            // Rare shedding should appear from the underside of canopy edges.
+            let spawn_pos = Vec3::new(
+                (sx as f32 + rand_range(0.20, 0.80)) * VOXEL_SIZE,
+                ((sy - 1) as f32 + rand_range(0.78, 0.99)) * VOXEL_SIZE,
+                (sz as f32 + rand_range(0.20, 0.80)) * VOXEL_SIZE,
+            );
+            return Some((spawn_pos, id));
+        }
+    }
+
+    None
+}
+
+fn spawn_leaf_particle(
+    commands: &mut Commands,
+    fx_assets: &LeavesFxAssets,
+    spawn_pos: Vec3,
+    leaf_id: BlockId,
+    from_shed: bool,
+) {
+    let velocity = if from_shed {
+        Vec3::new(
+            rand_range(-0.28, 0.28),
+            rand_range(-0.14, 0.01),
+            rand_range(-0.28, 0.28),
+        )
+    } else {
+        Vec3::new(
+            rand_range(-0.22, 0.22),
+            rand_range(-0.08, 0.02),
+            rand_range(-0.22, 0.22),
+        )
+    };
+    let size = if from_shed {
+        rand_range(0.30, 0.46)
+    } else {
+        rand_range(0.28, 0.48)
+    } * LEAF_SIZE_MULTIPLIER;
+    let spin_phase = rand_range(0.0, std::f32::consts::TAU);
+    let spin_rate = rand_range(1.3, 3.2);
+    let lifetime = if from_shed {
+        rand_range(5.6, 10.4)
+    } else {
+        rand_range(4.6, 9.2)
+    };
+    let material = if leaf_id == fx_assets.spruce_leaves_id {
+        fx_assets.spruce_material.clone()
+    } else if leaf_id == fx_assets.golden_shower_leaves_id {
+        fx_assets.golden_shower_material.clone()
+    } else {
+        fx_assets.oak_material.clone()
+    };
+
+    commands.spawn((
+        FallingLeafParticle {
+            velocity,
+            age: 0.0,
+            lifetime,
+            size,
+            spin_rate,
+            spin_phase,
+        },
+        Mesh3d(fx_assets.quad.clone()),
+        MeshMaterial3d(material),
+        Transform::from_translation(spawn_pos).with_scale(Vec3::splat(size)),
+        Visibility::default(),
+        NotShadowCaster,
+        NotShadowReceiver,
+        Name::new("FallingLeafParticle"),
+    ));
 }
 
 #[inline]
