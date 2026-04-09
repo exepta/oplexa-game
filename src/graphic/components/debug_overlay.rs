@@ -260,7 +260,7 @@ fn sync_system_last_ui(
             _ => "unknown".to_string(),
         };
         (format!("{percent:.1}%"), backend)
-    } else if cfg!(target_os = "macos") {
+    } else if cfg!(any(target_os = "macos", windows)) {
         let fps = perf.fps.max(1.0);
         let estimated_percent = (60.0 / fps * 100.0).clamp(0.0, 100.0);
         (
@@ -332,8 +332,8 @@ fn sync_system_last_ui(
             ),
             ID_GLOBAL_CPU => format!("System CPU: {:.1}%", stats.cpu_percent),
             ID_APP_MEM => format!("RAM: {:.1} MiB", bytes_to_mib(stats.app_mem_bytes)),
-            ID_GPU_NAME => format!("Graphic Name: {}", gpu_name),
-            ID_GPU_LOAD => format!("Graphic Last: {} ({})", gpu_load_text, gpu_load_backend),
+            ID_GPU_NAME => format!("GPU Name: {}", gpu_name),
+            ID_GPU_LOAD => format!("GPU Load: {} ({})", gpu_load_text, gpu_load_backend),
             ID_VRAM => format!("VRAM: {} ({})", vram_text, vram_backend),
             ID_BIOME => format!("Biome Name: {}", biome_name),
             ID_BIOME_CLIMATE => format!("Biome Klima: {}", biome_climate),
