@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::InventorySlotState;
+use serde::{Deserialize, Serialize};
 
 /// Represents auth used by the `core::network::protocols::auth` module.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]

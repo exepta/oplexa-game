@@ -131,12 +131,6 @@ pub fn handle_chunk_interest_messages(
         for message in receiver.receive() {
             let center = IVec2::new(message.center[0], message.center[1]);
             let radius = message.radius.clamp(1, config.max_stream_radius.max(1));
-            log::debug!(
-                "[CHUNK] ClientChunkInterest from {:?}: center={:?}, radius={}",
-                entity,
-                [center.x, center.y],
-                radius
-            );
             let mut desired_chunks = HashSet::new();
             for dz in -radius..=radius {
                 for dx in -radius..=radius {
@@ -246,13 +240,6 @@ pub fn flush_chunk_streaming(
             .get(entity)
             .map(|r| r.0)
             .unwrap_or(PeerId::Entity(entity.to_bits()));
-        log::debug!(
-            "[CHUNK] Sending chunk {:?} to {:?} (window: {}/{})",
-            [coord.x, coord.y],
-            entity,
-            window.len(),
-            config.chunk_stream_inflight_per_client.max(1)
-        );
         let _ = multi_sender.send::<_, UnorderedReliable>(
             &ServerChunkData::new([coord.x, coord.y], encoded_chunk),
             *server,
@@ -284,13 +271,9 @@ pub fn handle_block_break_messages(
         player.last_seen = Instant::now();
         let player_id = player.player_id;
 
-        state.block_overrides.insert(message.location, 0);
-        let (chunk_coord, _) = api::core::world::chunk_dimension::world_to_chunk_xz(
-            message.location[0],
-            message.location[2],
-        );
-        state.invalidate_streamed_chunk(chunk_coord);
-        state.persist_block_overrides();
+        if !state.set_block_persisted(message.location, 0) {
+            continue;
+        }
 
         let _ = multi_sender.send::<_, OrderedReliable>(
             &ServerBlockBreak::new(player_id, message.location),
@@ -356,15 +339,9 @@ pub fn handle_block_place_messages(
         player.last_seen = Instant::now();
         let player_id = player.player_id;
 
-        state
-            .block_overrides
-            .insert(message.location, message.block_id);
-        let (chunk_coord, _) = api::core::world::chunk_dimension::world_to_chunk_xz(
-            message.location[0],
-            message.location[2],
-        );
-        state.invalidate_streamed_chunk(chunk_coord);
-        state.persist_block_overrides();
+        if !state.set_block_persisted(message.location, message.block_id) {
+            continue;
+        }
 
         let _ = multi_sender.send::<_, OrderedReliable>(
             &ServerBlockPlace::new(player_id, message.location, message.block_id),

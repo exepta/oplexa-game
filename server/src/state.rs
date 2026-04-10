@@ -3,7 +3,7 @@ use api::{
     core::{
         config::WorldGenConfig,
         entities::player::inventory::{
-            InventorySlot, PlayerInventory, PLAYER_INVENTORY_SLOTS, PLAYER_INVENTORY_STACK_MAX,
+            InventorySlot, PLAYER_INVENTORY_SLOTS, PLAYER_INVENTORY_STACK_MAX, PlayerInventory,
         },
         world::{
             biome::registry::BiomeRegistry,
@@ -14,7 +14,7 @@ use api::{
     },
     generator::chunk::{
         cave_utils::{CaveParams, worm_edits_for_chunk},
-        chunk_utils::{encode_chunk, load_or_gen_chunk_async, save_chunk_at_root_sync},
+        chunk_utils::{encode_chunk, load_or_gen_chunk_async_with_origin, save_chunk_at_root_sync},
         trees::registry::TreeRegistry,
     },
 };
@@ -25,7 +25,6 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool};
 use futures_lite::future;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -82,9 +81,6 @@ pub struct ServerState {
     pub biome_registry: Arc<BiomeRegistry>,
     pub tree_registry: Arc<TreeRegistry>,
     pub world_gen_config: WorldGenConfig,
-    /// Runtime block edits applied on top of generated chunks.
-    /// Persisted to `blocks.bin` and replayed when chunks are streamed.
-    pub block_overrides: HashMap<[i32; 3], u16>,
     pub streamed_chunk_cache: HashMap<IVec2, Vec<u8>>,
     pub streamed_chunk_cache_order: VecDeque<IVec2>,
     pub pending_stream_chunk_tasks: HashMap<IVec2, Task<(IVec2, Vec<u8>)>>,
@@ -109,15 +105,13 @@ impl ServerState {
         let biome_registry = Arc::new(BiomeRegistry::load_from_folder("assets/biomes"));
         let tree_registry = Arc::new(TreeRegistry::load_from_folder("assets/data/trees"));
         let world_gen_config = WorldGenConfig { seed: world_seed };
-        let block_overrides = load_block_overrides(world_root.as_path());
         AsyncComputeTaskPool::get_or_init(TaskPool::default);
-        Self {
+        let mut state = Self {
             world_root,
             block_registry,
             biome_registry,
             tree_registry,
             world_gen_config,
-            block_overrides,
             streamed_chunk_cache: HashMap::new(),
             streamed_chunk_cache_order: VecDeque::new(),
             pending_stream_chunk_tasks: HashMap::new(),
@@ -131,14 +125,123 @@ impl ServerState {
             pending_auth: HashMap::new(),
             players: HashMap::new(),
             drops: HashMap::new(),
-        }
+        };
+        state.migrate_legacy_block_overrides_to_regions();
+        state
     }
 
-    /// Persists block overrides for the `state` module.
-    pub fn persist_block_overrides(&self) {
-        let path = self.world_root.join(BLOCK_OVERRIDES_FILE_NAME);
-        if let Err(error) = persist_block_overrides_binary(path.as_path(), &self.block_overrides) {
-            log::warn!("Failed to persist block overrides {:?}: {}", path, error);
+    /// Persists one world-space block into the chunk region data.
+    pub fn set_block_persisted(&mut self, location: [i32; 3], block_id: u16) -> bool {
+        let world_y = location[1];
+        if !(Y_MIN..=Y_MAX).contains(&world_y) {
+            return false;
+        }
+
+        let (coord, local) = world_to_chunk_xz(location[0], location[2]);
+        let ly = world_y_to_local(world_y);
+        let edits = [(local.x as usize, ly, local.y as usize, block_id)];
+
+        let refill_ocean_water = block_id == 0;
+        if let Err(error) = self.persist_chunk_edits(coord, &edits, refill_ocean_water) {
+            log::warn!(
+                "Failed to persist block edit at {:?} (id={}): {}",
+                location,
+                block_id,
+                error
+            );
+            return false;
+        }
+
+        self.invalidate_streamed_chunk(coord);
+        true
+    }
+
+    fn persist_chunk_edits(
+        &self,
+        coord: IVec2,
+        edits: &[(usize, usize, usize, u16)],
+        refill_ocean_water: bool,
+    ) -> std::io::Result<()> {
+        let border_id = self.block_registry.id_opt("border_block").unwrap_or(0);
+        let water_id = self.block_registry.id_opt("water_block").unwrap_or(0);
+
+        let (mut chunk, generated) = future::block_on(load_or_gen_chunk_async_with_origin(
+            self.world_root.clone(),
+            coord,
+            &self.block_registry,
+            &self.biome_registry,
+            &self.tree_registry,
+            self.world_gen_config.clone(),
+        ));
+        if generated {
+            apply_server_caves(
+                &mut chunk,
+                coord,
+                self.world_gen_config.seed,
+                border_id,
+                water_id,
+            );
+            if water_id != 0 {
+                flood_ocean_connected_water(&mut chunk, SEA_LEVEL, water_id);
+            }
+        }
+
+        for (lx, ly, lz, block_id) in edits {
+            chunk.set(*lx, *ly, *lz, *block_id);
+        }
+        if refill_ocean_water && water_id != 0 {
+            flood_ocean_connected_water(&mut chunk, SEA_LEVEL, water_id);
+        }
+        chunk.mark_all_dirty();
+        save_chunk_at_root_sync(self.world_root.clone(), coord, &chunk)
+    }
+
+    fn migrate_legacy_block_overrides_to_regions(&mut self) {
+        let binary_path = self.world_root.join(BLOCK_OVERRIDES_FILE_NAME);
+        let legacy_path = self.world_root.join(LEGACY_BLOCK_OVERRIDES_FILE_NAME);
+        let overrides = read_block_overrides_binary(binary_path.as_path())
+            .unwrap_or_else(|| read_legacy_block_overrides_text(legacy_path.as_path()));
+        if overrides.is_empty() {
+            return;
+        }
+
+        let mut edits_by_chunk: HashMap<IVec2, Vec<(usize, usize, usize, u16)>> = HashMap::new();
+        for (location, block_id) in overrides {
+            let world_y = location[1];
+            if !(Y_MIN..=Y_MAX).contains(&world_y) {
+                continue;
+            }
+
+            let (coord, local) = world_to_chunk_xz(location[0], location[2]);
+            edits_by_chunk.entry(coord).or_default().push((
+                local.x as usize,
+                world_y_to_local(world_y),
+                local.y as usize,
+                block_id,
+            ));
+        }
+
+        let mut failed = 0usize;
+        for (coord, edits) in edits_by_chunk {
+            if let Err(error) = self.persist_chunk_edits(coord, edits.as_slice(), false) {
+                failed += 1;
+                log::warn!(
+                    "Failed migrating legacy block overrides for chunk {:?}: {}",
+                    coord,
+                    error
+                );
+            }
+        }
+
+        if failed == 0 {
+            let _ = fs::remove_file(binary_path.as_path());
+            let _ = fs::remove_file(legacy_path.as_path());
+            log::info!("Migrated legacy block overrides into region files.");
+        } else {
+            log::warn!(
+                "Legacy block override migration incomplete ({} chunk write failure(s)); keeping source files.",
+                failed
+            );
         }
     }
 
@@ -290,11 +393,10 @@ impl ServerState {
             let block_registry = Arc::clone(&self.block_registry);
             let biome_registry = Arc::clone(&self.biome_registry);
             let tree_registry = Arc::clone(&self.tree_registry);
-            let chunk_overrides = collect_chunk_overrides_snapshot(&self.block_overrides, coord);
             let cfg = world_gen_config.clone();
 
             let task = pool.spawn(async move {
-                let mut chunk = load_or_gen_chunk_async(
+                let (mut chunk, generated) = load_or_gen_chunk_async_with_origin(
                     world_root.clone(),
                     coord,
                     &block_registry,
@@ -304,14 +406,25 @@ impl ServerState {
                 )
                 .await;
 
-                apply_server_caves(&mut chunk, coord, cave_seed, border_id, water_id);
-                if water_id != 0 {
-                    flood_ocean_connected_water(&mut chunk, SEA_LEVEL, water_id);
+                let mut should_persist = false;
+                if generated {
+                    apply_server_caves(&mut chunk, coord, cave_seed, border_id, water_id);
+                    if water_id != 0 {
+                        let _ = flood_ocean_connected_water(&mut chunk, SEA_LEVEL, water_id);
+                    }
+                    chunk.mark_all_dirty();
+                    should_persist = true;
+                } else if water_id != 0 && !chunk_contains_block_id(&chunk, water_id) {
+                    // Repair path for legacy chunks persisted before ocean flood was applied.
+                    if flood_ocean_connected_water(&mut chunk, SEA_LEVEL, water_id) {
+                        chunk.mark_all_dirty();
+                        should_persist = true;
+                    }
                 }
-                apply_chunk_overrides_snapshot(&chunk_overrides, &mut chunk);
-                chunk.mark_all_dirty();
 
-                if let Err(error) = save_chunk_at_root_sync(world_root, coord, &chunk) {
+                if should_persist
+                    && let Err(error) = save_chunk_at_root_sync(world_root.clone(), coord, &chunk)
+                {
                     log::warn!("Failed to persist streamed chunk {:?}: {}", coord, error);
                 }
 
@@ -408,15 +521,16 @@ fn apply_server_caves(
 }
 
 /// Runs the `flood_ocean_connected_water` routine for flood ocean connected water in the `state` module.
-fn flood_ocean_connected_water(chunk: &mut ChunkData, sea_level: i32, water_id: BlockId) {
+fn flood_ocean_connected_water(chunk: &mut ChunkData, sea_level: i32, water_id: BlockId) -> bool {
     if water_id == 0 {
-        return;
+        return false;
     }
 
     let sea_level = sea_level.clamp(Y_MIN, Y_MAX);
     let sea_ly = world_y_to_local(sea_level);
     let mut queue: VecDeque<(usize, usize, usize)> = VecDeque::new();
     let mut seen = vec![false; CX * CY * CZ];
+    let mut changed = false;
 
     for z in 0..CZ {
         for x in 0..CX {
@@ -438,31 +552,96 @@ fn flood_ocean_connected_water(chunk: &mut ChunkData, sea_level: i32, water_id: 
             let start_world = (top_world + 1).max(Y_MIN);
             let start_ly = world_y_to_local(start_world);
             for ly in start_ly..=sea_ly {
-                try_push_ocean_seed(chunk, &mut seen, water_id, x, ly, z, &mut queue);
+                try_push_ocean_seed(
+                    chunk,
+                    &mut seen,
+                    water_id,
+                    x,
+                    ly,
+                    z,
+                    &mut queue,
+                    &mut changed,
+                );
             }
         }
     }
 
     while let Some((x, y, z)) = queue.pop_front() {
         if y + 1 <= sea_ly {
-            try_push_ocean_seed(chunk, &mut seen, water_id, x, y + 1, z, &mut queue);
+            try_push_ocean_seed(
+                chunk,
+                &mut seen,
+                water_id,
+                x,
+                y + 1,
+                z,
+                &mut queue,
+                &mut changed,
+            );
         }
         if y > 0 {
-            try_push_ocean_seed(chunk, &mut seen, water_id, x, y - 1, z, &mut queue);
+            try_push_ocean_seed(
+                chunk,
+                &mut seen,
+                water_id,
+                x,
+                y - 1,
+                z,
+                &mut queue,
+                &mut changed,
+            );
         }
         if x + 1 < CX {
-            try_push_ocean_seed(chunk, &mut seen, water_id, x + 1, y, z, &mut queue);
+            try_push_ocean_seed(
+                chunk,
+                &mut seen,
+                water_id,
+                x + 1,
+                y,
+                z,
+                &mut queue,
+                &mut changed,
+            );
         }
         if x > 0 {
-            try_push_ocean_seed(chunk, &mut seen, water_id, x - 1, y, z, &mut queue);
+            try_push_ocean_seed(
+                chunk,
+                &mut seen,
+                water_id,
+                x - 1,
+                y,
+                z,
+                &mut queue,
+                &mut changed,
+            );
         }
         if z + 1 < CZ {
-            try_push_ocean_seed(chunk, &mut seen, water_id, x, y, z + 1, &mut queue);
+            try_push_ocean_seed(
+                chunk,
+                &mut seen,
+                water_id,
+                x,
+                y,
+                z + 1,
+                &mut queue,
+                &mut changed,
+            );
         }
         if z > 0 {
-            try_push_ocean_seed(chunk, &mut seen, water_id, x, y, z - 1, &mut queue);
+            try_push_ocean_seed(
+                chunk,
+                &mut seen,
+                water_id,
+                x,
+                y,
+                z - 1,
+                &mut queue,
+                &mut changed,
+            );
         }
     }
+
+    changed
 }
 
 /// Runs the `try_push_ocean_seed` routine for try push ocean seed in the `state` module.
@@ -474,6 +653,7 @@ fn try_push_ocean_seed(
     y: usize,
     z: usize,
     queue: &mut VecDeque<(usize, usize, usize)>,
+    changed: &mut bool,
 ) {
     let i = (y * CZ + z) * CX + x;
     if seen[i] {
@@ -488,8 +668,13 @@ fn try_push_ocean_seed(
     seen[i] = true;
     if current == 0 {
         chunk.set(x, y, z, water_id);
+        *changed = true;
     }
     queue.push_back((x, y, z));
+}
+
+fn chunk_contains_block_id(chunk: &ChunkData, block_id: BlockId) -> bool {
+    chunk.blocks.iter().any(|id| *id == block_id)
 }
 
 /// Runs the `server_cave_params` routine for server cave params in the `state` module.
@@ -535,64 +720,6 @@ fn server_cave_params(seed: i32) -> CaveParams {
     }
 }
 
-/// Collects block overrides for one chunk into local coordinates.
-fn collect_chunk_overrides_snapshot(
-    overrides: &HashMap<[i32; 3], u16>,
-    coord: IVec2,
-) -> Vec<(usize, usize, usize, u16)> {
-    let mut snapshot = Vec::new();
-    for (location, block_id) in overrides {
-        let world_y = location[1];
-        if !(Y_MIN..=Y_MAX).contains(&world_y) {
-            continue;
-        }
-
-        let (override_coord, local) = world_to_chunk_xz(location[0], location[2]);
-        if override_coord != coord {
-            continue;
-        }
-
-        snapshot.push((
-            local.x as usize,
-            world_y_to_local(world_y),
-            local.y as usize,
-            *block_id,
-        ));
-    }
-    snapshot
-}
-
-/// Applies a chunk-local override snapshot to chunk data.
-fn apply_chunk_overrides_snapshot(overrides: &[(usize, usize, usize, u16)], chunk: &mut ChunkData) {
-    for (lx, ly, lz, block_id) in overrides {
-        chunk.set(*lx, *ly, *lz, *block_id);
-    }
-}
-
-/// Loads block overrides for the `state` module.
-fn load_block_overrides(world_root: &Path) -> HashMap<[i32; 3], u16> {
-    let binary_path = world_root.join(BLOCK_OVERRIDES_FILE_NAME);
-    if let Some(overrides) = read_block_overrides_binary(binary_path.as_path()) {
-        return overrides;
-    }
-
-    let legacy_path = world_root.join(LEGACY_BLOCK_OVERRIDES_FILE_NAME);
-    let overrides = read_legacy_block_overrides_text(legacy_path.as_path());
-    if !overrides.is_empty() {
-        if let Err(error) = persist_block_overrides_binary(binary_path.as_path(), &overrides) {
-            log::warn!(
-                "Failed to migrate legacy block overrides {:?} -> {:?}: {}",
-                legacy_path,
-                binary_path,
-                error
-            );
-        } else {
-            let _ = fs::remove_file(legacy_path.as_path());
-        }
-    }
-    overrides
-}
-
 fn read_block_overrides_binary(path: &Path) -> Option<HashMap<[i32; 3], u16>> {
     let bytes = fs::read(path).ok()?;
     if bytes.len() < 8 || bytes[0..4] != BLOCK_OVERRIDES_MAGIC {
@@ -632,32 +759,6 @@ fn read_block_overrides_binary(path: &Path) -> Option<HashMap<[i32; 3], u16>> {
         offset += entry_size;
     }
     Some(overrides)
-}
-
-fn persist_block_overrides_binary(
-    path: &Path,
-    overrides: &HashMap<[i32; 3], u16>,
-) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let mut entries = overrides.iter().collect::<Vec<_>>();
-    entries.sort_by_key(|([x, y, z], _)| (*x, *y, *z));
-
-    let mut payload = Vec::with_capacity(8 + entries.len().saturating_mul(14));
-    payload.extend_from_slice(&BLOCK_OVERRIDES_MAGIC);
-    payload.extend_from_slice(&(entries.len() as u32).to_le_bytes());
-    for (location, block_id) in entries {
-        payload.extend_from_slice(&location[0].to_le_bytes());
-        payload.extend_from_slice(&location[1].to_le_bytes());
-        payload.extend_from_slice(&location[2].to_le_bytes());
-        payload.extend_from_slice(&block_id.to_le_bytes());
-    }
-
-    let tmp_path = path.with_extension("bin.tmp");
-    fs::write(&tmp_path, payload)?;
-    fs::rename(tmp_path, path)
 }
 
 fn read_legacy_block_overrides_text(path: &Path) -> HashMap<[i32; 3], u16> {

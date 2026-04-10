@@ -19,27 +19,24 @@ use crate::{
 };
 use api::core::network::{discovery::LanDiscoveryServer, protocols::ProtocolPlugin};
 use bevy::app::ScheduleRunnerPlugin;
-use bevy::log::LogPlugin;
+use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
 use lightyear::prelude::server::ServerPlugins;
-use simple_logger::SimpleLogger;
 use std::time::Duration;
 
 /// Runs the `main` routine for main in the `project` module.
 fn main() {
-    SimpleLogger::new()
-        .with_level(log::LevelFilter::Info)
-        .with_module_level("tokio_tungstenite", log::LevelFilter::Warn)
-        .with_module_level("tungstenite", log::LevelFilter::Warn)
-        .with_module_level("lightyear", log::LevelFilter::Warn)
-        .init()
-        .expect("Logger initialization failed");
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(5))))
+        .add_plugins(LogPlugin {
+            level: Level::DEBUG,
+            filter: "info,oplexa_game_server=debug,api=debug,tokio_tungstenite=warn,tungstenite=warn,lightyear=warn,wgpu=error,naga=warn".to_string(),
+            ..default()
+        });
 
     let bootstrap = load_bootstrap();
 
-    App::new()
-        .add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(5))))
-        .add_plugins(LogPlugin::default())
+    app
         .add_plugins(ServerPlugins {
             tick_duration: Duration::from_millis(50),
         })

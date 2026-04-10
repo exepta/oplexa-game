@@ -14,11 +14,13 @@
     "solid": false,
     "emissive": 0.0
   },
+  "overridable": true,
   "prop": {
     "render": "crossed_planes",
     "height_m": 0.8,
     "width_m": 1.0,
     "plane_count": 2,
+    "tilt_deg": 4.0,
     "allowed_ground": [
       "dirt_block",
       "grass_block"

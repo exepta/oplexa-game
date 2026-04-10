@@ -5,7 +5,7 @@ use crate::core::commands::{
 };
 use crate::core::config::{GlobalConfig, WorldGenConfig};
 use crate::core::debug::{BuildInfo, WorldInspectorState};
-use crate::core::entities::player::inventory::{PlayerInventory, PLAYER_INVENTORY_SLOTS};
+use crate::core::entities::player::inventory::{PLAYER_INVENTORY_SLOTS, PlayerInventory};
 use crate::core::entities::player::{FlightState, FpsController, GameMode, GameModeState, Player};
 use crate::core::events::block::block_player_events::{
     BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
@@ -457,8 +457,14 @@ fn handle_terminal_interrupt_exit(
     mut app_exit: MessageWriter<AppExit>,
 ) {
     if TERMINAL_INTERRUPT_REQUESTED.load(Ordering::SeqCst) && interrupt_state.started_at.is_none() {
-        info!("Ctrl+C detected. Sending disconnect before shutdown...");
-        do_disconnect(&mut runtime, &mut commands);
+        let should_send_disconnect =
+            runtime.connection_entity.is_some() && !multiplayer_connection.uses_local_save_data();
+        if should_send_disconnect {
+            info!("Ctrl+C detected. Sending multiplayer disconnect before shutdown...");
+            do_disconnect(&mut runtime, &mut commands);
+        } else {
+            info!("Ctrl+C detected. Shutting down local session...");
+        }
         runtime.local_player_id = None;
         runtime.player_names.clear();
         runtime.remote_players.clear();
@@ -2101,6 +2107,7 @@ fn apply_remote_block_place(
             access.set_stacked(block_id);
         } else {
             access.set(block_id);
+            access.set_stacked(0);
         }
         mark_dirty_block_and_neighbors(chunk_map, world_pos, ev_dirty);
     }
@@ -2163,10 +2170,7 @@ fn slab_variant_from_name_sync(name: &str) -> Option<u8> {
 }
 
 fn slabs_are_complementary_sync(a: u8, b: u8) -> bool {
-    matches!(
-        (a, b),
-        (0, 1) | (1, 0) | (2, 3) | (3, 2) | (4, 5) | (5, 4)
-    )
+    matches!((a, b), (0, 1) | (1, 0) | (2, 3) | (3, 2) | (4, 5) | (5, 4))
 }
 
 /// Spawns multiplayer drop for the `client` module.

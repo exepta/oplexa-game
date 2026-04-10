@@ -64,6 +64,7 @@ pub fn handle_client_connected(
 pub fn handle_client_disconnected(
     trigger: On<Add, Disconnected>,
     mut state: ResMut<ServerState>,
+    config: Res<ServerRuntimeConfig>,
     mut multi_sender: ServerMultiMessageSender,
     server: Single<&Server>,
 ) {
@@ -79,8 +80,11 @@ pub fn handle_client_disconnected(
             &player.inventory_slots,
         );
         info!(
-            "{} disconnected (uuid={})",
-            player.username, player.client_uuid
+            "{} disconnected (uuid={}) [players {}/{}]",
+            player.username,
+            player.client_uuid,
+            state.players.len(),
+            config.max_players
         );
         let msg = PlayerLeft::new(player.player_id);
         let _ = multi_sender.send::<_, UnorderedReliable>(&msg, *server, &NetworkTarget::All);
@@ -267,9 +271,7 @@ pub fn handle_auth_messages(
                 .unwrap_or(config.spawn_translation);
             let spawn_yaw = loaded.as_ref().map(|data| data.yaw).unwrap_or(0.0);
             let spawn_pitch = loaded.as_ref().map(|data| data.pitch).unwrap_or(0.0);
-            let inventory_slots = loaded
-                .map(|data| data.inventory_slots)
-                .unwrap_or_default();
+            let inventory_slots = loaded.map(|data| data.inventory_slots).unwrap_or_default();
             let player = HostedPlayer {
                 player_id: state.next_player_id,
                 username: username.clone(),
@@ -352,7 +354,14 @@ pub fn handle_auth_messages(
             let uuid = player.client_uuid.clone();
             state.players.insert(entity, player);
 
-            info!("{} joined as id {} (uuid={})", uname, player_id, uuid);
+            info!(
+                "{} joined as id {} (uuid={}) [players {}/{}]",
+                uname,
+                player_id,
+                uuid,
+                state.players.len(),
+                config.max_players
+            );
 
             // Broadcast join to all (including new player)
             let _ = multi_sender.send::<_, UnorderedReliable>(

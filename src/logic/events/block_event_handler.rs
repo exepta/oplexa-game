@@ -317,8 +317,13 @@ fn block_place_handler(
     let placement =
         resolve_placement_for_selected(id, hit, player_yaw, player_pitch, &chunk_map, &registry);
     let place_id = placement.block_id;
-    let world_pos = placement.world_pos;
-    let place_into_stacked = placement.place_into_stacked;
+    let mut world_pos = placement.world_pos;
+    let mut place_into_stacked = placement.place_into_stacked;
+    let hit_primary_id = get_block_world(&chunk_map, hit.block_pos);
+    if hit_primary_id != 0 && registry.is_overridable(hit_primary_id) {
+        world_pos = hit.block_pos;
+        place_into_stacked = false;
+    }
     let (chunk_coord, l) = world_to_chunk_xz(world_pos.x, world_pos.z);
     let lx = l.x.clamp(0, (CX as i32 - 1) as u32) as usize;
     let lz = l.y.clamp(0, (CZ as i32 - 1) as u32) as usize;
@@ -330,9 +335,9 @@ fn block_place_handler(
         .map(|ch| {
             let current = ch.get(lx, ly, lz);
             if place_into_stacked {
-                current != 0 && ch.get_stacked(lx, ly, lz) == 0
+                current != 0 && !registry.is_overridable(current) && ch.get_stacked(lx, ly, lz) == 0
             } else {
-                current == 0
+                current == 0 || registry.is_overridable(current)
             }
         })
         .unwrap_or(false);
@@ -357,6 +362,7 @@ fn block_place_handler(
             access.set_stacked(place_id);
         } else {
             access.set(place_id);
+            access.set_stacked(0);
         }
     }
 
@@ -437,8 +443,8 @@ fn resolve_placement_block_id(
     let mode = resolve_slab_mode_for_click(hit.face, hit.hit_local);
     let adjacent_variant = resolve_slab_variant_for_click(hit, mode, player_yaw, false);
     let same_voxel_variant = resolve_slab_variant_for_click(hit, mode, player_yaw, true);
-    let adjacent_id = slab_block_id_for_variant(prefix, adjacent_variant, registry)
-        .unwrap_or(requested_id);
+    let adjacent_id =
+        slab_block_id_for_variant(prefix, adjacent_variant, registry).unwrap_or(requested_id);
     let same_voxel_id =
         slab_block_id_for_variant(prefix, same_voxel_variant, registry).unwrap_or(adjacent_id);
     (adjacent_id, same_voxel_id, Some(mode))
@@ -543,10 +549,15 @@ fn resolve_slab_variant_for_click(
     for_same_voxel: bool,
 ) -> SlabVariant {
     match mode {
-        SlabPlacementMode::Horizontal =>
-            resolve_horizontal_half_variant_for_face(hit.face, hit.hit_local.y, for_same_voxel),
-        SlabPlacementMode::Vertical =>
-            resolve_vertical_side_variant_for_face(hit.face, hit.hit_local, player_yaw, for_same_voxel),
+        SlabPlacementMode::Horizontal => {
+            resolve_horizontal_half_variant_for_face(hit.face, hit.hit_local.y, for_same_voxel)
+        }
+        SlabPlacementMode::Vertical => resolve_vertical_side_variant_for_face(
+            hit.face,
+            hit.hit_local,
+            player_yaw,
+            for_same_voxel,
+        ),
     }
 }
 

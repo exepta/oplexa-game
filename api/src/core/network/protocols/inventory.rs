@@ -42,7 +42,11 @@ impl ClientInventorySync {
     /// Creates a snapshot from a fixed inventory array.
     pub fn from_slots(slots: &[InventorySlot; PLAYER_INVENTORY_SLOTS]) -> Self {
         Self {
-            slots: slots.iter().copied().map(InventorySlotState::from).collect(),
+            slots: slots
+                .iter()
+                .copied()
+                .map(InventorySlotState::from)
+                .collect(),
         }
     }
 

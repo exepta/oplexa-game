@@ -15,6 +15,7 @@ use std::fs;
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use sysinfo::System;
 
 const WORLD_META_FILE: &str = "world.meta.json";
 const LEGACY_SEED_FILE: &str = "seed.txt";
@@ -32,12 +33,18 @@ pub struct BootstrapResult {
 pub fn load_bootstrap() -> BootstrapResult {
     let settings_path = DedicatedServerSettings::settings_path("server.settings.toml");
     let server_settings = DedicatedServerSettings::load_or_create(&settings_path);
+    log_system_profile();
     let (world_root, world_seed, spawn_translation) = prepare_server_world(&server_settings);
 
     let bind_addr: SocketAddr = server_settings
         .bind_addr()
         .parse()
         .expect("Invalid bind address in server settings");
+    info!(
+        "Network binding configured: host={}, port={}",
+        bind_addr.ip(),
+        bind_addr.port()
+    );
 
     let public_url = server_settings.session_url();
 
@@ -89,6 +96,18 @@ pub fn load_bootstrap() -> BootstrapResult {
         world_root,
         bind_addr,
     }
+}
+
+fn log_system_profile() {
+    let logical_cores = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    let total_ram_bytes = System::new_all().total_memory();
+    let total_ram_gib = total_ram_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    info!(
+        "System profile: logical_cores={}, total_ram={:.2} GiB",
+        logical_cores, total_ram_gib
+    );
 }
 
 /// Startup system: spawn the lightyear Server entity and trigger `Start`.

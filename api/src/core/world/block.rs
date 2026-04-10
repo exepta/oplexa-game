@@ -54,6 +54,7 @@ pub struct UvRect {
 pub struct BlockDef {
     pub localized_name: String,
     pub name: String,
+    pub overridable: bool,
     pub stats: BlockStats,
     pub prop: Option<PropDefinition>,
     pub collider: BlockColliderDefinition,
@@ -274,6 +275,11 @@ impl BlockRegistry {
     pub fn is_prop(&self, id: BlockId) -> bool {
         self.prop(id).is_some()
     }
+    /// Returns whether this block can be replaced directly by placement.
+    #[inline]
+    pub fn is_overridable(&self, id: BlockId) -> bool {
+        self.def(id).overridable
+    }
     /// Returns true when the given prop block can be placed on the given ground block.
     #[inline]
     pub fn prop_allows_ground(&self, prop_id: BlockId, ground_id: BlockId) -> bool {
@@ -399,6 +405,7 @@ impl BlockRegistry {
         defs.push(BlockDef {
             localized_name: "air".into(),
             name: "air".into(),
+            overridable: false,
             stats: BlockStats::default(),
             prop: None,
             collider: BlockColliderDefinition::default(),
@@ -473,6 +480,7 @@ impl BlockRegistry {
             defs.push(BlockDef {
                 localized_name,
                 name: display_name,
+                overridable: block_json.overridable,
                 stats: block_json.stats,
                 prop: block_json.prop.map(PropDefinition::sanitized),
                 collider,
@@ -499,6 +507,7 @@ impl BlockRegistry {
         defs.push(BlockDef {
             localized_name: "air".into(),
             name: "air".into(),
+            overridable: false,
             stats: BlockStats::default(),
             prop: None,
             collider: BlockColliderDefinition::default(),
@@ -523,6 +532,7 @@ impl BlockRegistry {
             defs.push(BlockDef {
                 localized_name,
                 name: display_name,
+                overridable: block_json.overridable,
                 stats: block_json.stats,
                 prop: block_json.prop.map(PropDefinition::sanitized),
                 collider,
@@ -1007,6 +1017,8 @@ struct BlockJson {
     pub texture: TextureFacesJson,
     #[serde(default)]
     pub stats: BlockStats,
+    #[serde(default)]
+    pub overridable: bool,
     #[serde(default)]
     pub prop: Option<PropDefinition>,
     #[serde(default)]

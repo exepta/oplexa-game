@@ -1,8 +1,11 @@
 use crate::core::config::GlobalConfig;
 use crate::core::entities::player::PlayerCamera;
 use crate::core::entities::player::block_selection::SelectionState;
+use crate::core::entities::player::inventory::{InventorySlot, PlayerInventory};
 use crate::core::entities::player::{FpsController, GameMode, GameModeState, Player};
+use crate::core::inventory::items::ItemRegistry;
 use crate::core::states::states::{AppState, InGameStates};
+use crate::core::ui::{HOTBAR_SLOTS, HotbarSelectionState, UiInteractionState};
 use crate::core::world::block::{BlockId, BlockRegistry, Face, SelectedBlock, VOXEL_SIZE};
 use crate::core::world::chunk::{ChunkMap, VoxelStage};
 use crate::core::world::chunk_dimension::{CX, CY, CZ, Y_MIN, world_to_chunk_xz};
@@ -348,10 +351,20 @@ fn pick_block_from_look(
     buttons: Res<ButtonInput<MouseButton>>,
     game_mode: Res<GameModeState>,
     sel_state: Res<SelectionState>,
+    item_registry: Res<ItemRegistry>,
     reg: Res<BlockRegistry>,
+    ui_state: Option<Res<UiInteractionState>>,
+    mut inventory: ResMut<PlayerInventory>,
+    mut hotbar_state: ResMut<HotbarSelectionState>,
     mut selected: ResMut<SelectedBlock>,
 ) {
     if matches!(game_mode.0, GameMode::Spectator) {
+        return;
+    }
+    if ui_state
+        .as_ref()
+        .is_some_and(|state| state.blocks_game_input())
+    {
         return;
     }
     if !buttons.just_pressed(MouseButton::Middle) {
@@ -368,6 +381,49 @@ fn pick_block_from_look(
 
     selected.id = id;
     selected.name = reg.display_name_opt(id).unwrap_or("").to_string();
+
+    if !matches!(game_mode.0, GameMode::Creative) {
+        debug!("Picked block: {} ({})", selected.name, selected.id);
+        return;
+    }
+
+    let Some(item_id) = item_registry.item_for_block(id) else {
+        debug!(
+            "Picked block has no block-item mapping: {} ({})",
+            selected.name, selected.id
+        );
+        return;
+    };
+
+    let hotbar_len = HOTBAR_SLOTS.min(inventory.slots.len());
+    if hotbar_len == 0 {
+        return;
+    }
+
+    if let Some(existing_index) = inventory.slots[..hotbar_len]
+        .iter()
+        .position(|slot| slot.item_id == item_id && slot.count > 0)
+    {
+        hotbar_state.selected_index = existing_index;
+        debug!("Picked block: {} ({})", selected.name, selected.id);
+        return;
+    }
+
+    let selected_index = hotbar_state
+        .selected_index
+        .min(hotbar_len.saturating_sub(1));
+    let selected_slot = inventory.slots[selected_index];
+    let target_index = if selected_slot.is_empty() {
+        selected_index
+    } else {
+        (1..hotbar_len)
+            .map(|offset| (selected_index + offset) % hotbar_len)
+            .find(|index| inventory.slots[*index].is_empty())
+            .unwrap_or(selected_index)
+    };
+
+    inventory.slots[target_index] = InventorySlot { item_id, count: 1 };
+    hotbar_state.selected_index = target_index;
     debug!("Picked block: {} ({})", selected.name, selected.id);
 }
 

@@ -59,7 +59,7 @@ fn generate_spawn_chunks(
     let mut last_progress_log = Instant::now();
 
     info!(
-        "World build started: generating {} spawn chunks (radius={})",
+        "World generation started: preparing {} spawn chunks (radius={})",
         total_chunks, SPAWN_GENERATION_RADIUS
     );
 
@@ -85,7 +85,7 @@ fn generate_spawn_chunks(
             {
                 let percent = (completed as f32 / total_chunks as f32) * 100.0;
                 info!(
-                    "World build progress: {:.1}% ({}/{})",
+                    "World generation progress: {:.1}% ({}/{})",
                     percent, completed, total_chunks
                 );
                 last_progress_log = now;
@@ -94,7 +94,7 @@ fn generate_spawn_chunks(
     }
 
     info!(
-        "World build finished in {:.2}s",
+        "World generation finished in {:.2}s",
         started_at.elapsed().as_secs_f32()
     );
 
