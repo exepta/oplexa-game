@@ -1,17 +1,17 @@
 {
-  "localized_name": "oplexa:oak_log_block",
-  "name": "Oak Log",
+  "localized_name": "oplexa:birch_planks_block",
+  "name": "Birch Planks",
   "max_stack_size": -1,
   "category": "block",
   "block_item": true,
   "placeable": true,
-  "block": "oak_log_block",
-  "groups": "logs",
+  "block": "birch_planks_block",
+  "groups": "planks",
   "tags": ["block"],
   "rarity": "common",
   "render": {
     "type": "block",
-    "block": "oak_log_block",
+    "block": "birch_planks_block",
     "projection": "isometric"
   },
   "world_drop": {

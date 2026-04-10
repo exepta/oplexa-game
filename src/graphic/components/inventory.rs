@@ -246,7 +246,7 @@ fn handle_inventory_drag_and_drop(
         ) else {
             return;
         };
-        let _ = open_recipe_preview_dialog_for_item(
+        let _ = open_recipe_preview_dialog_for_hovered_item(
             item_id,
             recipe_registry,
             &drop_deps.item_registry,
@@ -448,6 +448,7 @@ fn sync_player_inventory_ui(
     recipe_type_registry: Option<Res<RecipeTypeRegistry>>,
     item_registry: Res<ItemRegistry>,
     block_registry: Res<BlockRegistry>,
+    language: Res<ClientLanguageState>,
     asset_server: Res<AssetServer>,
     mut image_cache: ResMut<ImageCache>,
     mut images: ResMut<Assets<Image>>,
@@ -474,7 +475,11 @@ fn sync_player_inventory_ui(
 
     for (css_id, mut paragraph, mut maybe_visibility) in &mut paragraphs {
         if css_id.0 == PLAYER_INVENTORY_TOTAL_ID {
-            paragraph.text = format!("Items: {}", inventory.total_items());
+            paragraph.text = format!(
+                "{} {}",
+                language.localize_name_key("KEY_UI_ITEMS"),
+                inventory.total_items()
+            );
             continue;
         }
 
@@ -482,10 +487,16 @@ fn sync_player_inventory_ui(
             let next_title = if recipe_preview.open {
                 item_registry
                     .def_opt(recipe_preview.result_slot.item_id)
-                    .map(|item| format!("Recipe: {}", item.name))
-                    .unwrap_or_else(|| "Recipe".to_string())
+                    .map(|item| {
+                        format!(
+                            "{}: {}",
+                            language.localize_name_key("KEY_UI_RECIPE"),
+                            localize_item_name(language.as_ref(), item)
+                        )
+                    })
+                    .unwrap_or_else(|| language.localize_name_key("KEY_UI_RECIPE"))
             } else {
-                "Recipe".to_string()
+                language.localize_name_key("KEY_UI_RECIPE")
             };
             if paragraph.text != next_title {
                 paragraph.text = next_title;
@@ -677,6 +688,7 @@ fn sync_inventory_tooltip_ui(
     recipe_registry: Option<Res<RecipeRegistry>>,
     recipe_type_registry: Option<Res<RecipeTypeRegistry>>,
     item_registry: Res<ItemRegistry>,
+    language: Res<ClientLanguageState>,
     slot_states: Query<(&CssID, &UIWidgetState), With<Button>>,
     mut tooltip_root: Query<(&mut Visibility, &mut Node), With<InventoryTooltipRoot>>,
     mut tooltip_text: Query<(&CssID, &mut Paragraph)>,
@@ -724,8 +736,9 @@ fn sync_inventory_tooltip_ui(
 
     for (css_id, mut paragraph) in &mut tooltip_text {
         if css_id.0 == INVENTORY_TOOLTIP_NAME_ID {
-            if paragraph.text != item.name {
-                paragraph.text = item.name.clone();
+            let localized = localize_item_name(language.as_ref(), item);
+            if paragraph.text != localized {
+                paragraph.text = localized;
             }
         } else if css_id.0 == INVENTORY_TOOLTIP_KEY_ID
             && paragraph.text != item.localized_name

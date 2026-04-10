@@ -215,8 +215,8 @@ fn sync_system_last_ui(
     world_gen_config: Res<WorldGenConfig>,
     biomes: Res<BiomeRegistry>,
     selection_state: Res<SelectionState>,
-    _chunk_map: Res<ChunkMap>,
     block_registry: Res<BlockRegistry>,
+    language: Res<ClientLanguageState>,
     player: Query<(&Transform, Option<&FpsController>), With<Player>>,
     mut paragraphs: Query<(&CssID, &mut Paragraph)>,
 ) {
@@ -295,85 +295,162 @@ fn sync_system_last_ui(
         let p_chunks = Vec2::new(pos.x / CX as f32, pos.z / CZ as f32);
         dominant_biome_at_p_chunks(&biomes, world_gen_config.seed, p_chunks)
     });
-    let biome_name = biome.map(|b| b.name.as_str()).unwrap_or("n/a");
+    let not_available = language.localize_name_key("KEY_UI_NOT_AVAILABLE");
+    let state_on = language.localize_name_key("KEY_UI_ON");
+    let state_off = language.localize_name_key("KEY_UI_OFF");
+    let biome_name = biome
+        .map(|b| b.name.as_str())
+        .unwrap_or(not_available.as_str());
     let biome_climate = biome
         .map(|b| {
             if b.climate.is_empty() {
-                "n/a".to_string()
+                not_available.clone()
             } else {
                 b.climate.join(", ")
             }
         })
-        .unwrap_or_else(|| "n/a".to_string());
+        .unwrap_or_else(|| not_available.clone());
     let looked_block_name = selection_state
         .hit
         .map(|hit| {
             let id = hit.block_id;
             if id == 0 {
-                "air".to_string()
+                language.as_ref().localize_name_key("KEY_AIR")
             } else {
-                block_registry
-                    .display_name_opt(id)
-                    .unwrap_or("unknown")
-                    .to_string()
+                localize_block_name_for_id(language.as_ref(), &block_registry, id)
             }
         })
-        .unwrap_or_else(|| "n/a".to_string());
+        .unwrap_or_else(|| not_available.clone());
 
     for (css_id, mut paragraph) in &mut paragraphs {
         paragraph.text = match css_id.0.as_str() {
             ID_BUILD => format!(
-                "Game Version: {} v{} | Bevy {}",
+                "{}: {} v{} | Bevy {}",
+                language.localize_name_key("KEY_UI_DEBUG_GAME_VERSION"),
                 build.app_name, build.app_version, build.bevy_version
             ),
-            ID_FPS => format!("FPS: {:.1}", perf.fps),
-            ID_TICK_SPEED => format!("Ticks: {:.1} t/s", perf.tick_speed),
-            ID_CPU_NAME => format!("CPU Name: {}", cpu_name),
+            ID_FPS => format!("{}: {:.1}", language.localize_name_key("KEY_UI_DEBUG_FPS"), perf.fps),
+            ID_TICK_SPEED => format!(
+                "{}: {:.1} t/s",
+                language.localize_name_key("KEY_UI_DEBUG_TICKS"),
+                perf.tick_speed
+            ),
+            ID_CPU_NAME => format!(
+                "{}: {}",
+                language.localize_name_key("KEY_UI_DEBUG_CPU_NAME"),
+                cpu_name
+            ),
             ID_APP_CPU => format!(
-                "CPU Last (Game / System): {:.1}% / {:.1}%",
+                "{}: {:.1}% / {:.1}%",
+                language.localize_name_key("KEY_UI_DEBUG_CPU_LAST_GAME_SYSTEM"),
                 app_cpu_normalized, stats.cpu_percent
             ),
-            ID_GLOBAL_CPU => format!("System CPU: {:.1}%", stats.cpu_percent),
-            ID_APP_MEM => format!("RAM: {:.1} MiB", bytes_to_mib(stats.app_mem_bytes)),
-            ID_GPU_NAME => format!("GPU Name: {}", gpu_name),
-            ID_GPU_LOAD => format!("GPU Load: {} ({})", gpu_load_text, gpu_load_backend),
-            ID_VRAM => format!("VRAM: {} ({})", vram_text, vram_backend),
-            ID_BIOME => format!("Biome Name: {}", biome_name),
-            ID_BIOME_CLIMATE => format!("Biome Klima: {}", biome_climate),
-            ID_LOOK_BLOCK => format!("Block Name: {}", looked_block_name),
+            ID_GLOBAL_CPU => format!(
+                "{}: {:.1}%",
+                language.localize_name_key("KEY_UI_DEBUG_SYSTEM_CPU"),
+                stats.cpu_percent
+            ),
+            ID_APP_MEM => format!(
+                "{}: {:.1} MiB",
+                language.localize_name_key("KEY_UI_DEBUG_RAM"),
+                bytes_to_mib(stats.app_mem_bytes)
+            ),
+            ID_GPU_NAME => format!(
+                "{}: {}",
+                language.localize_name_key("KEY_UI_DEBUG_GPU_NAME"),
+                gpu_name
+            ),
+            ID_GPU_LOAD => format!(
+                "{}: {} ({})",
+                language.localize_name_key("KEY_UI_DEBUG_GPU_LOAD"),
+                gpu_load_text,
+                gpu_load_backend
+            ),
+            ID_VRAM => format!(
+                "{}: {} ({})",
+                language.localize_name_key("KEY_UI_DEBUG_VRAM"),
+                vram_text,
+                vram_backend
+            ),
+            ID_BIOME => format!(
+                "{}: {}",
+                language.localize_name_key("KEY_UI_DEBUG_BIOME_NAME"),
+                biome_name
+            ),
+            ID_BIOME_CLIMATE => format!(
+                "{}: {}",
+                language.localize_name_key("KEY_UI_DEBUG_BIOME_CLIMATE"),
+                biome_climate
+            ),
+            ID_LOOK_BLOCK => format!(
+                "{}: {}",
+                language.localize_name_key("KEY_UI_DEBUG_BLOCK_NAME"),
+                looked_block_name
+            ),
             ID_PLAYER_POS => {
                 if let (Some(pos), Some((yaw, pitch))) = (player_pos, player_yaw_pitch) {
                     format!(
-                        "Location (Player): {:.2} / {:.2} / {:.2} (yaw {:.1} / pitch {:.1})",
+                        "{}: {:.2} / {:.2} / {:.2} (yaw {:.1} / pitch {:.1})",
+                        language.localize_name_key("KEY_UI_DEBUG_LOCATION_PLAYER"),
                         pos.x, pos.y, pos.z, yaw, pitch
                     )
                 } else {
-                    "Location (Player): n/a".to_string()
+                    format!(
+                        "{}: {}",
+                        language.localize_name_key("KEY_UI_DEBUG_LOCATION_PLAYER"),
+                        not_available
+                    )
                 }
             }
             ID_CHUNK_COORD => {
                 if let Some(c) = player_chunk {
-                    format!("Chunk: {} / {}", c.x, c.y)
+                    format!(
+                        "{}: {} / {}",
+                        language.localize_name_key("KEY_UI_DEBUG_CHUNK"),
+                        c.x,
+                        c.y
+                    )
                 } else {
-                    "Chunk: n/a".to_string()
+                    format!(
+                        "{}: {}",
+                        language.localize_name_key("KEY_UI_DEBUG_CHUNK"),
+                        not_available
+                    )
                 }
             }
             ID_GRID => format!(
-                "Chunk Grid State: {} (Y={:.1})",
-                grid_mode_label(grid.mode),
+                "{}: {} (Y={:.1})",
+                language.localize_name_key("KEY_UI_DEBUG_CHUNK_GRID_STATE"),
+                grid_mode_label(grid.mode, language.as_ref()),
                 grid.plane_y
             ),
-            ID_INSPECTOR => format!("World Inspector State: {}", bool_label(world_inspector.0)),
-            ID_OVERLAY => format!("Debug Overlay State: {}", bool_label(overlay.show)),
+            ID_INSPECTOR => format!(
+                "{}: {}",
+                language.localize_name_key("KEY_UI_DEBUG_WORLD_INSPECTOR_STATE"),
+                if world_inspector.0 {
+                    state_on.as_str()
+                } else {
+                    state_off.as_str()
+                }
+            ),
+            ID_OVERLAY => format!(
+                "{}: {}",
+                language.localize_name_key("KEY_UI_DEBUG_OVERLAY_STATE"),
+                if overlay.show {
+                    state_on.as_str()
+                } else {
+                    state_off.as_str()
+                }
+            ),
             _ => continue,
         };
     }
 }
 
-fn grid_mode_label(mode: DebugGridMode) -> &'static str {
+fn grid_mode_label(mode: DebugGridMode, language: &ClientLanguageState) -> String {
     match mode {
-        DebugGridMode::Off => "Off",
-        DebugGridMode::Chunks => "On",
-        DebugGridMode::AllSubchunks => "All",
+        DebugGridMode::Off => language.localize_name_key("KEY_UI_DEBUG_GRID_OFF"),
+        DebugGridMode::Chunks => language.localize_name_key("KEY_UI_DEBUG_GRID_ON"),
+        DebugGridMode::AllSubchunks => language.localize_name_key("KEY_UI_DEBUG_GRID_ALL"),
     }
 }

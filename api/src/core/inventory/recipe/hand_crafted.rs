@@ -19,7 +19,10 @@ struct HandCraftedDataJson {
 /// Represents hand crafted entry json used by the `core::inventory::recipe::hand_crafted` module.
 #[derive(Deserialize)]
 struct HandCraftedEntryJson {
+    #[serde(default)]
     item: String,
+    #[serde(default)]
+    group: String,
     #[serde(default = "default_required_count")]
     count: u16,
 }
@@ -61,12 +64,25 @@ fn match_hand_crafted_inputs(
             return None;
         }
 
-        let required_item_id = item_registry.id_opt(required_entry.item.as_str())?;
         let required_count = required_entry.count.max(1);
         let current_slot = input_slots.get(slot_index)?;
-        if current_slot.item_id != required_item_id || current_slot.count < required_count {
+        if current_slot.count < required_count {
             return None;
         }
+        let required_item_id = if !required_entry.item.trim().is_empty() {
+            let required_item_id = item_registry.id_opt(required_entry.item.as_str())?;
+            if current_slot.item_id != required_item_id {
+                return None;
+            }
+            required_item_id
+        } else if !required_entry.group.trim().is_empty() {
+            if !item_registry.has_group(current_slot.item_id, required_entry.group.as_str()) {
+                return None;
+            }
+            current_slot.item_id
+        } else {
+            return None;
+        };
 
         required_slots[slot_index] = true;
         required_inputs.push(RecipeInputRequirement {

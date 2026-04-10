@@ -1,9 +1,19 @@
+#[derive(bevy::ecs::system::SystemParam)]
+struct SinglePlayerWorldLoadDeps<'w, 's> {
+    region_cache: ResMut<'w, RegionCache>,
+    chunk_map: ResMut<'w, ChunkMap>,
+    fluid_map: ResMut<'w, FluidMap>,
+    water_mesh_index: ResMut<'w, WaterMeshIndex>,
+    _marker: std::marker::PhantomData<&'s ()>,
+}
+
 /// Runs the `enter_single_player_screen` routine for enter single player screen in the `graphic::components::single_player` module.
 fn enter_single_player_screen(
     time: Res<Time>,
     mut commands: Commands,
     ui_entities: Res<UiEntities>,
     mut ui_state: ResMut<SinglePlayerUiState>,
+    language: Res<ClientLanguageState>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     world_gen_config: Res<WorldGenConfig>,
     item_entities: Query<Entity, With<SinglePlayerListItem>>,
@@ -31,6 +41,7 @@ fn enter_single_player_screen(
         &mut commands,
         ui_entities.single_player_world_list,
         &ui_state.worlds,
+        language.as_ref(),
         &item_entities,
         &children_q,
         &names_q,
@@ -111,6 +122,7 @@ fn sync_single_player_visibility(
 /// Synchronizes single player delete dialog for the `graphic::components::single_player` module.
 fn sync_single_player_delete_dialog(
     ui_state: Res<SinglePlayerUiState>,
+    language: Res<ClientLanguageState>,
     mut paragraphs: Query<(&mut Paragraph, Option<&SinglePlayerDeleteText>)>,
 ) {
     let name = ui_state
@@ -123,7 +135,10 @@ fn sync_single_player_delete_dialog(
         if marker.is_none() {
             continue;
         }
-        paragraph.text = format!("Delete world `{name}`?");
+        paragraph.text = format!(
+            "{} `{name}`?",
+            language.localize_name_key("KEY_UI_DELETE_WORLD")
+        );
     }
 }
 
@@ -185,6 +200,7 @@ fn handle_single_player_actions(
     mut commands: Commands,
     ui_entities: Res<UiEntities>,
     mut ui_state: ResMut<SinglePlayerUiState>,
+    language: Res<ClientLanguageState>,
     mut ui_interaction: ResMut<UiInteractionState>,
     mut world_gen_config: ResMut<WorldGenConfig>,
     mut widgets: Query<(&CssID, &mut UIWidgetState), With<Button>>,
@@ -193,10 +209,7 @@ fn handle_single_player_actions(
     children_q: Query<&Children>,
     names_q: Query<&Name>,
     mut next_state: ResMut<NextState<AppState>>,
-    mut region_cache: ResMut<RegionCache>,
-    mut chunk_map: ResMut<ChunkMap>,
-    mut fluid_map: ResMut<FluidMap>,
-    mut water_mesh_index: ResMut<WaterMeshIndex>,
+    mut world_load_deps: SinglePlayerWorldLoadDeps,
 ) {
     let actions = collect_single_player_actions(&mut widgets);
     if actions.is_empty() {
@@ -229,10 +242,10 @@ fn handle_single_player_actions(
                         &mut world_gen_config,
                         &mut commands,
                         &mut next_state,
-                        &mut region_cache,
-                        &mut chunk_map,
-                        &mut fluid_map,
-                        &mut water_mesh_index,
+                        &mut world_load_deps.region_cache,
+                        &mut world_load_deps.chunk_map,
+                        &mut world_load_deps.fluid_map,
+                        &mut world_load_deps.water_mesh_index,
                     );
                     return;
                 }
@@ -261,10 +274,10 @@ fn handle_single_player_actions(
                         &mut world_gen_config,
                         &mut commands,
                         &mut next_state,
-                        &mut region_cache,
-                        &mut chunk_map,
-                        &mut fluid_map,
-                        &mut water_mesh_index,
+                        &mut world_load_deps.region_cache,
+                        &mut world_load_deps.chunk_map,
+                        &mut world_load_deps.fluid_map,
+                        &mut world_load_deps.water_mesh_index,
                     );
                     return;
                 }
@@ -312,6 +325,7 @@ fn handle_single_player_actions(
                     &mut commands,
                     ui_entities.single_player_world_list,
                     &ui_state.worlds,
+                    language.as_ref(),
                     &item_entities,
                     &children_q,
                     &names_q,
@@ -346,10 +360,10 @@ fn handle_single_player_actions(
                     &mut world_gen_config,
                     &mut commands,
                     &mut next_state,
-                    &mut region_cache,
-                    &mut chunk_map,
-                    &mut fluid_map,
-                    &mut water_mesh_index,
+                    &mut world_load_deps.region_cache,
+                    &mut world_load_deps.chunk_map,
+                    &mut world_load_deps.fluid_map,
+                    &mut world_load_deps.water_mesh_index,
                 );
                 return;
             }
@@ -435,6 +449,7 @@ fn rebuild_single_player_cards(
     commands: &mut Commands,
     list_entity: Entity,
     worlds: &[SavedWorldEntry],
+    language: &ClientLanguageState,
     existing_items: &Query<Entity, With<SinglePlayerListItem>>,
     children_q: &Query<&Children>,
     names_q: &Query<&Name>,
@@ -449,7 +464,7 @@ fn rebuild_single_player_cards(
         if worlds.is_empty() {
             list.spawn((
                 Paragraph {
-                    text: "No worlds found in saves/".to_string(),
+                    text: language.localize_name_key("KEY_UI_NO_WORLDS_FOUND"),
                     ..default()
                 },
                 UiTextTone::Darker,
@@ -461,7 +476,13 @@ fn rebuild_single_player_cards(
         for (index, world) in worlds.iter().enumerate() {
             list.spawn((
                 Button {
-                    text: format!("WeltName: {}\nSeed: {}", world.folder_name, world.seed),
+                    text: format!(
+                        "{}: {}\n{}: {}",
+                        language.localize_name_key("KEY_UI_WORLD_NAME"),
+                        world.folder_name,
+                        language.localize_name_key("KEY_UI_SEED"),
+                        world.seed
+                    ),
                     ..default()
                 },
                 CssID(format!("{SINGLE_PLAYER_WORLD_CARD_PREFIX}{index}")),

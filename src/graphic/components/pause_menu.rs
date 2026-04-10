@@ -60,17 +60,18 @@ fn enforce_pause_menu_visibility(
 /// Synchronizes pause menu labels for the `graphic::components::pause_menu` module.
 fn sync_pause_menu_labels(
     multiplayer_connection: Res<MultiplayerConnectionState>,
+    language: Res<ClientLanguageState>,
     mut buttons: Query<(&CssID, &mut Button)>,
 ) {
     for (css_id, mut button) in &mut buttons {
         if css_id.0 == PAUSE_CLOSE_ID {
             let target = if multiplayer_connection.connected {
-                "Disconnect"
+                language.localize_name_key("KEY_UI_DISCONNECT")
             } else {
-                "Main Menu"
+                language.localize_name_key("KEY_UI_MAIN_MENU")
             };
             if button.text != target {
-                button.text = target.to_string();
+                button.text = target;
             }
         }
     }

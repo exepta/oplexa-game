@@ -34,6 +34,7 @@ fn sync_world_gen_progress(
     time: Res<Time>,
     app_state: Res<State<AppState>>,
     game_config: Res<GlobalConfig>,
+    language: Res<ClientLanguageState>,
     loading_data: LoadingProgressData,
     mut loading_progress: ResMut<LoadingProgress>,
     mut animation: ResMut<WorldGenUiAnimation>,
@@ -110,7 +111,8 @@ fn sync_world_gen_progress(
     for (css_id, mut paragraph) in &mut paragraphs {
         if css_id.0 == WORLD_GEN_CHUNKS_ID {
             paragraph.text = format!(
-                "Chunks Loaded {} / {}",
+                "{} {} / {}",
+                language.localize_name_key("KEY_UI_CHUNKS_LOADED"),
                 progress_log_state.phase_peak_chunks,
                 metrics.total_chunks
             );
@@ -120,7 +122,12 @@ fn sync_world_gen_progress(
         if css_id.0 == WORLD_GEN_SPINNER_ID {
             const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
             let frame = ((time.elapsed_secs() * 12.0) as usize) % SPINNER.len();
-            paragraph.text = format!("Loading {}  {:.0}%", SPINNER[frame], animation.displayed_pct);
+            paragraph.text = format!(
+                "{} {}  {:.0}%",
+                language.localize_name_key("KEY_UI_LOADING"),
+                SPINNER[frame],
+                animation.displayed_pct
+            );
         }
     }
 }

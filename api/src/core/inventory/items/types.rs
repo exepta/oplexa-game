@@ -49,6 +49,8 @@ pub struct ItemDef {
     pub block_item: bool,
     /// Marks whether right-click placement is allowed for this item.
     pub placeable: bool,
+    /// Optional group labels used by recipe matching/mapping (for example `logs`).
+    pub groups: Vec<String>,
     /// Optional list of tags from JSON.
     pub tags: Vec<String>,
     /// Free-form rarity label from JSON.

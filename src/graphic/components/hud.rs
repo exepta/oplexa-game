@@ -180,28 +180,29 @@ fn sync_hotbar_selected_block(
     inventory: Res<PlayerInventory>,
     item_registry: Res<ItemRegistry>,
     registry: Res<BlockRegistry>,
+    language: Res<ClientLanguageState>,
     mut selected: ResMut<SelectedBlock>,
 ) {
     let Some(slot) = inventory.slots.get(hotbar_state.selected_index).copied() else {
         selected.id = 0;
-        selected.name = "air".to_string();
+        selected.name = language.as_ref().localize_name_key("KEY_AIR");
         return;
     };
 
     if slot.is_empty() {
         selected.id = 0;
-        selected.name = "air".to_string();
+        selected.name = language.as_ref().localize_name_key("KEY_AIR");
         return;
     }
 
     let Some(block_id) = item_registry.block_for_item(slot.item_id) else {
         selected.id = 0;
-        selected.name = "air".to_string();
+        selected.name = language.as_ref().localize_name_key("KEY_AIR");
         return;
     };
 
     selected.id = block_id;
-    selected.name = registry.display_name_opt(block_id).unwrap_or("air").to_string();
+    selected.name = localize_block_name_for_id(language.as_ref(), &registry, block_id);
 }
 
 /// Synchronizes hud hotbar ui for the `graphic::components::hud` module.
@@ -314,6 +315,7 @@ fn track_hotbar_selection_tooltip(
     hotbar_state: Res<HotbarSelectionState>,
     inventory: Res<PlayerInventory>,
     item_registry: Res<ItemRegistry>,
+    language: Res<ClientLanguageState>,
     mut tooltip: ResMut<HotbarSelectionTooltipState>,
 ) {
     tooltip.timer.tick(time.delta());
@@ -331,7 +333,7 @@ fn track_hotbar_selection_tooltip(
         .get(hotbar_state.selected_index)
         .filter(|slot| !slot.is_empty())
         .and_then(|slot| item_registry.def_opt(slot.item_id))
-        .map(|item| item.name.clone());
+        .map(|item| localize_item_name(language.as_ref(), item));
 
     if let Some(name) = selected_item_name {
         tooltip.timer.reset();

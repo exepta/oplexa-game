@@ -598,6 +598,7 @@ fn append_auto_slab_variants(
 
         let mut def = source.clone();
         def.localized_name = localized_name.clone();
+        def.name = normalize_block_name_key("", localized_name.as_str());
         def.collider = slab_variant_collider(&source.collider, variant);
         let id = defs.len() as BlockId;
         defs.push(def);
@@ -1170,39 +1171,49 @@ fn default_block_collider_size_m() -> [f32; 3] {
 /// - new: `localized_name = "stone_block", name = "Stone Block"`
 fn normalize_block_identity(raw_localized_name: &str, raw_name: &str) -> (String, String) {
     let mut localized_name = raw_localized_name.trim().to_string();
-    let mut display_name = raw_name.trim().to_string();
-
     if localized_name.is_empty() {
-        localized_name = display_name.clone();
-    }
-    if display_name.is_empty() || display_name == localized_name {
-        display_name = prettify_localized_block_name(&localized_name);
+        localized_name = raw_name.trim().to_ascii_lowercase();
     }
     if localized_name.is_empty() {
         panic!("block JSON identity is invalid: missing both 'localized_name' and 'name'");
     }
+    let name_key = normalize_block_name_key(raw_name, localized_name.as_str());
 
-    (localized_name, display_name)
+    (localized_name, name_key)
 }
 
-fn prettify_localized_block_name(value: &str) -> String {
-    value
-        .split('_')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => {
-                    let mut word = String::new();
-                    word.extend(first.to_uppercase());
-                    word.push_str(&chars.as_str().to_ascii_lowercase());
-                    word
-                }
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+fn normalize_block_name_key(raw_name: &str, fallback_localized_name: &str) -> String {
+    let trimmed = raw_name.trim();
+    if is_name_key(trimmed) {
+        return trimmed.to_string();
+    }
+    block_name_key_from_localized_name(fallback_localized_name)
+}
+
+fn is_name_key(value: &str) -> bool {
+    value.starts_with("KEY_")
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+}
+
+fn block_name_key_from_localized_name(localized_name: &str) -> String {
+    let mut key = String::with_capacity(localized_name.len() + 4);
+    key.push_str("KEY_");
+    let mut last_was_separator = false;
+    for ch in localized_name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            key.push(ch.to_ascii_uppercase());
+            last_was_separator = false;
+        } else if !last_was_separator {
+            key.push('_');
+            last_was_separator = true;
+        }
+    }
+    while key.ends_with('_') {
+        key.pop();
+    }
+    key
 }
 
 /* ---------------- uv helpers ---------------- */

@@ -2,7 +2,8 @@ use crate::core::entities::player::inventory::InventorySlot;
 use crate::core::inventory::items::ItemRegistry;
 use crate::core::inventory::recipe::hand_crafted::register_hand_crafted_recipe_type;
 use crate::core::inventory::recipe::types::{
-    NamespacedKey, RecipeDefinition, RecipeInputRequirement, ResolvedRecipe,
+    NamespacedKey, RecipeDefinition, RecipeInputRequirement, RecipeResultDef,
+    RecipeResultTemplateDef, ResolvedRecipe,
 };
 use bevy::prelude::Resource;
 use serde_json::Value;
@@ -85,16 +86,56 @@ impl RecipeRegistry {
                 ) else {
                     continue;
                 };
+                let Some(result) =
+                    resolve_recipe_result(&recipe.result, input_slots, item_registry)
+                else {
+                    continue;
+                };
 
                 return Some(ResolvedRecipe {
                     source_path: recipe.source_path.clone(),
                     recipe_kind: recipe.recipe_kind.clone(),
                     recipe_type: crafting.recipe_type.clone(),
                     required_inputs,
-                    result: recipe.result.clone(),
+                    result,
                 });
             }
         }
         None
+    }
+}
+
+fn resolve_recipe_result(
+    template: &RecipeResultTemplateDef,
+    input_slots: &[InventorySlot],
+    item_registry: &ItemRegistry,
+) -> Option<RecipeResultDef> {
+    match template {
+        RecipeResultTemplateDef::Static {
+            item_id,
+            item_localized_name,
+            count,
+        } => Some(RecipeResultDef {
+            item_id: *item_id,
+            item_localized_name: item_localized_name.clone(),
+            count: *count,
+        }),
+        RecipeResultTemplateDef::ByGroupFromSlot {
+            slot_index,
+            group,
+            count,
+        } => {
+            let source_slot = input_slots.get(*slot_index)?;
+            if source_slot.is_empty() || source_slot.count == 0 {
+                return None;
+            }
+            let result_item_id = item_registry.related_item_in_group(source_slot.item_id, group)?;
+            let result_item = item_registry.def_opt(result_item_id)?;
+            Some(RecipeResultDef {
+                item_id: result_item_id,
+                item_localized_name: result_item.localized_name.clone(),
+                count: *count,
+            })
+        }
     }
 }
