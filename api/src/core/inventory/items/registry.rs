@@ -134,6 +134,74 @@ impl ItemRegistry {
                 .unwrap_or(false)
     }
 
+    /// Returns whether a given item belongs to the requested recipe group.
+    #[inline]
+    pub fn has_group(&self, item_id: ItemId, group: &str) -> bool {
+        let normalized_group = normalize_group_name(group);
+        if normalized_group.is_empty() {
+            return false;
+        }
+        self.def_opt(item_id).is_some_and(|item| {
+            item.groups
+                .iter()
+                .any(|entry| entry == normalized_group.as_str())
+        })
+    }
+
+    /// Resolves a related item in another group based on a source item.
+    ///
+    /// Example: `oak_log_block` (`logs`) -> `oak_planks_block` (`planks`).
+    pub fn related_item_in_group(
+        &self,
+        source_item_id: ItemId,
+        target_group: &str,
+    ) -> Option<ItemId> {
+        let normalized_target_group = normalize_group_name(target_group);
+        if normalized_target_group.is_empty() {
+            return None;
+        }
+
+        if self.has_group(source_item_id, normalized_target_group.as_str()) {
+            return Some(source_item_id);
+        }
+
+        let source = self.def_opt(source_item_id)?;
+        if source.groups.is_empty() {
+            return None;
+        }
+
+        for source_group in &source.groups {
+            for candidate_key in derive_group_mapped_keys(
+                source.key.as_str(),
+                source_group.as_str(),
+                normalized_target_group.as_str(),
+            ) {
+                let candidate_localized_name = format!("{}:{}", source.provider, candidate_key);
+                let Some(candidate_item_id) = self.id_opt(candidate_localized_name.as_str()) else {
+                    continue;
+                };
+                if self.has_group(candidate_item_id, normalized_target_group.as_str()) {
+                    return Some(candidate_item_id);
+                }
+            }
+
+            let Some(prefix) =
+                derive_family_prefix_from_group(source.key.as_str(), source_group.as_str())
+            else {
+                continue;
+            };
+            if let Some(candidate_item_id) = self.find_group_item_by_prefix(
+                source.provider.as_str(),
+                prefix.as_str(),
+                normalized_target_group.as_str(),
+            ) {
+                return Some(candidate_item_id);
+            }
+        }
+
+        None
+    }
+
     /// Resolves the icon asset path for UI icon widgets.
     pub fn icon_path(&self, asset_server: &AssetServer, item_id: ItemId) -> Option<String> {
         let item = self.def_opt(item_id)?;
@@ -142,6 +210,37 @@ impl ItemRegistry {
         }
         let path = asset_server.get_path(item.image.id())?;
         Some(path.path().to_string_lossy().to_string())
+    }
+
+    /// Finds first item for provider/prefix that belongs to the requested group.
+    fn find_group_item_by_prefix(
+        &self,
+        provider: &str,
+        prefix: &str,
+        target_group: &str,
+    ) -> Option<ItemId> {
+        let prefix_with_separator = format!("{prefix}_");
+        let preferred_fragment = format!("_{target_group}_");
+        let mut fallback = None;
+
+        for (index, item) in self.defs.iter().enumerate().skip(1) {
+            if item.provider != provider || !item.key.starts_with(prefix_with_separator.as_str()) {
+                continue;
+            }
+            if !item.groups.iter().any(|group| group == target_group) {
+                continue;
+            }
+
+            let candidate_id = index as ItemId;
+            if item.key.contains(preferred_fragment.as_str()) {
+                return Some(candidate_id);
+            }
+            if fallback.is_none() {
+                fallback = Some(candidate_id);
+            }
+        }
+
+        fallback
     }
 
     /// Loads all JSON item definitions and automatically registers all blocks as items.
@@ -191,6 +290,7 @@ impl ItemRegistry {
             material: Handle::default(),
             block_item: false,
             placeable: false,
+            groups: Vec::new(),
             tags: Vec::new(),
             rarity: "common".to_string(),
             tool: None,
@@ -232,6 +332,7 @@ impl ItemRegistry {
             block_registry,
         );
         let tool = resolve_item_tool_def(&item_json, item_identity.key.as_str());
+        let groups = normalize_group_entries(item_json.groups.as_str());
         let (image, material) = match render_kind {
             ItemRenderKind::Flat => {
                 let image: Handle<Image> = asset_server.load(texture_path.clone());
@@ -267,6 +368,7 @@ impl ItemRegistry {
             material,
             block_item: item_json.block_item,
             placeable: item_json.placeable,
+            groups,
             tags: item_json.tags,
             rarity: item_json.rarity,
             tool,
@@ -296,6 +398,7 @@ impl ItemRegistry {
             mapped_block,
         );
         let tool = resolve_item_tool_def(&item_json, item_identity.key.as_str());
+        let groups = normalize_group_entries(item_json.groups.as_str());
 
         let item_id = self.push_item(ItemDef {
             provider: item_identity.provider,
@@ -313,6 +416,7 @@ impl ItemRegistry {
             material: Handle::default(),
             block_item: item_json.block_item,
             placeable: item_json.placeable,
+            groups,
             tags: item_json.tags,
             rarity: item_json.rarity,
             tool,
@@ -356,6 +460,7 @@ impl ItemRegistry {
                 material: block_def.material.clone(),
                 block_item: true,
                 placeable: true,
+                groups: Vec::new(),
                 tags: vec!["block".to_string()],
                 rarity: "common".to_string(),
                 tool: None,
@@ -413,6 +518,7 @@ impl ItemRegistry {
                 material: Handle::default(),
                 block_item: true,
                 placeable: true,
+                groups: Vec::new(),
                 tags: vec!["block".to_string()],
                 rarity: "common".to_string(),
                 tool: None,
@@ -494,6 +600,8 @@ struct ItemJson {
     placeable: bool,
     #[serde(default)]
     block: Option<String>,
+    #[serde(default)]
+    groups: String,
     #[serde(default)]
     tags: Vec<String>,
     #[serde(default = "default_rarity")]
@@ -580,6 +688,116 @@ fn normalize_stack_size(value: i32) -> u16 {
     } else {
         value.min(u16::MAX as i32) as u16
     }
+}
+
+/// Normalizes one group label (trim + lowercase).
+fn normalize_group_name(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase()
+}
+
+/// Converts a single JSON `groups` value into normalized runtime labels.
+fn normalize_group_entries(raw: &str) -> Vec<String> {
+    let normalized = normalize_group_name(raw);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+    vec![normalized]
+}
+
+#[inline]
+fn singular_group_name(group: &str) -> &str {
+    if group.len() <= 1 {
+        return group;
+    }
+    group.strip_suffix('s').unwrap_or(group)
+}
+
+fn derive_group_mapped_keys(
+    source_key: &str,
+    source_group: &str,
+    target_group: &str,
+) -> Vec<String> {
+    let normalized_source_group = normalize_group_name(source_group);
+    let normalized_target_group = normalize_group_name(target_group);
+    if normalized_source_group.is_empty() || normalized_target_group.is_empty() {
+        return Vec::new();
+    }
+
+    let source_group_singular = singular_group_name(normalized_source_group.as_str());
+    let target_group_singular = singular_group_name(normalized_target_group.as_str());
+
+    let source_tokens = [normalized_source_group.as_str(), source_group_singular];
+    let target_tokens = [normalized_target_group.as_str(), target_group_singular];
+
+    let mut candidates = Vec::new();
+    for source_token in source_tokens {
+        if source_token.is_empty() {
+            continue;
+        }
+        for target_token in target_tokens {
+            if target_token.is_empty() {
+                continue;
+            }
+            let Some(candidate_key) =
+                replace_group_token_in_key(source_key, source_token, target_token)
+            else {
+                continue;
+            };
+            if !candidates.contains(&candidate_key) {
+                candidates.push(candidate_key);
+            }
+        }
+    }
+
+    candidates
+}
+
+fn replace_group_token_in_key(
+    source_key: &str,
+    source_token: &str,
+    target_token: &str,
+) -> Option<String> {
+    let source_middle = format!("_{source_token}_");
+    if source_key.contains(source_middle.as_str()) {
+        let target_middle = format!("_{target_token}_");
+        return Some(source_key.replacen(source_middle.as_str(), target_middle.as_str(), 1));
+    }
+
+    let source_suffix = format!("_{source_token}");
+    source_key
+        .strip_suffix(source_suffix.as_str())
+        .map(|prefix| format!("{prefix}_{target_token}"))
+}
+
+fn derive_family_prefix_from_group(source_key: &str, source_group: &str) -> Option<String> {
+    let normalized_source_group = normalize_group_name(source_group);
+    if normalized_source_group.is_empty() {
+        return None;
+    }
+
+    let source_group_singular = singular_group_name(normalized_source_group.as_str());
+    let source_tokens = [normalized_source_group.as_str(), source_group_singular];
+
+    for source_token in source_tokens {
+        if source_token.is_empty() {
+            continue;
+        }
+        let source_middle = format!("_{source_token}_");
+        if let Some((prefix, _)) = source_key.split_once(source_middle.as_str())
+            && !prefix.is_empty()
+        {
+            return Some(prefix.to_string());
+        }
+
+        let source_suffix = format!("_{source_token}");
+        if let Some(prefix) = source_key.strip_suffix(source_suffix.as_str())
+            && !prefix.is_empty()
+        {
+            return Some(prefix.to_string());
+        }
+    }
+
+    None
 }
 
 /// Parses item identity for the `core::inventory::items::registry` module.

@@ -6,6 +6,7 @@
   "block_item": true,
   "placeable": true,
   "block": "birch_log_block",
+  "groups": "logs",
   "tags": ["block"],
   "rarity": "common",
   "render": {

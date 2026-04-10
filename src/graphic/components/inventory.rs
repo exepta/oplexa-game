@@ -246,7 +246,7 @@ fn handle_inventory_drag_and_drop(
         ) else {
             return;
         };
-        let _ = open_recipe_preview_dialog_for_item(
+        let _ = open_recipe_preview_dialog_for_hovered_item(
             item_id,
             recipe_registry,
             &drop_deps.item_registry,

@@ -6,7 +6,7 @@
       "data": {
         "craft": {
           "0": {
-            "item": "oplexa:oak_log_block",
+            "group": "logs",
             "count": 1
           }
         }
@@ -14,7 +14,8 @@
     }
   ],
   "result": {
-    "item": "oplexa:oak_planks_block",
+    "slot": 0,
+    "group": "planks",
     "count": 2
   }
 }

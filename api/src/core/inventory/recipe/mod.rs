@@ -10,5 +10,5 @@ pub use registry::{RecipeRegistry, RecipeTypeHandler, RecipeTypeRegistry};
 pub use state::HandCraftedState;
 pub use types::{
     NamespacedKey, RecipeCraftingEntry, RecipeDefinition, RecipeInputRequirement, RecipeResultDef,
-    ResolvedRecipe,
+    RecipeResultTemplateDef, ResolvedRecipe,
 };

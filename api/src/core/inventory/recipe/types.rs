@@ -51,13 +51,38 @@ pub struct RecipeResultDef {
     pub count: u16,
 }
 
+/// Represents recipe result template used by loaded recipe JSON definitions.
+#[derive(Clone, Debug)]
+pub enum RecipeResultTemplateDef {
+    Static {
+        item_id: ItemId,
+        item_localized_name: String,
+        count: u16,
+    },
+    ByGroupFromSlot {
+        slot_index: usize,
+        group: String,
+        count: u16,
+    },
+}
+
+impl RecipeResultTemplateDef {
+    /// Returns the configured result stack size for this template.
+    #[inline]
+    pub fn count(&self) -> u16 {
+        match self {
+            Self::Static { count, .. } | Self::ByGroupFromSlot { count, .. } => *count,
+        }
+    }
+}
+
 /// Represents recipe definition used by the `core::inventory::recipe::types` module.
 #[derive(Clone, Debug)]
 pub struct RecipeDefinition {
     pub source_path: String,
     pub recipe_kind: String,
     pub crafting: Vec<RecipeCraftingEntry>,
-    pub result: RecipeResultDef,
+    pub result: RecipeResultTemplateDef,
 }
 
 /// Represents recipe input requirement used by the `core::inventory::recipe::types` module.

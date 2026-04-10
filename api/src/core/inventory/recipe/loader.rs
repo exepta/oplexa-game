@@ -1,7 +1,7 @@
 use crate::core::inventory::items::ItemRegistry;
 use crate::core::inventory::recipe::registry::{RecipeRegistry, RecipeTypeRegistry};
 use crate::core::inventory::recipe::types::{
-    NamespacedKey, RecipeCraftingEntry, RecipeDefinition, RecipeResultDef,
+    NamespacedKey, RecipeCraftingEntry, RecipeDefinition, RecipeResultTemplateDef,
 };
 use bevy::prelude::*;
 use serde::Deserialize;
@@ -31,7 +31,12 @@ struct RecipeCraftingEntryJson {
 /// Represents recipe result json used by the `core::inventory::recipe::loader` module.
 #[derive(Deserialize)]
 struct RecipeResultJson {
+    #[serde(default)]
     item: String,
+    #[serde(default)]
+    slot: Option<usize>,
+    #[serde(default)]
+    group: String,
     #[serde(default = "default_result_count")]
     count: u16,
 }
@@ -88,24 +93,48 @@ pub fn load_recipe_registry(
             continue;
         }
 
-        let Some(result_item_id) = item_registry.id_opt(recipe_json.result.item.as_str()) else {
+        let result_count = recipe_json.result.count.max(1);
+        let result = if !recipe_json.result.item.trim().is_empty() {
+            let Some(result_item_id) = item_registry.id_opt(recipe_json.result.item.as_str())
+            else {
+                warn!(
+                    "Skipping recipe '{}': unknown result item '{}'",
+                    source_path, recipe_json.result.item
+                );
+                continue;
+            };
+            RecipeResultTemplateDef::Static {
+                item_id: result_item_id,
+                item_localized_name: recipe_json.result.item,
+                count: result_count,
+            }
+        } else if let Some(slot_index) = recipe_json.result.slot {
+            let result_group = normalize_recipe_group(recipe_json.result.group.as_str());
+            if result_group.is_empty() {
+                warn!(
+                    "Skipping recipe '{}': dynamic result requires non-empty `result.group`",
+                    source_path
+                );
+                continue;
+            }
+            RecipeResultTemplateDef::ByGroupFromSlot {
+                slot_index,
+                group: result_group,
+                count: result_count,
+            }
+        } else {
             warn!(
-                "Skipping recipe '{}': unknown result item '{}'",
-                source_path, recipe_json.result.item
+                "Skipping recipe '{}': result requires either `item` or `slot+group`",
+                source_path
             );
             continue;
         };
-        let result_count = recipe_json.result.count.max(1);
 
         recipes.push(RecipeDefinition {
             source_path,
             recipe_kind: recipe_json.recipe_kind,
             crafting,
-            result: RecipeResultDef {
-                item_id: result_item_id,
-                item_localized_name: recipe_json.result.item,
-                count: result_count,
-            },
+            result,
         });
     }
 
@@ -142,4 +171,9 @@ fn collect_recipe_json_paths(dir: &Path, paths: &mut Vec<PathBuf>) {
 #[inline]
 fn default_result_count() -> u16 {
     1
+}
+
+#[inline]
+fn normalize_recipe_group(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase()
 }

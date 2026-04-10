@@ -1,17 +1,17 @@
 {
-  "localized_name": "oplexa:oak_log_block",
-  "name": "Oak Log",
+  "localized_name": "oplexa:spruce_log_block",
+  "name": "Spruce Log",
   "max_stack_size": -1,
   "category": "block",
   "block_item": true,
   "placeable": true,
-  "block": "oak_log_block",
+  "block": "spruce_log_block",
   "groups": "logs",
   "tags": ["block"],
   "rarity": "common",
   "render": {
     "type": "block",
-    "block": "oak_log_block",
+    "block": "spruce_log_block",
     "projection": "isometric"
   },
   "world_drop": {
