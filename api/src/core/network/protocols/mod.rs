@@ -3,6 +3,7 @@ mod blocks;
 mod chat;
 mod chunks;
 mod drops;
+mod inventory;
 pub mod mobs;
 mod players;
 
@@ -11,6 +12,7 @@ pub use blocks::*;
 pub use chat::*;
 pub use chunks::*;
 pub use drops::*;
+pub use inventory::*;
 pub use players::*;
 
 use bevy::prelude::*;
@@ -99,6 +101,10 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<ServerDropPicked>()
             .add_direction(NetworkDirection::ServerToClient);
+
+        // Messages - inventory
+        app.register_message::<ClientInventorySync>()
+            .add_direction(NetworkDirection::ClientToServer);
 
         // Messages - chat + commands
         app.register_message::<ClientChatMessage>()

@@ -153,7 +153,17 @@ pub fn build_world_item_drop_visual(
     if let Some(block_id) = resolve_drop_block_id(block_registry, item_registry, item_id) {
         let mut mesh = build_block_cube_mesh(block_registry, block_id, size);
         center_mesh_vertices(&mut mesh, size * 0.5);
-        return Some((mesh, block_registry.material(block_id), Vec3::ONE));
+        let visual_scale = block_registry
+            .collision_box(block_id)
+            .map(|(size_m, _)| {
+                Vec3::new(
+                    size_m[0].clamp(0.1, 1.0),
+                    size_m[1].clamp(0.1, 1.0),
+                    size_m[2].clamp(0.1, 1.0),
+                )
+            })
+            .unwrap_or(Vec3::ONE);
+        return Some((mesh, block_registry.material(block_id), visual_scale));
     }
 
     let mesh = Mesh::from(Rectangle::new(size * 0.95, size * 0.95));

@@ -1,5 +1,6 @@
 {
-  "name": "cobble_stone_block",
+  "localized_name": "cobble_stone_block",
+  "name": "Cobble Stone",
   "texture_dir": "textures/blocks/cobble_stone",
   "texture": {
     "all": "cobble"

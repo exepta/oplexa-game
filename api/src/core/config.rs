@@ -124,6 +124,21 @@ pub struct InterfaceConfig {
         alias = "locate_search_radius"
     )]
     pub locate_search_radius: i32,
+    /// Block selection border color as hex (`#RRGGBB` or `#RRGGBBAA`).
+    #[serde(
+        default = "default_block_selection_border_color_hex",
+        rename = "block-selection-border-color",
+        alias = "block_selection_border_color"
+    )]
+    pub block_selection_border_color: String,
+    /// Selection line width (default: 1.0).
+    #[serde(
+        default = "default_selection_line_width",
+        rename = "selection-line-width",
+        alias = "selection_line_width",
+        alias = "selection_line"
+    )]
+    pub selection_line_width: f32,
 }
 
 impl Default for InterfaceConfig {
@@ -132,6 +147,8 @@ impl Default for InterfaceConfig {
         Self {
             chat_max_space: default_chat_max_space(),
             locate_search_radius: default_locate_search_radius(),
+            block_selection_border_color: default_block_selection_border_color_hex(),
+            selection_line_width: default_selection_line_width(),
         }
     }
 }
@@ -568,6 +585,16 @@ fn default_chat_max_space() -> usize {
 /// Runs the `default_locate_search_radius` routine for default locate search radius in the `core::config` module.
 fn default_locate_search_radius() -> i32 {
     1000
+}
+
+/// Runs the `default_block_selection_border_color_hex` routine for default block selection border color hex in the `core::config` module.
+fn default_block_selection_border_color_hex() -> String {
+    "#111111".to_string()
+}
+
+/// Runs the `default_selection_line_width` routine for default selection line width in the `core::config` module.
+fn default_selection_line_width() -> f32 {
+    1.0
 }
 
 // =======================================================

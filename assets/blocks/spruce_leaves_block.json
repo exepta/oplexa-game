@@ -1,5 +1,6 @@
 {
-  "name": "spruce_leaves_block",
+  "localized_name": "spruce_leaves_block",
+  "name": "Spruce Leaves",
   "texture_dir": "textures/blocks/spruce_leaves",
   "texture": {
     "all": "spruce_leaves"

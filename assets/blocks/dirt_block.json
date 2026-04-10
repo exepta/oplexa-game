@@ -1,5 +1,6 @@
 {
-  "name": "dirt_block",
+  "localized_name": "dirt_block",
+  "name": "Dirt",
   "texture_dir": "textures/blocks/dirt",
   "texture": {
     "all": "dirt"

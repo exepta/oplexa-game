@@ -44,29 +44,46 @@ pub fn populate_vegetation_props_in_chunk(
                 continue;
             };
 
-            let Some(ground_ly) = chunk.column_top_local_y(lx, lz) else {
+            let Some(ground_ly) = find_spawn_ground_local_y(chunk, reg, prop_id, lx, lz) else {
                 continue;
             };
-            if ground_ly + 1 >= CY {
-                continue;
-            }
-
-            let ground_id = chunk.get(lx, ground_ly, lz);
-            if !is_valid_ground_for_prop(reg, prop_id, ground_id) {
-                continue;
-            }
             let ground_world_y = Y_MIN + ground_ly as i32;
             if ground_world_y < SEA_LEVEL - 1 {
                 continue;
             }
 
             let place_ly = ground_ly + 1;
-            if chunk.get(lx, place_ly, lz) != 0 {
-                continue;
-            }
             chunk.set(lx, place_ly, lz, prop_id);
         }
     }
+}
+
+fn find_spawn_ground_local_y(
+    chunk: &ChunkData,
+    reg: &BlockRegistry,
+    prop_id: BlockId,
+    lx: usize,
+    lz: usize,
+) -> Option<usize> {
+    if CY < 2 {
+        return None;
+    }
+
+    for ground_ly in (0..(CY - 1)).rev() {
+        let ground_id = chunk.get(lx, ground_ly, lz);
+        if !is_valid_ground_for_prop(reg, prop_id, ground_id) {
+            continue;
+        }
+
+        let place_ly = ground_ly + 1;
+        if chunk.get(lx, place_ly, lz) != 0 {
+            continue;
+        }
+
+        return Some(ground_ly);
+    }
+
+    None
 }
 
 fn pick_weighted_prop(

@@ -1,0 +1,28 @@
+{
+  "localized_name": "deep_stone_slab_block",
+  "name": "Deep Stone Slab",
+  "texture_dir": "textures/blocks/deep_stone",
+  "texture": {
+    "all": "deep_stone"
+  },
+  "stats": {
+    "hardness": 5.75,
+    "blast_resistance": 4.0,
+    "level": "2",
+    "opaque": true,
+    "emissive": 0.0
+  },
+  "collider": {
+    "kind": "box",
+    "size_m": [
+      1.0,
+      0.5,
+      1.0
+    ],
+    "offset_m": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  }
+}

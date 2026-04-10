@@ -11,7 +11,7 @@ use crate::generator::chunk::trees::registry::TreeRegistry;
 use bevy::prelude::*;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const MAX_INFLIGHT_MESH: usize = 32;
 pub const MAX_INFLIGHT_GEN: usize = 32;
@@ -127,6 +127,9 @@ pub async fn mesh_subchunk_async(
         if neigh_id == 0 {
             return true;
         }
+        if reg.custom_mesh_box(neigh_id).is_some() {
+            return true;
+        }
 
         // Treat neighboring foliage blocks as connected canopy: don't render inner faces.
         if reg.foliage(self_id) && reg.foliage(neigh_id) {
@@ -142,7 +145,8 @@ pub async fn mesh_subchunk_async(
 
         !reg.opaque(neigh_id)
     };
-    let is_cube_voxel = |id: BlockId| id != 0 && !reg.is_crossed_prop(id);
+    let is_cube_voxel =
+        |id: BlockId| id != 0 && !reg.is_crossed_prop(id) && reg.custom_mesh_box(id).is_none();
 
     // +Y (Top): greedy in XZ plane for each Y slice.
     let mut top_mask = vec![0u16; CX * CZ];
@@ -370,6 +374,206 @@ pub async fn mesh_subchunk_async(
         });
     }
 
+    // Custom block box pass (non-prop blocks with collider.kind = box).
+    for y in y0..y1 {
+        for z in 0..CZ {
+            for x in 0..CX {
+                let id = chunk.get(x, y, z);
+                let Some((size_m, offset_m)) = reg.custom_mesh_box(id) else {
+                    continue;
+                };
+
+                let u_top = reg.uv(id, Face::Top);
+                let u_bottom = reg.uv(id, Face::Bottom);
+                let u_east = reg.uv(id, Face::East);
+                let u_west = reg.uv(id, Face::West);
+                let u_south = reg.uv(id, Face::South);
+                let u_north = reg.uv(id, Face::North);
+                let b = by_block.entry(id).or_insert_with(MeshBuild::new);
+
+                let half_x = (size_m[0] * s * 0.5).max(0.0005);
+                let half_y = (size_m[1] * s * 0.5).max(0.0005);
+                let half_z = (size_m[2] * s * 0.5).max(0.0005);
+                let cx = (x as f32 + 0.5 + offset_m[0]) * s;
+                let cy = (y as f32 + 0.5 + offset_m[1]) * s;
+                let cz = (z as f32 + 0.5 + offset_m[2]) * s;
+                let min_x = cx - half_x;
+                let max_x = cx + half_x;
+                let min_y = cy - half_y;
+                let max_y = cy + half_y;
+                let min_z = cz - half_z;
+                let max_z = cz + half_z;
+
+                b.quad(
+                    [
+                        [min_x, max_y, max_z],
+                        [max_x, max_y, max_z],
+                        [max_x, max_y, min_z],
+                        [min_x, max_y, min_z],
+                    ],
+                    [0.0, 1.0, 0.0],
+                    uvq_tiled(size_m[0], size_m[2], false),
+                    [u_top.u0, u_top.v0, u_top.u1, u_top.v1],
+                );
+                b.quad(
+                    [
+                        [min_x, min_y, min_z],
+                        [max_x, min_y, min_z],
+                        [max_x, min_y, max_z],
+                        [min_x, min_y, max_z],
+                    ],
+                    [0.0, -1.0, 0.0],
+                    uvq_tiled(size_m[0], size_m[2], false),
+                    [u_bottom.u0, u_bottom.v0, u_bottom.u1, u_bottom.v1],
+                );
+                b.quad(
+                    [
+                        [max_x, min_y, max_z],
+                        [max_x, min_y, min_z],
+                        [max_x, max_y, min_z],
+                        [max_x, max_y, max_z],
+                    ],
+                    [1.0, 0.0, 0.0],
+                    uvq_tiled(size_m[2], size_m[1], true),
+                    [u_east.u0, u_east.v0, u_east.u1, u_east.v1],
+                );
+                b.quad(
+                    [
+                        [min_x, min_y, min_z],
+                        [min_x, min_y, max_z],
+                        [min_x, max_y, max_z],
+                        [min_x, max_y, min_z],
+                    ],
+                    [-1.0, 0.0, 0.0],
+                    uvq_tiled(size_m[2], size_m[1], true),
+                    [u_west.u0, u_west.v0, u_west.u1, u_west.v1],
+                );
+                b.quad(
+                    [
+                        [min_x, min_y, max_z],
+                        [max_x, min_y, max_z],
+                        [max_x, max_y, max_z],
+                        [min_x, max_y, max_z],
+                    ],
+                    [0.0, 0.0, 1.0],
+                    uvq_tiled(size_m[0], size_m[1], true),
+                    [u_south.u0, u_south.v0, u_south.u1, u_south.v1],
+                );
+                b.quad(
+                    [
+                        [max_x, min_y, min_z],
+                        [min_x, min_y, min_z],
+                        [min_x, max_y, min_z],
+                        [max_x, max_y, min_z],
+                    ],
+                    [0.0, 0.0, -1.0],
+                    uvq_tiled(size_m[0], size_m[1], true),
+                    [u_north.u0, u_north.v0, u_north.u1, u_north.v1],
+                );
+            }
+        }
+    }
+
+    // Secondary stacked slab pass (same voxel, second occupant).
+    for y in y0..y1 {
+        for z in 0..CZ {
+            for x in 0..CX {
+                let id = chunk.get_stacked(x, y, z);
+                let Some((size_m, offset_m)) = reg.custom_mesh_box(id) else {
+                    continue;
+                };
+
+                let u_top = reg.uv(id, Face::Top);
+                let u_bottom = reg.uv(id, Face::Bottom);
+                let u_east = reg.uv(id, Face::East);
+                let u_west = reg.uv(id, Face::West);
+                let u_south = reg.uv(id, Face::South);
+                let u_north = reg.uv(id, Face::North);
+                let b = by_block.entry(id).or_insert_with(MeshBuild::new);
+
+                let half_x = (size_m[0] * s * 0.5).max(0.0005);
+                let half_y = (size_m[1] * s * 0.5).max(0.0005);
+                let half_z = (size_m[2] * s * 0.5).max(0.0005);
+                let cx = (x as f32 + 0.5 + offset_m[0]) * s;
+                let cy = (y as f32 + 0.5 + offset_m[1]) * s;
+                let cz = (z as f32 + 0.5 + offset_m[2]) * s;
+                let min_x = cx - half_x;
+                let max_x = cx + half_x;
+                let min_y = cy - half_y;
+                let max_y = cy + half_y;
+                let min_z = cz - half_z;
+                let max_z = cz + half_z;
+
+                b.quad(
+                    [
+                        [min_x, max_y, max_z],
+                        [max_x, max_y, max_z],
+                        [max_x, max_y, min_z],
+                        [min_x, max_y, min_z],
+                    ],
+                    [0.0, 1.0, 0.0],
+                    uvq_tiled(size_m[0], size_m[2], false),
+                    [u_top.u0, u_top.v0, u_top.u1, u_top.v1],
+                );
+                b.quad(
+                    [
+                        [min_x, min_y, min_z],
+                        [max_x, min_y, min_z],
+                        [max_x, min_y, max_z],
+                        [min_x, min_y, max_z],
+                    ],
+                    [0.0, -1.0, 0.0],
+                    uvq_tiled(size_m[0], size_m[2], false),
+                    [u_bottom.u0, u_bottom.v0, u_bottom.u1, u_bottom.v1],
+                );
+                b.quad(
+                    [
+                        [max_x, min_y, max_z],
+                        [max_x, min_y, min_z],
+                        [max_x, max_y, min_z],
+                        [max_x, max_y, max_z],
+                    ],
+                    [1.0, 0.0, 0.0],
+                    uvq_tiled(size_m[2], size_m[1], true),
+                    [u_east.u0, u_east.v0, u_east.u1, u_east.v1],
+                );
+                b.quad(
+                    [
+                        [min_x, min_y, min_z],
+                        [min_x, min_y, max_z],
+                        [min_x, max_y, max_z],
+                        [min_x, max_y, min_z],
+                    ],
+                    [-1.0, 0.0, 0.0],
+                    uvq_tiled(size_m[2], size_m[1], true),
+                    [u_west.u0, u_west.v0, u_west.u1, u_west.v1],
+                );
+                b.quad(
+                    [
+                        [min_x, min_y, max_z],
+                        [max_x, min_y, max_z],
+                        [max_x, max_y, max_z],
+                        [min_x, max_y, max_z],
+                    ],
+                    [0.0, 0.0, 1.0],
+                    uvq_tiled(size_m[0], size_m[1], true),
+                    [u_south.u0, u_south.v0, u_south.u1, u_south.v1],
+                );
+                b.quad(
+                    [
+                        [max_x, min_y, min_z],
+                        [min_x, min_y, min_z],
+                        [min_x, max_y, min_z],
+                        [max_x, max_y, min_z],
+                    ],
+                    [0.0, 0.0, -1.0],
+                    uvq_tiled(size_m[0], size_m[1], true),
+                    [u_north.u0, u_north.v0, u_north.u1, u_north.v1],
+                );
+            }
+        }
+    }
+
     // Prop pass: crossed planes (Minecraft/Hytale style plants).
     for y in y0..y1 {
         for z in 0..CZ {
@@ -393,20 +597,45 @@ pub async fn mesh_subchunk_async(
                 let half_w = 0.5 * prop.width_m * s;
                 let plane_count = prop.plane_count.max(2) as usize;
                 let uv = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+                let seed = ((y as u32) << 16) ^ (id as u32).wrapping_mul(1_315_423_911);
+                let h0 = col_rand_u32(x as i32, z as i32, seed);
+                let h1 = col_rand_u32(z as i32, x as i32, seed ^ 0xA511_E9B3);
+                let base_angle = (h0 as f32 / u32::MAX as f32) * std::f32::consts::PI;
+                let lean_angle = (h1 as f32 / u32::MAX as f32) * std::f32::consts::TAU;
+                let lean_len = (prop.height_m * s) * prop.tilt_deg.to_radians().tan();
+                let lean = Vec2::new(lean_angle.cos(), lean_angle.sin()) * lean_len;
 
                 for i in 0..plane_count {
-                    let angle = (i as f32) * std::f32::consts::PI / (plane_count as f32);
+                    let angle =
+                        base_angle + (i as f32) * std::f32::consts::PI / (plane_count as f32);
                     let dir = Vec2::new(angle.cos(), angle.sin());
-                    let nx = dir.y;
-                    let nz = -dir.x;
 
                     let p0 = [cx - dir.x * half_w, cy0, cz - dir.y * half_w];
                     let p1 = [cx + dir.x * half_w, cy0, cz + dir.y * half_w];
-                    let p2 = [cx + dir.x * half_w, cy1, cz + dir.y * half_w];
-                    let p3 = [cx - dir.x * half_w, cy1, cz - dir.y * half_w];
+                    let p2 = [
+                        cx + dir.x * half_w + lean.x,
+                        cy1,
+                        cz + dir.y * half_w + lean.y,
+                    ];
+                    let p3 = [
+                        cx - dir.x * half_w + lean.x,
+                        cy1,
+                        cz - dir.y * half_w + lean.y,
+                    ];
 
-                    b.quad([p0, p1, p2, p3], [nx, 0.0, nz], uv, tile_rect);
-                    b.quad([p1, p0, p3, p2], [-nx, 0.0, -nz], uv, tile_rect);
+                    let p0v = Vec3::from(p0);
+                    let p1v = Vec3::from(p1);
+                    let p3v = Vec3::from(p3);
+                    let fallback_normal = Vec3::new(dir.y, 0.0, -dir.x);
+                    let mut normal = (p3v - p0v).cross(p1v - p0v);
+                    if normal.length_squared() > 1e-6 {
+                        normal = normal.normalize();
+                    } else {
+                        normal = fallback_normal;
+                    }
+
+                    b.quad([p0, p1, p2, p3], normal.to_array(), uv, tile_rect);
+                    b.quad([p1, p0, p3, p2], (-normal).to_array(), uv, tile_rect);
                 }
             }
         }
@@ -460,33 +689,53 @@ pub async fn load_or_gen_chunk_async(
     trees: &TreeRegistry,
     cfg: WorldGenConfig, // we only need cfg.seed right now
 ) -> ChunkData {
-    // Try to load from a region file first
+    load_or_gen_chunk_async_with_origin(ws_root, coord, reg, biomes, trees, cfg)
+        .await
+        .0
+}
+
+/// Loads chunk from region if present and decodable.
+pub fn load_chunk_at_root_sync(ws_root: &Path, coord: IVec2) -> Option<ChunkData> {
     let (r_coord, _) = chunk_to_region_slot(coord);
     let path = ws_root
         .join("region")
         .join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
-    {
-        let _guard = world_save_io_guard();
-        if let Ok(mut rf) = RegionFile::open(&path) {
-            if let Ok(Some(buf)) = rf.read_chunk(coord) {
-                // Detect legacy container-wrapped blobs
-                let data = if slot_is_container(&buf) {
-                    container_find(&buf, TAG_BLK1).map(|b| b.to_vec())
-                } else {
-                    Some(buf)
-                };
-                if let Some(b) = data {
-                    if let Ok(c) = decode_chunk(&b) {
-                        return c;
-                    }
-                }
-            }
-        }
+    let _guard = world_save_io_guard();
+    let Ok(mut rf) = RegionFile::open(&path) else {
+        return None;
+    };
+    let Ok(Some(buf)) = rf.read_chunk(coord) else {
+        return None;
+    };
+
+    let data = if slot_is_container(&buf) {
+        container_find(&buf, TAG_BLK1).map(|b| b.to_vec())
+    } else {
+        Some(buf)
+    }?;
+
+    decode_chunk(&data).ok()
+}
+
+/// Loads chunk from region or generates it, returning whether generation was needed.
+pub async fn load_or_gen_chunk_async_with_origin(
+    ws_root: PathBuf,
+    coord: IVec2,
+    reg: &BlockRegistry,
+    biomes: &BiomeRegistry,
+    trees: &TreeRegistry,
+    cfg: WorldGenConfig,
+) -> (ChunkData, bool) {
+    if let Some(chunk) = load_chunk_at_root_sync(ws_root.as_path(), coord) {
+        return (chunk, false);
     }
 
     // Fallback: generate fresh chunk via biome-based generator
     // Note: new generator expects (coord, &BlockRegistry, seed, &BiomeRegistry, &TreeRegistry)
-    generate_chunk_async_biome(coord, reg, cfg.seed, biomes, trees).await
+    (
+        generate_chunk_async_biome(coord, reg, cfg.seed, biomes, trees).await,
+        true,
+    )
 }
 
 /// Runs the `snapshot_borders` routine for snapshot borders in the `generator::chunk::chunk_utils` module.
@@ -647,7 +896,8 @@ pub fn enqueue_mesh(backlog: &mut MeshBacklog, pending: &PendingMesh, key: (IVec
 
 /// Encodes chunk for the `generator::chunk::chunk_utils` module.
 pub fn encode_chunk(ch: &ChunkData) -> Vec<u8> {
-    let ser = wincode::serialize(&ch.blocks).expect("encode blocks");
+    let ser =
+        wincode::serialize(&(ch.blocks.clone(), ch.stacked_blocks.clone())).expect("encode blocks");
     compress_prepend_size(&ser)
 }
 
@@ -655,8 +905,16 @@ pub fn encode_chunk(ch: &ChunkData) -> Vec<u8> {
 pub fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
     let de = decompress_size_prepended(buf)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    let blocks: Vec<BlockId> = wincode::deserialize(&de)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    let (blocks, stacked_blocks): (Vec<BlockId>, Vec<BlockId>) =
+        match wincode::deserialize::<(Vec<BlockId>, Vec<BlockId>)>(&de) {
+            Ok(v2) => v2,
+            Err(_) => {
+                let blocks: Vec<BlockId> = wincode::deserialize(&de).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                })?;
+                (blocks, vec![0; CX * CY * CZ])
+            }
+        };
 
     if blocks.len() != CX * CY * CZ {
         return Err(std::io::Error::new(
@@ -664,9 +922,16 @@ pub fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
             "block array size mismatch",
         ));
     }
+    if stacked_blocks.len() != CX * CY * CZ {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stacked block array size mismatch",
+        ));
+    }
 
     let mut c = ChunkData::new();
     c.blocks.copy_from_slice(&blocks);
+    c.stacked_blocks.copy_from_slice(&stacked_blocks);
     Ok(c)
 }
 

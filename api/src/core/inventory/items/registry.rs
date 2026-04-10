@@ -334,8 +334,12 @@ impl ItemRegistry {
             }
 
             let block_id = block_id as BlockId;
+            let canonical_id = canonical_block_item_id(block_registry, block_id);
+            if canonical_id != block_id {
+                continue;
+            }
             let block_def = block_registry.def(block_id);
-            let item_key = block_def.name.clone();
+            let item_key = block_def.localized_name.clone();
             let localized_name = format!("{DEFAULT_ITEM_PROVIDER}:{item_key}");
             let texture_path = block_icon_cache_key(block_id);
             let image: Handle<Image> = asset_server.load("textures/items/missing.png");
@@ -344,7 +348,7 @@ impl ItemRegistry {
                 provider: DEFAULT_ITEM_PROVIDER.to_string(),
                 key: item_key,
                 localized_name,
-                name: prettify_block_name(&block_def.name),
+                name: block_def.name.clone(),
                 max_stack_size: DEFAULT_ITEM_STACK_SIZE,
                 category: "block".to_string(),
                 texture_path,
@@ -359,6 +363,27 @@ impl ItemRegistry {
             });
             self.bind_block_item(block_id, item_id);
         }
+
+        for block_id in 1..block_registry.defs.len() {
+            if self.block_to_item[block_id].is_some() {
+                continue;
+            }
+            let block_id = block_id as BlockId;
+            let canonical_id = canonical_block_item_id(block_registry, block_id);
+            if canonical_id == block_id {
+                continue;
+            }
+            let Some(item_id) = self
+                .block_to_item
+                .get(canonical_id as usize)
+                .and_then(|entry| *entry)
+            else {
+                continue;
+            };
+            if let Some(slot) = self.block_to_item.get_mut(block_id as usize) {
+                *slot = Some(item_id);
+            }
+        }
     }
 
     /// Runs the `ensure_block_items_headless` routine for ensure block items headless in the `core::inventory::items::registry` module.
@@ -369,14 +394,18 @@ impl ItemRegistry {
             }
 
             let block_id = block_id as BlockId;
+            let canonical_id = canonical_block_item_id(block_registry, block_id);
+            if canonical_id != block_id {
+                continue;
+            }
             let block_def = block_registry.def(block_id);
-            let item_key = block_def.name.clone();
+            let item_key = block_def.localized_name.clone();
             let localized_name = format!("{DEFAULT_ITEM_PROVIDER}:{item_key}");
             let item_id = self.push_item(ItemDef {
                 provider: DEFAULT_ITEM_PROVIDER.to_string(),
                 key: item_key,
                 localized_name,
-                name: prettify_block_name(&block_def.name),
+                name: block_def.name.clone(),
                 max_stack_size: DEFAULT_ITEM_STACK_SIZE,
                 category: "block".to_string(),
                 texture_path: String::from("textures/items/missing.png"),
@@ -390,6 +419,27 @@ impl ItemRegistry {
                 world_drop: ItemWorldDropConfig { pickupable: true },
             });
             self.bind_block_item(block_id, item_id);
+        }
+
+        for block_id in 1..block_registry.defs.len() {
+            if self.block_to_item[block_id].is_some() {
+                continue;
+            }
+            let block_id = block_id as BlockId;
+            let canonical_id = canonical_block_item_id(block_registry, block_id);
+            if canonical_id == block_id {
+                continue;
+            }
+            let Some(item_id) = self
+                .block_to_item
+                .get(canonical_id as usize)
+                .and_then(|entry| *entry)
+            else {
+                continue;
+            };
+            if let Some(slot) = self.block_to_item.get_mut(block_id as usize) {
+                *slot = Some(item_id);
+            }
         }
     }
 
@@ -416,7 +466,9 @@ impl ItemRegistry {
             *slot = Some(item_id);
         }
         if let Some(slot) = self.item_to_block.get_mut(item_id as usize) {
-            *slot = Some(block_id);
+            if slot.is_none() {
+                *slot = Some(block_id);
+            }
         }
     }
 }
@@ -703,6 +755,32 @@ pub fn parse_block_icon_cache_key(path: &str) -> Option<BlockId> {
         .and_then(|raw| raw.parse::<u16>().ok())
 }
 
+#[inline]
+fn canonical_block_item_id(block_registry: &BlockRegistry, block_id: BlockId) -> BlockId {
+    let name = block_registry.def(block_id).localized_name.as_str();
+    let Some(base_name) = slab_base_name_for_variant(name) else {
+        return block_id;
+    };
+    block_registry
+        .id_opt(base_name.as_str())
+        .unwrap_or(block_id)
+}
+
+#[inline]
+fn slab_base_name_for_variant(name: &str) -> Option<String> {
+    const ORIENTED_SUFFIXES: [&str; 5] = [
+        "_slab_top_block",
+        "_slab_north_block",
+        "_slab_south_block",
+        "_slab_east_block",
+        "_slab_west_block",
+    ];
+    ORIENTED_SUFFIXES.iter().find_map(|suffix| {
+        name.strip_suffix(suffix)
+            .map(|prefix| format!("{prefix}_slab_block"))
+    })
+}
+
 /// Guesses block name from item key for the `core::inventory::items::registry` module.
 fn guess_block_name_from_item_key(item_key: &str) -> Option<String> {
     let key = item_key.trim();
@@ -749,14 +827,6 @@ fn prettify_key(key: &str) -> String {
         .join(" ")
 }
 
-/// Runs the `prettify_block_name` routine for prettify block name in the `core::inventory::items::registry` module.
-fn prettify_block_name(block_name: &str) -> String {
-    if let Some(base) = block_name.strip_suffix("_block") {
-        return prettify_key(base);
-    }
-    prettify_key(block_name)
-}
-
 /// Runs the `default_true` routine for default true in the `core::inventory::items::registry` module.
 fn default_true() -> bool {
     true
@@ -786,6 +856,7 @@ pub fn build_block_item_icon_image(
     block_id: BlockId,
 ) -> Option<Image> {
     let block = block_registry.def(block_id);
+    let height_ratio = block_icon_height_ratio(block);
     let atlas_rel = asset_server
         .get_path(block.image.id())
         .map(|path| path.path().to_string_lossy().to_string())?;
@@ -795,6 +866,7 @@ pub fn build_block_item_icon_image(
         block.uv_top,
         block.uv_west,
         block.uv_north,
+        height_ratio,
     )
     .ok()?;
 
@@ -820,6 +892,7 @@ fn render_isometric_block_icon(
     top_uv: UvRect,
     left_uv: UvRect,
     right_uv: UvRect,
+    height_ratio: f32,
 ) -> Result<RgbaImage, String> {
     /// Icon output width/height in pixels.
     const ICON_SIZE: u32 = 64;
@@ -836,23 +909,26 @@ fn render_isometric_block_icon(
         .to_rgba8();
 
     let mut canvas = RgbaImage::from_pixel(ICON_SIZE, ICON_SIZE, Rgba([0, 0, 0, 0]));
+    let side_height = 20.0 * height_ratio.clamp(0.2, 1.0);
+    let side_origin_y = 40.0 - side_height;
+    let top_origin_y = side_origin_y - 12.0;
 
     // Draw sides first, then top so the top edge stays crisp.
     draw_textured_parallelogram(
         &mut canvas,
         &atlas,
         left_uv,
-        [12.0, 20.0],
+        [12.0, side_origin_y],
         [20.0, 12.0],
-        [0.0, 20.0],
+        [0.0, side_height],
         0.78,
     );
     draw_textured_parallelogram(
         &mut canvas,
         &atlas,
         right_uv,
-        [52.0, 20.0],
-        [0.0, 20.0],
+        [52.0, side_origin_y],
+        [0.0, side_height],
         [-20.0, 12.0],
         0.66,
     );
@@ -860,7 +936,7 @@ fn render_isometric_block_icon(
         &mut canvas,
         &atlas,
         top_uv,
-        [32.0, 8.0],
+        [32.0, top_origin_y],
         [20.0, 12.0],
         [-20.0, 12.0],
         1.0,
@@ -868,6 +944,14 @@ fn render_isometric_block_icon(
 
     fit_icon_to_canvas(&mut canvas, ICON_PADDING);
     Ok(canvas)
+}
+
+#[inline]
+fn block_icon_height_ratio(block: &crate::core::world::block::BlockDef) -> f32 {
+    match block.collider.kind {
+        crate::core::world::block::BlockColliderKind::Box => block.collider.size_m[1],
+        _ => 1.0,
+    }
 }
 
 /// Fits the non-transparent icon area into the canvas while keeping aspect ratio.

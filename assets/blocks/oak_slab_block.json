@@ -1,6 +1,6 @@
 {
-  "localized_name": "oak_planks_block",
-  "name": "Oak Planks",
+  "localized_name": "oak_slab_block",
+  "name": "Oak Slab",
   "texture_dir": "textures/blocks/oak_planks",
   "texture": {
     "all": "oak_planks"
@@ -11,5 +11,18 @@
     "level": "0",
     "opaque": true,
     "emissive": 0.0
+  },
+  "collider": {
+    "kind": "box",
+    "size_m": [
+      1.0,
+      0.5,
+      1.0
+    ],
+    "offset_m": [
+      0.0,
+      0.0,
+      0.0
+    ]
   }
 }

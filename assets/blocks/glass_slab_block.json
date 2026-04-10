@@ -1,0 +1,28 @@
+{
+  "localized_name": "glass_slab_block",
+  "name": "Glass Slab",
+  "texture_dir": "textures/blocks/glass",
+  "texture": {
+    "all": "glass"
+  },
+  "stats": {
+    "hardness": 0.1,
+    "blast_resistance": 1.5,
+    "level": "0",
+    "opaque": false,
+    "emissive": 0.0
+  },
+  "collider": {
+    "kind": "box",
+    "size_m": [
+      1.0,
+      0.5,
+      1.0
+    ],
+    "offset_m": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "localized_name": "sand_stone_slab_block",
+  "name": "Sand Stone Slab",
+  "texture_dir": "textures/blocks/sandstone",
+  "texture": {
+    "all": "sandstone"
+  },
+  "stats": {
+    "hardness": 4.0,
+    "blast_resistance": 2.0,
+    "level": "1",
+    "opaque": true,
+    "emissive": 0.0
+  },
+  "collider": {
+    "kind": "box",
+    "size_m": [
+      1.0,
+      0.5,
+      1.0
+    ],
+    "offset_m": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  }
+}

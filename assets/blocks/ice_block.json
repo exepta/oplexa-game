@@ -1,5 +1,6 @@
 {
-  "name": "ice_block",
+  "localized_name": "ice_block",
+  "name": "Ice",
   "texture_dir": "textures/blocks/ice",
   "texture": {
     "all": "ice"

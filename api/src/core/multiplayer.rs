@@ -28,6 +28,7 @@ pub struct MultiplayerConnectionState {
     pub world_name: Option<String>,
     pub world_seed: Option<i32>,
     pub spawn_translation: Option<[f32; 3]>,
+    pub spawn_yaw_pitch: Option<[f32; 2]>,
     pub known_player_names: Vec<String>,
     pub last_error: Option<String>,
 }
@@ -45,6 +46,7 @@ impl Default for MultiplayerConnectionState {
             world_name: None,
             world_seed: None,
             spawn_translation: None,
+            spawn_yaw_pitch: None,
             known_player_names: Vec::new(),
             last_error: None,
         }
@@ -84,6 +86,7 @@ impl MultiplayerConnectionState {
         self.world_name = None;
         self.world_seed = None;
         self.spawn_translation = None;
+        self.spawn_yaw_pitch = None;
         self.known_player_names.clear();
         self.last_error = None;
     }

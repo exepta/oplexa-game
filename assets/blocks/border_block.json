@@ -1,5 +1,6 @@
 {
-  "name": "border_block",
+  "localized_name": "border_block",
+  "name": "Border",
   "texture_dir": "textures/blocks/border",
   "texture": {
     "all": "border"

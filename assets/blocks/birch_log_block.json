@@ -1,5 +1,6 @@
 {
-  "name": "birch_log_block",
+  "localized_name": "birch_log_block",
+  "name": "Birch Log",
   "texture_dir": "textures/blocks/birch_log",
   "texture": {
     "vertical": "log_top",

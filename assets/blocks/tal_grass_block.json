@@ -1,5 +1,6 @@
 {
-  "name": "tal_grass_block",
+  "localized_name": "tal_grass_block",
+  "name": "Tal Grass",
   "texture_dir": "textures/blocks/tal_grass",
   "texture": {
     "all": "tal_grass"
@@ -13,14 +14,30 @@
     "solid": false,
     "emissive": 0.0
   },
+  "overridable": true,
   "prop": {
     "render": "crossed_planes",
     "height_m": 0.8,
     "width_m": 1.0,
     "plane_count": 2,
+    "tilt_deg": 4.0,
     "allowed_ground": [
       "dirt_block",
       "grass_block"
+    ]
+  },
+  "collider": {
+    "kind": "box",
+    "block_entities": false,
+    "size_m": [
+      1.0,
+      0.8,
+      1.0
+    ],
+    "offset_m": [
+      0.0,
+      -0.1,
+      0.0
     ]
   }
 }

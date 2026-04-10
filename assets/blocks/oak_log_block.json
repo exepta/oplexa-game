@@ -1,5 +1,6 @@
 {
-  "name": "oak_log_block",
+  "localized_name": "oak_log_block",
+  "name": "Oak Log",
   "texture_dir": "textures/blocks/oak_log",
   "texture": {
     "vertical": "log_top",

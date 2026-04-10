@@ -22,8 +22,14 @@ pub struct SelectionState {
 pub struct BlockHit {
     /// World-space integer coordinates of the hit block.
     pub block_pos: IVec3,
+    /// Block id of the actually hit occupant.
+    pub block_id: u16,
+    /// True when the hit came from the stacked (secondary) occupant.
+    pub is_stacked: bool,
     /// The face of the hit block that was intersected.
     pub face: Face,
+    /// Hit point in local voxel coordinates of `block_pos` (0..1 on each axis).
+    pub hit_local: Vec3,
     /// Neighbor cell where a new block would be placed when clicking this face.
     pub place_pos: IVec3,
 }

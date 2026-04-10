@@ -6,7 +6,10 @@ use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
 use crate::core::ui::UiInteractionState;
 use crate::core::world::block::{BlockRegistry, VOXEL_SIZE};
-use crate::core::world::chunk_dimension::CX;
+use crate::core::world::chunk::{ChunkMap, SEA_LEVEL};
+use crate::core::world::chunk_dimension::{
+    CX, CY, Y_MAX, Y_MIN, local_y_to_world, world_to_chunk_xz, world_y_to_local,
+};
 use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use crate::utils::key_utils::convert;
 use bevy::camera::visibility::RenderLayers;
@@ -125,6 +128,8 @@ fn spawn_player(
     mut commands: Commands,
     game_config: Res<GlobalConfig>,
     multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
+    block_registry: Res<BlockRegistry>,
+    chunk_map: Res<ChunkMap>,
     existing_players: Query<Entity, With<Player>>,
     existing_player_cams: Query<Entity, With<PlayerCamera>>,
 ) {
@@ -135,10 +140,17 @@ fn spawn_player(
         safe_despawn_entity(&mut commands, entity);
     }
 
-    let spawn_translation = multiplayer_connection
+    let mut spawn_translation = multiplayer_connection
         .as_ref()
         .and_then(|connection| connection.spawn_translation)
         .unwrap_or([0.0, 180.0, 0.0]);
+    if let Some(found) = find_loaded_safe_spawn(&chunk_map, &block_registry, spawn_translation) {
+        spawn_translation = found;
+    }
+    let spawn_yaw_pitch = multiplayer_connection
+        .as_ref()
+        .and_then(|connection| connection.spawn_yaw_pitch)
+        .unwrap_or([0.0, 0.0]);
 
     let fov_deg: f32 = 80.0;
     let half_h = (EYE_HEIGHT + HEADROOM - RADIUS).max(0.60);
@@ -172,7 +184,8 @@ fn spawn_player(
                 spawn_translation[0],
                 spawn_translation[1],
                 spawn_translation[2],
-            ),
+            )
+            .with_rotation(Quat::from_rotation_y(spawn_yaw_pitch[0])),
             Visibility::default(),
             InheritedVisibility::default(),
             ViewVisibility::default(),
@@ -195,8 +208,8 @@ fn spawn_player(
                 ..default()
             },
             FpsController {
-                yaw: 0.0,
-                pitch: 0.0,
+                yaw: spawn_yaw_pitch[0],
+                pitch: spawn_yaw_pitch[1],
                 speed: 8.0,
                 sensitivity: 0.001,
             },
@@ -221,7 +234,8 @@ fn spawn_player(
                 clear_color: ClearColorConfig::Custom(fog_color),
                 ..default()
             },
-            Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
+            Transform::from_xyz(0.0, EYE_HEIGHT, 0.0)
+                .with_rotation(Quat::from_rotation_x(spawn_yaw_pitch[1])),
             Name::new("PlayerCamera"),
         ));
 
@@ -240,6 +254,94 @@ fn spawn_player(
     commands.entity(player).insert(DoubleTapSpace {
         last_press: -1_000_000.0,
     });
+}
+
+fn find_loaded_safe_spawn(
+    chunk_map: &ChunkMap,
+    block_registry: &BlockRegistry,
+    anchor: [f32; 3],
+) -> Option<[f32; 3]> {
+    let anchor_x = anchor[0].floor() as i32;
+    let anchor_z = anchor[2].floor() as i32;
+    let mut best: Option<(u8, i32, i32, i32, i32)> = None;
+    const SEARCH_RADIUS: i32 = 32;
+
+    for dz in -SEARCH_RADIUS..=SEARCH_RADIUS {
+        for dx in -SEARCH_RADIUS..=SEARCH_RADIUS {
+            let wx = anchor_x + dx;
+            let wz = anchor_z + dz;
+            let (chunk_coord, local) = world_to_chunk_xz(wx, wz);
+            let Some(chunk) = chunk_map.chunks.get(&chunk_coord) else {
+                continue;
+            };
+            let lx = local.x as usize;
+            let lz = local.y as usize;
+
+            for ly in (0..CY).rev() {
+                let block_id = chunk.get(lx, ly, lz);
+                if block_id == 0
+                    || block_registry.is_fluid(block_id)
+                    || !block_registry.is_solid_for_collision(block_id)
+                {
+                    continue;
+                }
+
+                let world_y = local_y_to_world(ly);
+                let dry_land = world_y >= SEA_LEVEL;
+                let clear = loaded_has_clearance(chunk_map, block_registry, wx, world_y, wz);
+                let tier = match (clear, dry_land) {
+                    (true, true) => 3,
+                    (true, false) => 2,
+                    (false, true) => 1,
+                    (false, false) => 0,
+                };
+                let dist2 = dx * dx + dz * dz;
+
+                let replace = match best {
+                    None => true,
+                    Some((best_tier, best_dist2, best_y, _, _)) => {
+                        tier > best_tier
+                            || (tier == best_tier
+                                && (dist2 < best_dist2
+                                    || (dist2 == best_dist2 && world_y > best_y)))
+                    }
+                };
+
+                if replace {
+                    best = Some((tier, dist2, world_y, wx, wz));
+                }
+                break;
+            }
+        }
+    }
+
+    best.map(|(_, _, world_y, wx, wz)| [wx as f32 + 0.5, world_y as f32 + 2.0, wz as f32 + 0.5])
+}
+
+fn loaded_has_clearance(
+    chunk_map: &ChunkMap,
+    block_registry: &BlockRegistry,
+    wx: i32,
+    ground_y: i32,
+    wz: i32,
+) -> bool {
+    let Some(head1) = loaded_block_id(chunk_map, wx, ground_y + 1, wz) else {
+        return false;
+    };
+    let Some(head2) = loaded_block_id(chunk_map, wx, ground_y + 2, wz) else {
+        return false;
+    };
+    block_registry.is_air(head1) && block_registry.is_air(head2)
+}
+
+fn loaded_block_id(chunk_map: &ChunkMap, wx: i32, wy: i32, wz: i32) -> Option<u16> {
+    let (chunk_coord, local) = world_to_chunk_xz(wx, wz);
+    let chunk = chunk_map.chunks.get(&chunk_coord)?;
+    if wy < Y_MIN || wy > Y_MAX {
+        return None;
+    }
+    let ly = world_y_to_local(wy);
+    Some(chunk.get(local.x as usize, ly, local.y as usize))
 }
 
 /// Runs the `grab_cursor_on_click` routine for grab cursor on click in the `logic::entities::player::init_service` module.

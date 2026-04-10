@@ -1,5 +1,6 @@
 {
-  "name": "flower_rose_block",
+  "localized_name": "flower_rose_block",
+  "name": "Red Rose",
   "texture_dir": "textures/blocks/flower_rose",
   "texture": {
     "all": "flower"
@@ -13,14 +14,30 @@
     "solid": false,
     "emissive": 0.0
   },
+  "overridable": true,
   "prop": {
     "render": "crossed_planes",
     "height_m": 0.75,
     "width_m": 0.55,
     "plane_count": 2,
+    "tilt_deg": 2.0,
     "allowed_ground": [
       "dirt_block",
       "grass_block"
+    ]
+  },
+  "collider": {
+    "kind": "box",
+    "block_entities": false,
+    "size_m": [
+      0.55,
+      0.75,
+      0.55
+    ],
+    "offset_m": [
+      0.0,
+      -0.125,
+      0.0
     ]
   }
 }

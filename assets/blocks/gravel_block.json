@@ -1,5 +1,6 @@
 {
-  "name": "gravel_block",
+  "localized_name": "gravel_block",
+  "name": "Gravel",
   "texture_dir": "textures/blocks/gravel",
   "texture": {
     "all": "gravel"

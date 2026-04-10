@@ -1,6 +1,6 @@
 {
-  "localized_name": "spruce_planks_block",
-  "name": "Spruce Planks",
+  "localized_name": "spruce_slab_block",
+  "name": "Spruce Slab",
   "texture_dir": "textures/blocks/spruce_planks",
   "texture": {
     "all": "spruce_planks"
@@ -11,5 +11,18 @@
     "level": "0",
     "opaque": true,
     "emissive": 0.0
+  },
+  "collider": {
+    "kind": "box",
+    "size_m": [
+      1.0,
+      0.5,
+      1.0
+    ],
+    "offset_m": [
+      0.0,
+      0.0,
+      0.0
+    ]
   }
 }

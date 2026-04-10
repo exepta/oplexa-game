@@ -43,6 +43,7 @@ pub struct CaveTracker {
 #[derive(Clone)]
 pub struct ChunkData {
     pub blocks: Vec<BlockId>,
+    pub stacked_blocks: Vec<BlockId>,
     pub dirty_mask: u32,
 }
 
@@ -51,6 +52,7 @@ impl ChunkData {
     pub fn new() -> Self {
         Self {
             blocks: vec![0; CX * CY * CZ],
+            stacked_blocks: vec![0; CX * CY * CZ],
             dirty_mask: u32::MAX >> (32 - SEC_COUNT),
         }
     }
@@ -61,10 +63,23 @@ impl ChunkData {
         self.blocks[idx(x, y, z)]
     }
 
+    /// Returns stacked block data for the `core::world::chunk` module.
+    #[inline]
+    pub fn get_stacked(&self, x: usize, y: usize, z: usize) -> BlockId {
+        self.stacked_blocks[idx(x, y, z)]
+    }
+
     /// Sets the requested data for the `core::world::chunk` module.
     #[inline]
     pub fn set(&mut self, x: usize, y: usize, z: usize, id: BlockId) {
         self.blocks[idx(x, y, z)] = id;
+        self.mark_dirty_local_y(y);
+    }
+
+    /// Sets stacked block data for the `core::world::chunk` module.
+    #[inline]
+    pub fn set_stacked(&mut self, x: usize, y: usize, z: usize, id: BlockId) {
+        self.stacked_blocks[idx(x, y, z)] = id;
         self.mark_dirty_local_y(y);
     }
 
@@ -84,6 +99,16 @@ impl ChunkData {
         let i = idx(x, y, z);
         let old = self.blocks[i];
         self.blocks[i] = id;
+        self.mark_dirty_local_y(y);
+        old
+    }
+
+    /// Runs the `swap_set_stacked` routine for swap set stacked in the `core::world::chunk` module.
+    #[inline]
+    pub fn swap_set_stacked(&mut self, x: usize, y: usize, z: usize, id: BlockId) -> BlockId {
+        let i = idx(x, y, z);
+        let old = self.stacked_blocks[i];
+        self.stacked_blocks[i] = id;
         self.mark_dirty_local_y(y);
         old
     }

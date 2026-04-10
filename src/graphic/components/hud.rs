@@ -201,7 +201,7 @@ fn sync_hotbar_selected_block(
     };
 
     selected.id = block_id;
-    selected.name = registry.name_opt(block_id).unwrap_or("air").to_string();
+    selected.name = registry.display_name_opt(block_id).unwrap_or("air").to_string();
 }
 
 /// Synchronizes hud hotbar ui for the `graphic::components::hud` module.

@@ -4,9 +4,9 @@ use crate::{
 };
 use api::core::network::protocols::{
     ClientBlockBreak, ClientBlockPlace, ClientChunkInterest, ClientDropItem, ClientDropPickup,
-    ClientKeepAlive, OrderedReliable, PlayerMove, PlayerSnapshot, ServerBlockBreak,
-    ServerBlockPlace, ServerChunkData, ServerDropPicked, ServerDropSpawn, UnorderedReliable,
-    UnorderedUnreliable,
+    ClientInventorySync, ClientKeepAlive, OrderedReliable, PlayerMove, PlayerSnapshot,
+    ServerBlockBreak, ServerBlockPlace, ServerChunkData, ServerDropPicked, ServerDropSpawn,
+    UnorderedReliable, UnorderedUnreliable,
 };
 use bevy::math::IVec2;
 use bevy::prelude::*;
@@ -14,6 +14,8 @@ use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use std::collections::{HashSet, VecDeque};
 use std::time::Instant;
+
+const PLAYER_POSITION_SAVE_INTERVAL_SECS: f32 = 1.0;
 
 /// Handles player move messages for the `services::gameplay` module.
 pub fn handle_player_move_messages(
@@ -45,6 +47,64 @@ pub fn handle_player_move_messages(
     }
 }
 
+/// Persists online player positions for the `services::gameplay` module.
+pub fn persist_online_player_positions(
+    time: Res<Time>,
+    state: Res<ServerState>,
+    mut save_timer: Local<Option<Timer>>,
+) {
+    let timer = save_timer.get_or_insert_with(|| {
+        Timer::from_seconds(PLAYER_POSITION_SAVE_INTERVAL_SECS, TimerMode::Repeating)
+    });
+
+    if !timer.tick(time.delta()).just_finished() {
+        return;
+    }
+
+    for player in state.players.values() {
+        state.persist_player_data(
+            player.client_uuid.as_str(),
+            player.translation,
+            player.yaw,
+            player.pitch,
+            &player.inventory_slots,
+        );
+    }
+}
+
+/// Handles inventory sync messages for the `services::gameplay` module.
+pub fn handle_inventory_sync_messages(
+    mut q: Query<(Entity, &mut MessageReceiver<ClientInventorySync>), With<ClientOf>>,
+    mut state: ResMut<ServerState>,
+) {
+    for (entity, mut receiver) in q.iter_mut() {
+        for message in receiver.receive() {
+            let Some((client_uuid, translation, yaw, pitch, inventory_slots)) = (|| {
+                let player = state.players.get_mut(&entity)?;
+                player.last_seen = Instant::now();
+                player.inventory_slots = message.to_slots();
+                Some((
+                    player.client_uuid.clone(),
+                    player.translation,
+                    player.yaw,
+                    player.pitch,
+                    player.inventory_slots,
+                ))
+            })() else {
+                continue;
+            };
+
+            state.persist_player_data(
+                client_uuid.as_str(),
+                translation,
+                yaw,
+                pitch,
+                &inventory_slots,
+            );
+        }
+    }
+}
+
 /// Handles keepalive messages for the `services::gameplay` module.
 pub fn handle_keepalive_messages(
     mut q: Query<(Entity, &mut MessageReceiver<ClientKeepAlive>), With<ClientOf>>,
@@ -71,12 +131,6 @@ pub fn handle_chunk_interest_messages(
         for message in receiver.receive() {
             let center = IVec2::new(message.center[0], message.center[1]);
             let radius = message.radius.clamp(1, config.max_stream_radius.max(1));
-            log::debug!(
-                "[CHUNK] ClientChunkInterest from {:?}: center={:?}, radius={}",
-                entity,
-                [center.x, center.y],
-                radius
-            );
             let mut desired_chunks = HashSet::new();
             for dz in -radius..=radius {
                 for dx in -radius..=radius {
@@ -186,13 +240,6 @@ pub fn flush_chunk_streaming(
             .get(entity)
             .map(|r| r.0)
             .unwrap_or(PeerId::Entity(entity.to_bits()));
-        log::debug!(
-            "[CHUNK] Sending chunk {:?} to {:?} (window: {}/{})",
-            [coord.x, coord.y],
-            entity,
-            window.len(),
-            config.chunk_stream_inflight_per_client.max(1)
-        );
         let _ = multi_sender.send::<_, UnorderedReliable>(
             &ServerChunkData::new([coord.x, coord.y], encoded_chunk),
             *server,
@@ -224,13 +271,9 @@ pub fn handle_block_break_messages(
         player.last_seen = Instant::now();
         let player_id = player.player_id;
 
-        state.block_overrides.insert(message.location, 0);
-        let (chunk_coord, _) = api::core::world::chunk_dimension::world_to_chunk_xz(
-            message.location[0],
-            message.location[2],
-        );
-        state.invalidate_streamed_chunk(chunk_coord);
-        state.persist_block_overrides();
+        if !state.set_block_persisted(message.location, 0) {
+            continue;
+        }
 
         let _ = multi_sender.send::<_, OrderedReliable>(
             &ServerBlockBreak::new(player_id, message.location),
@@ -296,15 +339,9 @@ pub fn handle_block_place_messages(
         player.last_seen = Instant::now();
         let player_id = player.player_id;
 
-        state
-            .block_overrides
-            .insert(message.location, message.block_id);
-        let (chunk_coord, _) = api::core::world::chunk_dimension::world_to_chunk_xz(
-            message.location[0],
-            message.location[2],
-        );
-        state.invalidate_streamed_chunk(chunk_coord);
-        state.persist_block_overrides();
+        if !state.set_block_persisted(message.location, message.block_id) {
+            continue;
+        }
 
         let _ = multi_sender.send::<_, OrderedReliable>(
             &ServerBlockPlace::new(player_id, message.location, message.block_id),

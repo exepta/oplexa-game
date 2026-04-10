@@ -6,6 +6,7 @@ const PROP_MAX_HEIGHT_METERS: f32 = 2.5;
 const PROP_DEFAULT_WIDTH_METERS: f32 = 1.0;
 const PROP_DEFAULT_HEIGHT_METERS: f32 = 1.0;
 const PROP_DEFAULT_PLANE_COUNT: u8 = 2;
+const PROP_MAX_TILT_DEG: f32 = 35.0;
 
 /// Defines supported prop render variants for world blocks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Default)]
@@ -26,6 +27,9 @@ pub struct PropDefinition {
     pub height_m: f32,
     #[serde(default = "default_prop_plane_count")]
     pub plane_count: u8,
+    /// Optional visual lean angle in degrees for crossed-plane props.
+    #[serde(default)]
+    pub tilt_deg: f32,
     /// Optional allow-list of ground block names this prop can stand on.
     #[serde(
         default,
@@ -46,6 +50,7 @@ impl PropDefinition {
             .height_m
             .clamp(PROP_MIN_SIZE_METERS, PROP_MAX_HEIGHT_METERS);
         self.plane_count = self.plane_count.clamp(2, 6);
+        self.tilt_deg = self.tilt_deg.clamp(0.0, PROP_MAX_TILT_DEG);
         let mut cleaned: Vec<String> = Vec::new();
         for raw in self.allowed_ground {
             let name = raw.trim();
@@ -86,6 +91,7 @@ impl Default for PropDefinition {
             width_m: PROP_DEFAULT_WIDTH_METERS,
             height_m: PROP_DEFAULT_HEIGHT_METERS,
             plane_count: PROP_DEFAULT_PLANE_COUNT,
+            tilt_deg: 0.0,
             allowed_ground: Vec::new(),
         }
     }

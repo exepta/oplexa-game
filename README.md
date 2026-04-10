@@ -270,6 +270,10 @@ Texture face keys:
 
 - `oak_log_block` -> `textures/blocks/log`
 
+`overridable` is optional (default `false`). If `true`, placing another block
+can replace this block directly (for example flowers/tall grass) without
+triggering a drop from the replaced block.
+
 ### 4.1.3 Atlas `data.json` format
 
 ```json

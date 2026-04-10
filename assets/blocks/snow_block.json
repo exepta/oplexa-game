@@ -1,5 +1,6 @@
 {
-  "name": "snow_block",
+  "localized_name": "snow_block",
+  "name": "Snow",
   "texture_dir": "textures/blocks/snow",
   "texture": {
     "all": "snow"

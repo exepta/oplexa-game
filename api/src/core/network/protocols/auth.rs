@@ -1,3 +1,4 @@
+use super::InventorySlotState;
 use serde::{Deserialize, Serialize};
 
 /// Represents auth used by the `core::network::protocols::auth` module.
@@ -26,6 +27,7 @@ pub struct ServerWelcome {
     pub world_name: String,
     pub world_seed: i32,
     pub spawn_translation: [f32; 3],
+    pub inventory_slots: Vec<InventorySlotState>,
     pub block_palette: Vec<String>,
 }
 
@@ -38,6 +40,7 @@ impl ServerWelcome {
         world_name: impl Into<String>,
         world_seed: i32,
         spawn_translation: [f32; 3],
+        inventory_slots: Vec<InventorySlotState>,
         block_palette: Vec<String>,
     ) -> Self {
         Self {
@@ -47,6 +50,7 @@ impl ServerWelcome {
             world_name: world_name.into(),
             world_seed,
             spawn_translation,
+            inventory_slots,
             block_palette,
         }
     }

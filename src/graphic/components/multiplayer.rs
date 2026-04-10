@@ -129,6 +129,7 @@ fn handle_multiplayer_actions(
     mut form_inputs: Query<(&CssID, &mut InputField, &mut InputValue)>,
     children_q: Query<&Children>,
     names_q: Query<&Name>,
+    mut next_state: ResMut<NextState<AppState>>,
     mut connect_writer: MessageWriter<ConnectToServerRequest>,
     mut probe_runtime: NonSendMut<ServerProbeRuntime>,
 ) {
@@ -165,6 +166,10 @@ fn handle_multiplayer_actions(
             MultiplayerAction::RefreshServers => {
                 ui_state.probe_started_at.clear();
                 request_multiplayer_server_probe(&mut ui_state, &mut probe_runtime, now);
+            }
+            MultiplayerAction::BackToMenu => {
+                next_state.set(AppState::Screen(BeforeUiState::Menu));
+                return;
             }
             MultiplayerAction::OpenAddServer => {
                 ui_state.form_dialog = Some(ServerFormDialogState {
@@ -445,7 +450,6 @@ fn rebuild_multiplayer_cards(
                         ..default()
                     },
                     BackgroundColor::DEFAULT,
-                    Visibility::Inherited,
                 ))
                 .with_children(|row| {
                     row.spawn((
@@ -483,7 +487,6 @@ fn rebuild_multiplayer_cards(
                         ..default()
                     },
                     BackgroundColor::DEFAULT,
-                    Visibility::Inherited,
                 ))
                 .with_children(|row| {
                     row.spawn((
@@ -767,6 +770,7 @@ fn parse_multiplayer_action(id: &str) -> Option<MultiplayerAction> {
     match id {
         MULTIPLAYER_JOIN_ID => Some(MultiplayerAction::JoinServer),
         MULTIPLAYER_REFRESH_ID => Some(MultiplayerAction::RefreshServers),
+        MULTIPLAYER_BACK_ID => Some(MultiplayerAction::BackToMenu),
         MULTIPLAYER_CONNECT_OK_ID => Some(MultiplayerAction::DismissConnectError),
         MULTIPLAYER_ADD_ID => Some(MultiplayerAction::OpenAddServer),
         MULTIPLAYER_EDIT_ID => Some(MultiplayerAction::OpenEditServer),

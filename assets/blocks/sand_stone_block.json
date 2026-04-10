@@ -1,5 +1,6 @@
 {
-  "name": "sand_stone_block",
+  "localized_name": "sand_stone_block",
+  "name": "Sand Stone",
   "texture_dir": "textures/blocks/sandstone",
   "texture": {
     "all": "sandstone"

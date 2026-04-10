@@ -1,5 +1,6 @@
 {
-  "name": "oak_leaves_block",
+  "localized_name": "oak_leaves_block",
+  "name": "Oak Leaves",
   "texture_dir": "textures/blocks/oak_leaves",
   "texture": {
     "all": "oak_leaves"
