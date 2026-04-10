@@ -141,6 +141,7 @@ fn handle_creative_panel_clicks(
 fn sync_creative_panel_ui(
     creative_panel: Res<CreativePanelState>,
     game_mode: Res<GameModeState>,
+    language: Res<ClientLanguageState>,
     item_registry: Res<ItemRegistry>,
     block_registry: Res<BlockRegistry>,
     asset_server: Res<AssetServer>,
@@ -151,7 +152,11 @@ fn sync_creative_panel_ui(
 ) {
     for (css_id, mut paragraph) in &mut paragraphs {
         if css_id.0 == CREATIVE_PANEL_TOTAL_ID {
-            paragraph.text = format!("Registered: {}", creative_panel.item_count());
+            paragraph.text = format!(
+                "{} {}",
+                language.localize_name_key("KEY_UI_REGISTERED"),
+                creative_panel.item_count()
+            );
             continue;
         }
         if css_id.0 == CREATIVE_PANEL_PAGE_ID {
@@ -160,13 +165,11 @@ fn sync_creative_panel_ui(
         }
         if css_id.0 == CREATIVE_RECIPE_HINT_ID {
             paragraph.text = match game_mode.0 {
-                GameMode::Creative => {
-                    "Klick auf Item legt es ins Inventar. Rezepte folgen als Popup.".to_string()
+                GameMode::Creative => language.localize_name_key("KEY_UI_RECIPE_HINT_CREATIVE"),
+                GameMode::Survival => language.localize_name_key("KEY_UI_RECIPE_HINT_SURVIVAL"),
+                GameMode::Spectator => {
+                    language.localize_name_key("KEY_UI_RECIPE_HINT_SPECTATOR")
                 }
-                GameMode::Survival => {
-                    "Survival: Klick auf Item zeigt das Recipe als Dialog.".to_string()
-                }
-                GameMode::Spectator => "Spectator: Item-Klick ist deaktiviert.".to_string(),
             };
             continue;
         }

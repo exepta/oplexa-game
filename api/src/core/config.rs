@@ -139,6 +139,9 @@ pub struct InterfaceConfig {
         alias = "selection_line"
     )]
     pub selection_line_width: f32,
+    /// Language locale (`en_US`, `de_DE`) or language alias (`germany`, `english`).
+    #[serde(default = "default_interface_language")]
+    pub language: String,
 }
 
 impl Default for InterfaceConfig {
@@ -149,6 +152,7 @@ impl Default for InterfaceConfig {
             locate_search_radius: default_locate_search_radius(),
             block_selection_border_color: default_block_selection_border_color_hex(),
             selection_line_width: default_selection_line_width(),
+            language: default_interface_language(),
         }
     }
 }
@@ -595,6 +599,11 @@ fn default_block_selection_border_color_hex() -> String {
 /// Runs the `default_selection_line_width` routine for default selection line width in the `core::config` module.
 fn default_selection_line_width() -> f32 {
     1.0
+}
+
+/// Runs the `default_interface_language` routine for default interface language in the `core::config` module.
+fn default_interface_language() -> String {
+    "en_US".to_string()
 }
 
 // =======================================================

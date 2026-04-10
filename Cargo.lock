@@ -6630,6 +6630,7 @@ dependencies = [
  "ctrlc",
  "dotenvy",
  "fastnoise-lite",
+ "fluent-bundle",
  "futures-lite",
  "lightyear",
  "lz4_flex",
@@ -6639,6 +6640,7 @@ dependencies = [
  "sysinfo",
  "toml",
  "tracing-subscriber",
+ "unic-langid",
  "wincode",
 ]
 

@@ -36,48 +36,47 @@ fn main() {
 
     let bootstrap = load_bootstrap();
 
-    app
-        .add_plugins(ServerPlugins {
-            tick_duration: Duration::from_millis(50),
-        })
-        .add_plugins(ProtocolPlugin)
-        .insert_resource(ServerBootstrapConfig {
-            bind_addr: bootstrap.bind_addr,
-        })
-        .insert_resource(ServerState::new(
-            bootstrap.world_root,
-            bootstrap.runtime_config.world_seed,
-        ))
-        .insert_resource(ServerCommandRegistry::default())
-        .insert_resource(create_server_console_input())
-        .insert_resource(bootstrap.runtime_config)
-        .insert_resource(LanDiscoveryResource(bootstrap.discovery))
-        .add_systems(Startup, spawn_server)
-        .add_observer(handle_new_client)
-        .add_observer(handle_client_connected)
-        .add_observer(handle_client_disconnected)
-        .add_systems(
-            Update,
-            (
-                handle_auth_messages,
-                handle_player_move_messages,
-                handle_inventory_sync_messages,
-                persist_online_player_positions,
-                handle_keepalive_messages,
-                handle_console_commands,
-                handle_chat_messages,
-                handle_chunk_interest_messages,
-                handle_block_break_messages,
-                handle_block_place_messages,
-                handle_drop_item_messages,
-                handle_drop_pickup_messages,
-                flush_chunk_streaming,
-                purge_stale_players,
-                cleanup_orphaned_players,
-                poll_lan_discovery,
-            ),
-        )
-        .run();
+    app.add_plugins(ServerPlugins {
+        tick_duration: Duration::from_millis(50),
+    })
+    .add_plugins(ProtocolPlugin)
+    .insert_resource(ServerBootstrapConfig {
+        bind_addr: bootstrap.bind_addr,
+    })
+    .insert_resource(ServerState::new(
+        bootstrap.world_root,
+        bootstrap.runtime_config.world_seed,
+    ))
+    .insert_resource(ServerCommandRegistry::default())
+    .insert_resource(create_server_console_input())
+    .insert_resource(bootstrap.runtime_config)
+    .insert_resource(LanDiscoveryResource(bootstrap.discovery))
+    .add_systems(Startup, spawn_server)
+    .add_observer(handle_new_client)
+    .add_observer(handle_client_connected)
+    .add_observer(handle_client_disconnected)
+    .add_systems(
+        Update,
+        (
+            handle_auth_messages,
+            handle_player_move_messages,
+            handle_inventory_sync_messages,
+            persist_online_player_positions,
+            handle_keepalive_messages,
+            handle_console_commands,
+            handle_chat_messages,
+            handle_chunk_interest_messages,
+            handle_block_break_messages,
+            handle_block_place_messages,
+            handle_drop_item_messages,
+            handle_drop_pickup_messages,
+            flush_chunk_streaming,
+            purge_stale_players,
+            cleanup_orphaned_players,
+            poll_lan_discovery,
+        ),
+    )
+    .run();
 }
 
 /// Represents lan discovery resource used by the `project` module.

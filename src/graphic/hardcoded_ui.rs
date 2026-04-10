@@ -683,6 +683,7 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<RuntimePerfStats>()
             .init_resource::<RuntimePerfSampleState>()
             .init_resource::<HotbarSelectionTooltipState>()
+            .init_resource::<ClientLanguageState>()
             .init_resource::<ChunkDebugStats>()
             .init_resource::<WorldGenProgressLogState>()
             .init_resource::<ActiveInventorySavePath>()
@@ -942,6 +943,7 @@ impl Plugin for HardcodedUiPlugin {
 }
 
 include!("components/theme.rs");
+include!("components/language.rs");
 include!("components/spawn.rs");
 include!("components/main_menu.rs");
 include!("components/single_player.rs");
@@ -960,12 +962,6 @@ include!("components/debug_overlay.rs");
 #[inline]
 fn bytes_to_mib(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0)
-}
-
-/// Runs the `bool_label` routine for bool label in the `graphic::hardcoded_ui` module.
-#[inline]
-fn bool_label(value: bool) -> &'static str {
-    if value { "ON" } else { "OFF" }
 }
 
 impl SavedServerEntry {

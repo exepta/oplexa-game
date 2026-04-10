@@ -29,6 +29,7 @@ fn enter_multiplayer_screen(
     mut commands: Commands,
     ui_entities: Res<UiEntities>,
     mut ui_state: ResMut<MultiplayerUiState>,
+    language: Res<ClientLanguageState>,
     mut probe_runtime: NonSendMut<ServerProbeRuntime>,
     item_entities: Query<Entity, With<MultiplayerListItem>>,
     mut form_inputs: Query<(&CssID, &mut InputField, &mut InputValue)>,
@@ -59,6 +60,7 @@ fn enter_multiplayer_screen(
         &mut commands,
         ui_entities.multiplayer_server_list,
         &mut ui_state,
+        language.as_ref(),
         &item_entities,
         &children_q,
         &names_q,
@@ -123,6 +125,7 @@ fn handle_multiplayer_actions(
     mut commands: Commands,
     ui_entities: Res<UiEntities>,
     mut ui_state: ResMut<MultiplayerUiState>,
+    language: Res<ClientLanguageState>,
     mut connection_state: ResMut<MultiplayerConnectionState>,
     mut widgets: Query<(&CssID, &mut UIWidgetState), With<Button>>,
     item_entities: Query<Entity, With<MultiplayerListItem>>,
@@ -243,6 +246,7 @@ fn handle_multiplayer_actions(
                         &mut commands,
                         ui_entities.multiplayer_server_list,
                         &mut ui_state,
+                        language.as_ref(),
                         &item_entities,
                         &children_q,
                         &names_q,
@@ -305,6 +309,7 @@ fn handle_multiplayer_actions(
                         &mut commands,
                         ui_entities.multiplayer_server_list,
                         &mut ui_state,
+                        language.as_ref(),
                         &item_entities,
                         &children_q,
                         &names_q,
@@ -324,6 +329,7 @@ fn poll_multiplayer_servers(
     mut commands: Commands,
     ui_entities: Res<UiEntities>,
     mut ui_state: ResMut<MultiplayerUiState>,
+    language: Res<ClientLanguageState>,
     mut probe_runtime: NonSendMut<ServerProbeRuntime>,
     item_entities: Query<Entity, With<MultiplayerListItem>>,
     children_q: Query<&Children>,
@@ -390,6 +396,7 @@ fn poll_multiplayer_servers(
             &mut commands,
             ui_entities.multiplayer_server_list,
             &mut ui_state,
+            language.as_ref(),
             &item_entities,
             &children_q,
             &names_q,
@@ -404,6 +411,7 @@ fn rebuild_multiplayer_cards(
     commands: &mut Commands,
     list_entity: Entity,
     ui_state: &mut MultiplayerUiState,
+    language: &ClientLanguageState,
     existing_items: &Query<Entity, With<MultiplayerListItem>>,
     children_q: &Query<&Children>,
     names_q: &Query<&Name>,
@@ -418,7 +426,7 @@ fn rebuild_multiplayer_cards(
         if ui_state.display_servers.is_empty() {
             list.spawn((
                 Paragraph {
-                    text: "No servers found.".to_string(),
+                    text: language.localize_name_key("KEY_UI_NO_SERVERS_FOUND"),
                     ..default()
                 },
                 UiTextTone::Darker,
@@ -428,7 +436,7 @@ fn rebuild_multiplayer_cards(
         }
 
         for (index, server) in ui_state.display_servers.iter().enumerate() {
-            let text = compose_multiplayer_card_text(server, false);
+            let text = compose_multiplayer_card_text(server, false, language);
 
             list.spawn((
                 Button {
@@ -529,6 +537,7 @@ fn rebuild_multiplayer_cards(
 fn sync_multiplayer_dialogs(
     mut ui_state: ResMut<MultiplayerUiState>,
     connection_state: Res<MultiplayerConnectionState>,
+    language: Res<ClientLanguageState>,
     mut visibilities: ParamSet<(
         Query<&mut Visibility, With<MultiplayerFormDialog>>,
         Query<&mut Visibility, With<MultiplayerFormAddButton>>,
@@ -571,8 +580,8 @@ fn sync_multiplayer_dialogs(
                 continue;
             }
             paragraph.text = match dialog_state.mode {
-                ServerFormMode::Add => "Add Server".to_string(),
-                ServerFormMode::Edit => "Edit Server".to_string(),
+                ServerFormMode::Add => language.localize_name_key("KEY_UI_ADD_SERVER"),
+                ServerFormMode::Edit => language.localize_name_key("KEY_UI_EDIT_SERVER"),
             };
         }
     }
@@ -625,7 +634,7 @@ fn sync_multiplayer_dialogs(
     }
 
     let connect_text = if connecting {
-        "Connecting to server ...".to_string()
+        language.localize_name_key("KEY_UI_CONNECTING_TO_SERVER")
     } else {
         connection_state.last_error.clone().unwrap_or_default()
     };
@@ -640,6 +649,7 @@ fn sync_multiplayer_dialogs(
 fn sync_multiplayer_card_text(
     ui_state: Res<MultiplayerUiState>,
     connection_state: Res<MultiplayerConnectionState>,
+    language: Res<ClientLanguageState>,
     mut text_queries: ParamSet<(
         Query<(&mut Paragraph, &MultiplayerCardField)>,
         Query<(&mut Paragraph, &MultiplayerDeleteText)>,
@@ -650,7 +660,7 @@ fn sync_multiplayer_card_text(
             continue;
         };
         let connected = is_active_connected_server(server, &connection_state);
-        let text = compose_multiplayer_card_text(server, connected);
+        let text = compose_multiplayer_card_text(server, connected, language.as_ref());
 
         paragraph.text = match field.kind {
             MultiplayerCardFieldKind::Name => text.name,
@@ -673,7 +683,10 @@ fn sync_multiplayer_card_text(
         .unwrap_or_default();
 
     for (mut paragraph, _) in &mut text_queries.p1() {
-        paragraph.text = format!("Delete server `{name}`?");
+        paragraph.text = format!(
+            "{} `{name}`?",
+            language.localize_name_key("KEY_UI_DELETE_SERVER")
+        );
     }
 }
 
@@ -1343,14 +1356,18 @@ fn trim_card_text(value: &str, max_chars: usize) -> String {
 }
 
 /// Runs the `compose_multiplayer_card_text` routine for compose multiplayer card text in the `graphic::components::multiplayer` module.
-fn compose_multiplayer_card_text(server: &DisplayServerEntry, connected: bool) -> MultiplayerCardText {
+fn compose_multiplayer_card_text(
+    server: &DisplayServerEntry,
+    connected: bool,
+    language: &ClientLanguageState,
+) -> MultiplayerCardText {
     let name = trim_card_text(server.server_name.as_str(), 42);
 
     if !connected && !server.online {
         let status = if server.waiting_for_response {
-            waiting_status_message()
+            language.localize_name_key("KEY_UI_WAITING_FOR_SERVER")
         } else {
-            offline_status_message(server.port)
+            language.localize_name_key("KEY_UI_SERVER_OFFLINE")
         };
         return MultiplayerCardText {
             name,
@@ -1361,13 +1378,13 @@ fn compose_multiplayer_card_text(server: &DisplayServerEntry, connected: bool) -
     }
 
     let motd = if connected && !server.online {
-        "Connected (Discovery unavailable)".to_string()
+        language.localize_name_key("KEY_UI_CONNECTED_DISCOVERY_UNAVAILABLE")
     } else {
         server.motd.clone()
     };
     let ping = match server.ping_ms {
         Some(ping) if server.online => format!("{ping} ms"),
-        _ if connected => "connected".to_string(),
+        _ if connected => language.localize_name_key("KEY_UI_CONNECTED"),
         _ => "-".to_string(),
     };
     let players = format_player_count(server, server.online || connected);

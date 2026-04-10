@@ -356,11 +356,7 @@ impl ItemRegistry {
             provider: item_identity.provider,
             key: item_identity.key.clone(),
             localized_name: item_identity.localized_name.clone(),
-            name: if item_json.name.trim().is_empty() {
-                prettify_key(item_identity.key.as_str())
-            } else {
-                item_json.name
-            },
+            name: normalize_item_name_key(item_json.name.as_str(), item_identity.key.as_str()),
             max_stack_size: normalize_stack_size(item_json.max_stack_size),
             category: item_json.category,
             texture_path,
@@ -404,11 +400,7 @@ impl ItemRegistry {
             provider: item_identity.provider,
             key: item_identity.key.clone(),
             localized_name: item_identity.localized_name.clone(),
-            name: if item_json.name.trim().is_empty() {
-                prettify_key(item_identity.key.as_str())
-            } else {
-                item_json.name
-            },
+            name: normalize_item_name_key(item_json.name.as_str(), item_identity.key.as_str()),
             max_stack_size: normalize_stack_size(item_json.max_stack_size),
             category: item_json.category,
             texture_path,
@@ -452,7 +444,10 @@ impl ItemRegistry {
                 provider: DEFAULT_ITEM_PROVIDER.to_string(),
                 key: item_key,
                 localized_name,
-                name: block_def.name.clone(),
+                name: normalize_item_name_key(
+                    block_def.name.as_str(),
+                    block_def.localized_name.as_str(),
+                ),
                 max_stack_size: DEFAULT_ITEM_STACK_SIZE,
                 category: "block".to_string(),
                 texture_path,
@@ -510,7 +505,10 @@ impl ItemRegistry {
                 provider: DEFAULT_ITEM_PROVIDER.to_string(),
                 key: item_key,
                 localized_name,
-                name: block_def.name.clone(),
+                name: normalize_item_name_key(
+                    block_def.name.as_str(),
+                    block_def.localized_name.as_str(),
+                ),
                 max_stack_size: DEFAULT_ITEM_STACK_SIZE,
                 category: "block".to_string(),
                 texture_path: String::from("textures/items/missing.png"),
@@ -1028,21 +1026,38 @@ fn normalize_item_texture_path(path: &str) -> String {
 }
 
 /// Runs the `prettify_key` routine for prettify key in the `core::inventory::items::registry` module.
-fn prettify_key(key: &str) -> String {
-    key.replace('_', " ")
-        .split_whitespace()
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => first
-                    .to_uppercase()
-                    .chain(chars.flat_map(|ch| ch.to_lowercase()))
-                    .collect::<String>(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+fn normalize_item_name_key(raw_name: &str, fallback_key: &str) -> String {
+    let trimmed = raw_name.trim();
+    if is_name_key(trimmed) {
+        return trimmed.to_string();
+    }
+    item_name_key_from_key(fallback_key)
+}
+
+fn is_name_key(value: &str) -> bool {
+    value.starts_with("KEY_")
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+}
+
+fn item_name_key_from_key(key: &str) -> String {
+    let mut name_key = String::with_capacity(key.len() + 4);
+    name_key.push_str("KEY_");
+    let mut last_was_separator = false;
+    for ch in key.chars() {
+        if ch.is_ascii_alphanumeric() {
+            name_key.push(ch.to_ascii_uppercase());
+            last_was_separator = false;
+        } else if !last_was_separator {
+            name_key.push('_');
+            last_was_separator = true;
+        }
+    }
+    while name_key.ends_with('_') {
+        name_key.pop();
+    }
+    name_key
 }
 
 /// Runs the `default_true` routine for default true in the `core::inventory::items::registry` module.
