@@ -1,4 +1,5 @@
 use api::core::commands::GameModeKind;
+use api::core::entities::player::inventory::{InventorySlot, PLAYER_INVENTORY_SLOTS};
 use bevy::math::IVec2;
 use std::collections::HashSet;
 use std::time::Instant;
@@ -12,6 +13,7 @@ pub struct HostedPlayer {
     pub translation: [f32; 3],
     pub yaw: f32,
     pub pitch: f32,
+    pub inventory_slots: [InventorySlot; PLAYER_INVENTORY_SLOTS],
     pub last_seen: Instant,
     pub streamed_chunks: HashSet<IVec2>,
 }

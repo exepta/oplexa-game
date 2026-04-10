@@ -212,27 +212,29 @@ pub fn ray_cast_voxels(
 
         let stacked_id = get_stacked_block_world(chunk_map, block_pos);
         if stacked_id != 0
-            && let Some((t_hit, face)) = ray_hits_block_collider_face(
-                origin,
-                dir,
-                max_dist,
-                block_pos,
-                stacked_id,
-                registry,
-            )
+            && let Some((t_hit, face)) =
+                ray_hits_block_collider_face(origin, dir, max_dist, block_pos, stacked_id, registry)
         {
             match best_hit {
-                Some((best_t, _, _, _)) if best_t <= t_hit => {}
+                Some((best_t, _, _, _)) if best_t + 1e-5 < t_hit => {}
+                // On equal-distance ties, prefer stacked occupant so slab+slab cells
+                // remain targetable via their secondary collider.
+                Some((best_t, _, _, _)) if (best_t - t_hit).abs() <= 1e-5 => {
+                    best_hit = Some((t_hit, face, stacked_id, true));
+                }
                 _ => best_hit = Some((t_hit, face, stacked_id, true)),
             }
         }
 
-        if let Some((_, face, hit_id, is_stacked)) = best_hit {
+        if let Some((t_hit, face, hit_id, is_stacked)) = best_hit {
+            let hit_point = origin + dir * t_hit;
+            let hit_local = (hit_point - block_pos.as_vec3()).clamp(Vec3::ZERO, Vec3::ONE);
             return Some(BlockHit {
                 block_pos,
                 block_id: hit_id,
                 is_stacked,
                 face,
+                hit_local,
                 place_pos: block_pos + face_offset(face),
             });
         }

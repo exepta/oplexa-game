@@ -5,8 +5,8 @@ use crate::{
 };
 use api::core::commands::{CommandSender, GameModeKind, SystemMessageLevel, SystemSender};
 use api::core::network::protocols::{
-    Auth, OrderedReliable, PlayerJoined, PlayerLeft, PlayerSnapshot, ServerAuthRejected,
-    ServerBlockBreak, ServerBlockPlace, ServerChatMessage, ServerDropSpawn, ServerWelcome,
+    Auth, ClientInventorySync, InventorySlotState, OrderedReliable, PlayerJoined, PlayerLeft,
+    PlayerSnapshot, ServerAuthRejected, ServerChatMessage, ServerDropSpawn, ServerWelcome,
     UnorderedReliable, UnorderedUnreliable,
 };
 use bevy::ecs::event::EntityTrigger;
@@ -36,6 +36,7 @@ pub fn handle_new_client(trigger: On<Add, ClientOf>, mut commands: Commands) {
         MessageReceiver::<ClientBlockPlace>::default(),
         MessageReceiver::<ClientDropItem>::default(),
         MessageReceiver::<ClientDropPickup>::default(),
+        MessageReceiver::<ClientInventorySync>::default(),
         MessageReceiver::<ClientChatMessage>::default(),
     ));
     // Import message types used above (re-exported from protocols)
@@ -70,6 +71,13 @@ pub fn handle_client_disconnected(
     state.pending_auth.remove(&entity);
 
     if let Some(player) = state.players.remove(&entity) {
+        state.persist_player_data(
+            player.client_uuid.as_str(),
+            player.translation,
+            player.yaw,
+            player.pitch,
+            &player.inventory_slots,
+        );
         info!(
             "{} disconnected (uuid={})",
             player.username, player.client_uuid
@@ -138,6 +146,13 @@ pub fn cleanup_orphaned_players(
 
     for (entity, disconnected_link) in stale {
         if let Some(player) = state.players.remove(&entity) {
+            state.persist_player_data(
+                player.client_uuid.as_str(),
+                player.translation,
+                player.yaw,
+                player.pitch,
+                &player.inventory_slots,
+            );
             if disconnected_link {
                 warn!(
                     "Cleaned up disconnected player link {:?} (username={}, uuid={})",
@@ -245,14 +260,25 @@ pub fn handle_auth_messages(
                 continue;
             }
 
+            let loaded = state.load_player_data(client_uuid.as_str());
+            let spawn_translation = loaded
+                .as_ref()
+                .map(|data| data.translation)
+                .unwrap_or(config.spawn_translation);
+            let spawn_yaw = loaded.as_ref().map(|data| data.yaw).unwrap_or(0.0);
+            let spawn_pitch = loaded.as_ref().map(|data| data.pitch).unwrap_or(0.0);
+            let inventory_slots = loaded
+                .map(|data| data.inventory_slots)
+                .unwrap_or_default();
             let player = HostedPlayer {
                 player_id: state.next_player_id,
                 username: username.clone(),
                 client_uuid,
                 game_mode: GameModeKind::Creative,
-                translation: config.spawn_translation,
-                yaw: 0.0,
-                pitch: 0.0,
+                translation: spawn_translation,
+                yaw: spawn_yaw,
+                pitch: spawn_pitch,
+                inventory_slots,
                 last_seen: Instant::now(),
                 streamed_chunks: HashSet::new(),
             };
@@ -263,7 +289,7 @@ pub fn handle_auth_messages(
                 .block_registry
                 .defs
                 .iter()
-                .map(|def| def.name.clone())
+                .map(|def| def.localized_name.clone())
                 .collect::<Vec<_>>();
             let welcome = ServerWelcome {
                 player_id: player.player_id,
@@ -271,7 +297,13 @@ pub fn handle_auth_messages(
                 motd: config.motd.clone(),
                 world_name: config.world_name.clone(),
                 world_seed: config.world_seed,
-                spawn_translation: config.spawn_translation,
+                spawn_translation,
+                inventory_slots: player
+                    .inventory_slots
+                    .iter()
+                    .copied()
+                    .map(InventorySlotState::from)
+                    .collect(),
                 block_palette,
             };
             let _ = multi_sender.send::<_, UnorderedReliable>(
@@ -297,23 +329,6 @@ pub fn handle_auth_messages(
                     *server,
                     &NetworkTarget::Single(entity_to_peer_id(entity, &q_remote_id)),
                 );
-            }
-
-            // Sync block overrides
-            for (location, block_id) in &state.block_overrides {
-                if *block_id == 0 {
-                    let _ = multi_sender.send::<_, OrderedReliable>(
-                        &ServerBlockBreak::new(0, *location),
-                        *server,
-                        &NetworkTarget::Single(entity_to_peer_id(entity, &q_remote_id)),
-                    );
-                } else {
-                    let _ = multi_sender.send::<_, OrderedReliable>(
-                        &ServerBlockPlace::new(0, *location, *block_id),
-                        *server,
-                        &NetworkTarget::Single(entity_to_peer_id(entity, &q_remote_id)),
-                    );
-                }
             }
 
             // Sync existing drops
@@ -356,7 +371,7 @@ pub fn handle_auth_messages(
                 &NetworkTarget::All,
             );
             let _ = multi_sender.send::<_, UnorderedUnreliable>(
-                &PlayerSnapshot::new(player_id, config.spawn_translation, 0.0, 0.0),
+                &PlayerSnapshot::new(player_id, spawn_translation, spawn_yaw, spawn_pitch),
                 *server,
                 &NetworkTarget::All,
             );
@@ -397,6 +412,13 @@ pub fn purge_stale_players(
         commands.trigger_with(Disconnect { entity }, EntityTrigger);
 
         if let Some(player) = state.players.remove(&entity) {
+            state.persist_player_data(
+                player.client_uuid.as_str(),
+                player.translation,
+                player.yaw,
+                player.pitch,
+                &player.inventory_slots,
+            );
             let _ = multi_sender.send::<_, UnorderedReliable>(
                 &PlayerLeft::new(player.player_id),
                 *server,

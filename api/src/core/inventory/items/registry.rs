@@ -761,7 +761,9 @@ fn canonical_block_item_id(block_registry: &BlockRegistry, block_id: BlockId) ->
     let Some(base_name) = slab_base_name_for_variant(name) else {
         return block_id;
     };
-    block_registry.id_opt(base_name.as_str()).unwrap_or(block_id)
+    block_registry
+        .id_opt(base_name.as_str())
+        .unwrap_or(block_id)
 }
 
 #[inline]

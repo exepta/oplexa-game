@@ -5,7 +5,7 @@ use crate::core::commands::{
 };
 use crate::core::config::{GlobalConfig, WorldGenConfig};
 use crate::core::debug::{BuildInfo, WorldInspectorState};
-use crate::core::entities::player::inventory::PlayerInventory;
+use crate::core::entities::player::inventory::{PlayerInventory, PLAYER_INVENTORY_SLOTS};
 use crate::core::entities::player::{FlightState, FpsController, GameMode, GameModeState, Player};
 use crate::core::events::block::block_player_events::{
     BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
@@ -33,8 +33,8 @@ use api::core::network::{
     discovery::{LanDiscoveryClient, LanServerInfo},
     protocols::{
         Auth, ClientBlockBreak, ClientBlockPlace, ClientChatMessage, ClientChunkInterest,
-        ClientDropItem, ClientDropPickup, ClientKeepAlive, OrderedReliable, PlayerJoined,
-        PlayerLeft, PlayerMove, PlayerSnapshot, ProtocolPlugin, ServerAuthRejected,
+        ClientDropItem, ClientDropPickup, ClientInventorySync, ClientKeepAlive, OrderedReliable,
+        PlayerJoined, PlayerLeft, PlayerMove, PlayerSnapshot, ProtocolPlugin, ServerAuthRejected,
         ServerBlockBreak, ServerBlockPlace, ServerChatMessage, ServerChunkData, ServerDropPicked,
         ServerDropSpawn, ServerGameModeChanged, ServerTeleport, ServerWelcome, UnorderedReliable,
         UnorderedUnreliable,
@@ -246,7 +246,7 @@ impl BlockIdRemap {
             }
 
             let server_id_u16 = server_id as u16;
-            let local_id = registry.id_opt(block_name).unwrap_or(0);
+            let local_id = resolve_local_block_id(registry, block_name).unwrap_or(0);
             self.server_to_local[server_id] = local_id;
 
             if let Some(slot) = self.local_to_server.get_mut(local_id as usize)
@@ -296,6 +296,21 @@ impl BlockIdRemap {
     fn is_ready(&self) -> bool {
         self.ready
     }
+}
+
+fn resolve_local_block_id(registry: &BlockRegistry, server_block_name: &str) -> Option<u16> {
+    if let Some(id) = registry.id_opt(server_block_name) {
+        return Some(id);
+    }
+
+    registry
+        .defs
+        .iter()
+        .position(|def| {
+            def.localized_name.eq_ignore_ascii_case(server_block_name)
+                || def.name.eq_ignore_ascii_case(server_block_name)
+        })
+        .map(|index| index as u16)
 }
 
 const MULTIPLAYER_DROP_ITEM_SIZE: f32 = 0.32;
@@ -408,9 +423,13 @@ impl Plugin for MultiplayerClientPlugin {
                     send_local_block_place_events,
                     send_local_item_drop_requests,
                     send_client_keepalive,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
                     receive_player_messages,
                     receive_chat_messages,
-                    receive_world_messages.in_set(VoxelStage::WorldEdit),
                     receive_drop_messages,
                     update_connection_state,
                     simulate_multiplayer_drop_items,
@@ -419,6 +438,8 @@ impl Plugin for MultiplayerClientPlugin {
                     send_local_player_pose,
                 ),
             )
+            .add_systems(Update, receive_world_messages.in_set(VoxelStage::WorldEdit))
+            .add_systems(Update, send_local_inventory_sync)
             .add_systems(Update, smooth_remote_players);
     }
 }
@@ -670,6 +691,7 @@ fn connect_to_server_requested(
     multiplayer_connection.world_name = None;
     multiplayer_connection.world_seed = None;
     multiplayer_connection.spawn_translation = None;
+    multiplayer_connection.spawn_yaw_pitch = None;
     multiplayer_connection.known_player_names.clear();
     multiplayer_connection.last_error = None;
     chunk_stream.reset();
@@ -723,7 +745,6 @@ fn update_connection_state(
 fn receive_player_messages(
     mut commands: Commands,
     time: Res<Time>,
-    app_state: Res<State<AppState>>,
     visuals: Res<RemotePlayerVisuals>,
     registry: Option<Res<BlockRegistry>>,
     mut region_cache: ResMut<RegionCache>,
@@ -732,6 +753,7 @@ fn receive_player_messages(
     mut water_mesh_index: ResMut<WaterMeshIndex>,
     mut next_state: ResMut<NextState<AppState>>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
+    mut inventory: ResMut<PlayerInventory>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
     mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
     mut block_remap: ResMut<BlockIdRemap>,
@@ -776,12 +798,7 @@ fn receive_player_messages(
         chunk_stream.reset();
         chunk_decode_queue.reset();
 
-        if matches!(
-            app_state.get(),
-            AppState::Loading(_) | AppState::InGame(_) | AppState::PostLoad
-        ) {
-            chunk_map.chunks.clear();
-        }
+        chunk_map.chunks.clear();
         next_state.set(AppState::Screen(BeforeUiState::MultiPlayer));
 
         multiplayer_connection.clear_session();
@@ -822,6 +839,8 @@ fn receive_player_messages(
         multiplayer_connection.world_name = Some(message.world_name.clone());
         multiplayer_connection.world_seed = Some(message.world_seed);
         multiplayer_connection.last_error = None;
+        multiplayer_connection.spawn_yaw_pitch = None;
+        apply_welcome_inventory(&message, &mut inventory);
         let spawn_translation = message.spawn_translation;
         start_streamed_multiplayer_world_load(
             spawn_translation,
@@ -910,6 +929,23 @@ fn receive_player_messages(
     }
 
     sync_known_player_names(&runtime, &mut multiplayer_connection);
+}
+
+#[inline]
+fn apply_welcome_inventory(message: &ServerWelcome, inventory: &mut PlayerInventory) {
+    for slot in &mut inventory.slots {
+        *slot = Default::default();
+    }
+
+    for (index, slot) in message
+        .inventory_slots
+        .iter()
+        .copied()
+        .take(PLAYER_INVENTORY_SLOTS)
+        .enumerate()
+    {
+        inventory.slots[index] = slot.into();
+    }
 }
 
 /// Handles server chat lines and game mode synchronization.
@@ -1840,6 +1876,33 @@ fn simulate_multiplayer_drop_items(
     }
 }
 
+/// Runs the `send_local_inventory_sync` routine for send local inventory sync in the `client` module.
+fn send_local_inventory_sync(
+    multiplayer_connection: Res<MultiplayerConnectionState>,
+    inventory: Res<PlayerInventory>,
+    runtime: Res<MultiplayerClientRuntime>,
+    q_connected: Query<Has<Connected>>,
+    mut q_sender: Query<&mut MessageSender<ClientInventorySync>>,
+) {
+    if !multiplayer_connection.connected || !inventory.is_changed() {
+        return;
+    }
+
+    let Some(entity) = runtime.connection_entity else {
+        return;
+    };
+
+    if !q_connected.get(entity).unwrap_or(false) {
+        return;
+    }
+
+    let Ok(mut sender) = q_sender.get_mut(entity) else {
+        return;
+    };
+
+    sender.send::<UnorderedReliable>(ClientInventorySync::from_slots(&inventory.slots));
+}
+
 /// Runs the `send_local_drop_pickup_requests` routine for send local drop pickup requests in the `client` module.
 fn send_local_drop_pickup_requests(
     time: Res<Time>,
@@ -2074,10 +2137,7 @@ fn can_stack_remote_slab(
     let Some(incoming_variant) = slab_variant_from_name_sync(incoming_name) else {
         return false;
     };
-    matches!(
-        (existing_variant, incoming_variant),
-        (0, 1) | (1, 0) | (2, 3) | (3, 2) | (4, 5) | (5, 4)
-    )
+    slabs_are_complementary_sync(existing_variant, incoming_variant)
 }
 
 fn slab_variant_from_name_sync(name: &str) -> Option<u8> {
@@ -2100,6 +2160,13 @@ fn slab_variant_from_name_sync(name: &str) -> Option<u8> {
         return Some(5);
     }
     None
+}
+
+fn slabs_are_complementary_sync(a: u8, b: u8) -> bool {
+    matches!(
+        (a, b),
+        (0, 1) | (1, 0) | (2, 3) | (3, 2) | (4, 5) | (5, 4)
+    )
 }
 
 /// Spawns multiplayer drop for the `client` module.

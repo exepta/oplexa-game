@@ -28,6 +28,8 @@ pub struct BlockHit {
     pub is_stacked: bool,
     /// The face of the hit block that was intersected.
     pub face: Face,
+    /// Hit point in local voxel coordinates of `block_pos` (0..1 on each axis).
+    pub hit_local: Vec3,
     /// Neighbor cell where a new block would be placed when clicking this face.
     pub place_pos: IVec3,
 }

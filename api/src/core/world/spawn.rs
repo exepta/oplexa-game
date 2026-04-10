@@ -2,14 +2,15 @@ use crate::core::config::WorldGenConfig;
 use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::BlockRegistry;
 use crate::core::world::chunk::{ChunkData, SEA_LEVEL};
-use crate::core::world::chunk_dimension::{CY, local_y_to_world, world_to_chunk_xz};
+use crate::core::world::chunk_dimension::{
+    CY, Y_MAX, Y_MIN, local_y_to_world, world_to_chunk_xz, world_y_to_local,
+};
 use crate::generator::chunk::chunk_utils::{load_or_gen_chunk_async, save_chunk_at_root_sync};
 use crate::generator::chunk::trees::registry::TreeRegistry;
 use bevy::log::info;
 use bevy::prelude::IVec2;
 use bevy::tasks::futures_lite::future;
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -33,22 +34,10 @@ pub fn ensure_world_spawn_generated(world_root: &Path, world_seed: i32) -> [f32;
         &tree_registry,
     );
 
-    let spawn_file = world_root.join("spawn.txt");
-    if let Some(spawn) = read_spawn_translation(&spawn_file) {
-        info!(
-            "Using existing spawn from {:?}: [{:.2}, {:.2}, {:.2}]",
-            spawn_file, spawn[0], spawn[1], spawn[2]
-        );
-        return spawn;
-    }
-
-    let spawn = derive_spawn_translation(&generated_chunks, &block_registry);
-    if let Err(error) = write_spawn_translation(&spawn_file, spawn) {
-        panic!("Failed to write spawn file {:?}: {}", spawn_file, error);
-    }
+    let spawn = derive_spawn_translation(&generated_chunks, &block_registry, world_seed);
     info!(
-        "Generated new spawn in {:?}: [{:.2}, {:.2}, {:.2}]",
-        spawn_file, spawn[0], spawn[1], spawn[2]
+        "Derived world spawn: [{:.2}, {:.2}, {:.2}]",
+        spawn[0], spawn[1], spawn[2]
     );
     spawn
 }
@@ -116,8 +105,10 @@ fn generate_spawn_chunks(
 fn derive_spawn_translation(
     chunks: &HashMap<IVec2, ChunkData>,
     block_registry: &BlockRegistry,
+    world_seed: i32,
 ) -> [f32; 3] {
-    let mut best: Option<(bool, i32, i32, i32, i32)> = None;
+    let (anchor_x, anchor_z) = spawn_anchor_from_seed(world_seed);
+    let mut best: Option<SpawnCandidate> = None;
 
     for wz in -SPAWN_SEARCH_RADIUS_BLOCKS..=SPAWN_SEARCH_RADIUS_BLOCKS {
         for wx in -SPAWN_SEARCH_RADIUS_BLOCKS..=SPAWN_SEARCH_RADIUS_BLOCKS {
@@ -130,56 +121,122 @@ fn derive_spawn_translation(
 
             for ly in (0..CY).rev() {
                 let block_id = chunk.get(lx, ly, lz);
-                if block_id == 0 || block_registry.is_fluid(block_id) {
+                if block_id == 0
+                    || block_registry.is_fluid(block_id)
+                    || !block_registry.is_solid_for_collision(block_id)
+                    || block_registry
+                        .name_opt(block_id)
+                        .is_some_and(|name| name.contains("leaves"))
+                {
                     continue;
                 }
 
                 let world_y = local_y_to_world(ly);
                 let dry_land = world_y >= SEA_LEVEL;
-                let dist2 = wx * wx + wz * wz;
-
-                let replace = match best {
-                    None => true,
-                    Some((best_dry, best_dist2, best_y, _, _)) => {
-                        (dry_land && !best_dry)
-                            || (dry_land == best_dry
-                                && (dist2 < best_dist2
-                                    || (dist2 == best_dist2 && world_y > best_y)))
-                    }
+                let clearance = column_has_spawn_clearance(chunks, block_registry, wx, world_y, wz);
+                let dx = wx - anchor_x;
+                let dz = wz - anchor_z;
+                let dist2 = dx * dx + dz * dz;
+                let candidate = SpawnCandidate {
+                    tier: spawn_candidate_tier(clearance, dry_land),
+                    dist2,
+                    world_y,
+                    wx,
+                    wz,
                 };
 
-                if replace {
-                    best = Some((dry_land, dist2, world_y, wx, wz));
+                if should_replace_spawn_candidate(best, candidate) {
+                    best = Some(candidate);
                 }
                 break;
             }
         }
     }
 
-    if let Some((_, _, world_y, wx, wz)) = best {
+    if let Some(SpawnCandidate {
+        world_y, wx, wz, ..
+    }) = best
+    {
         [wx as f32 + 0.5, world_y as f32 + 2.0, wz as f32 + 0.5]
     } else {
         [0.5, 180.0, 0.5]
     }
 }
 
-/// Reads spawn translation for the `core::world::spawn` module.
-fn read_spawn_translation(path: &Path) -> Option<[f32; 3]> {
-    let text = fs::read_to_string(path).ok()?;
-    let mut parts = text.split_whitespace();
-    let x = parts.next()?.parse::<f32>().ok()?;
-    let y = parts.next()?.parse::<f32>().ok()?;
-    let z = parts.next()?.parse::<f32>().ok()?;
-    Some([x, y, z])
+#[inline]
+pub fn spawn_anchor_from_seed(seed: i32) -> (i32, i32) {
+    let mut value = seed as u32 ^ 0xA53C_4F1D;
+    value = value.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+    let x =
+        (value as i32).rem_euclid(SPAWN_SEARCH_RADIUS_BLOCKS * 2 + 1) - SPAWN_SEARCH_RADIUS_BLOCKS;
+    value = value.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+    let z =
+        (value as i32).rem_euclid(SPAWN_SEARCH_RADIUS_BLOCKS * 2 + 1) - SPAWN_SEARCH_RADIUS_BLOCKS;
+    (x, z)
 }
 
-/// Writes spawn translation for the `core::world::spawn` module.
-fn write_spawn_translation(path: &Path, spawn_translation: [f32; 3]) -> std::io::Result<()> {
-    fs::write(
-        path,
-        format!(
-            "{} {} {}",
-            spawn_translation[0], spawn_translation[1], spawn_translation[2]
-        ),
-    )
+#[derive(Clone, Copy)]
+struct SpawnCandidate {
+    tier: u8,
+    dist2: i32,
+    world_y: i32,
+    wx: i32,
+    wz: i32,
+}
+
+#[inline]
+fn should_replace_spawn_candidate(best: Option<SpawnCandidate>, next: SpawnCandidate) -> bool {
+    match best {
+        None => true,
+        Some(current) => {
+            next.tier > current.tier
+                || (next.tier == current.tier
+                    && (next.dist2 < current.dist2
+                        || (next.dist2 == current.dist2 && next.world_y > current.world_y)))
+        }
+    }
+}
+
+#[inline]
+fn spawn_candidate_tier(clearance: bool, dry_land: bool) -> u8 {
+    match (clearance, dry_land) {
+        (true, true) => 3,
+        (true, false) => 2,
+        (false, true) => 1,
+        (false, false) => 0,
+    }
+}
+
+#[inline]
+fn column_has_spawn_clearance(
+    chunks: &HashMap<IVec2, ChunkData>,
+    block_registry: &BlockRegistry,
+    wx: i32,
+    ground_y: i32,
+    wz: i32,
+) -> bool {
+    if ground_y + 2 > Y_MAX {
+        return false;
+    }
+
+    let Some(head1) = world_block_id(chunks, wx, ground_y + 1, wz) else {
+        return false;
+    };
+    let Some(head2) = world_block_id(chunks, wx, ground_y + 2, wz) else {
+        return false;
+    };
+
+    block_registry.is_air(head1) && block_registry.is_air(head2)
+}
+
+#[inline]
+fn world_block_id(chunks: &HashMap<IVec2, ChunkData>, wx: i32, wy: i32, wz: i32) -> Option<u16> {
+    if !(Y_MIN..=Y_MAX).contains(&wy) {
+        return None;
+    }
+
+    let (coord, local) = world_to_chunk_xz(wx, wz);
+    let chunk = chunks.get(&coord)?;
+    let ly = world_y_to_local(wy);
+    Some(chunk.get(local.x as usize, ly, local.y as usize))
 }

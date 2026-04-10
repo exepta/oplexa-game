@@ -280,6 +280,13 @@ fn handle_single_player_actions(
                     ui_state.pending_delete_index = Some(index);
                 }
             }
+            SinglePlayerAction::BackToMenu => {
+                if ui_state.page != SinglePlayerPage::List {
+                    continue;
+                }
+                next_state.set(AppState::Screen(BeforeUiState::Menu));
+                return;
+            }
             SinglePlayerAction::ConfirmDelete => {
                 if ui_state.page != SinglePlayerPage::List {
                     continue;
@@ -506,6 +513,9 @@ fn parse_single_player_action(id: &str) -> Option<SinglePlayerAction> {
     if id == SINGLE_PLAYER_DELETE_WORLD_ID {
         return Some(SinglePlayerAction::DeleteWorld);
     }
+    if id == SINGLE_PLAYER_BACK_ID {
+        return Some(SinglePlayerAction::BackToMenu);
+    }
     if id == SINGLE_PLAYER_DELETE_CONFIRM_ID {
         return Some(SinglePlayerAction::ConfirmDelete);
     }
@@ -615,13 +625,16 @@ fn list_saved_worlds(default_seed: i32) -> Vec<SavedWorldEntry> {
 
 /// Reads world seed for the `graphic::components::single_player` module.
 fn read_world_seed(world_path: &Path, default_seed: i32) -> i32 {
-    let meta_path = world_path.join(WORLD_META_FILE);
-    let Ok(text) = fs::read_to_string(meta_path) else {
-        return default_seed;
-    };
-    serde_json::from_str::<WorldMeta>(&text)
+    read_world_meta(world_path)
         .map(|meta| meta.seed)
         .unwrap_or(default_seed)
+}
+
+/// Reads world meta for the `graphic::components::single_player` module.
+fn read_world_meta(world_path: &Path) -> Option<WorldMeta> {
+    let meta_path = world_path.join(WORLD_META_FILE);
+    let text = fs::read_to_string(meta_path).ok()?;
+    serde_json::from_str::<WorldMeta>(&text).ok()
 }
 
 /// Creates world with name for the `graphic::components::single_player` module.
@@ -653,7 +666,9 @@ fn create_world_with_name(
         warn!("Failed to create world folder {:?}: {}", world_path, error);
         return None;
     }
-    if let Err(error) = write_world_meta(&world_path, seed) {
+    let (anchor_x, anchor_z) = api::core::world::spawn::spawn_anchor_from_seed(seed);
+    let default_spawn = [anchor_x as f32 + 0.5, 180.0, anchor_z as f32 + 0.5];
+    if let Err(error) = write_world_meta(&world_path, seed, Some(default_spawn)) {
         warn!("Failed to write world meta for {:?}: {}", world_path, error);
     }
 
@@ -709,8 +724,15 @@ fn generate_seed(default_seed: i32, salt: u64) -> i32 {
 }
 
 /// Writes world meta for the `graphic::components::single_player` module.
-fn write_world_meta(world_path: &Path, seed: i32) -> Result<(), std::io::Error> {
-    let meta = WorldMeta { seed };
+fn write_world_meta(
+    world_path: &Path,
+    seed: i32,
+    spawn_translation: Option<[f32; 3]>,
+) -> Result<(), std::io::Error> {
+    let meta = WorldMeta {
+        seed,
+        spawn_translation,
+    };
     let text = serde_json::to_string_pretty(&meta)
         .map_err(|error| std::io::Error::other(error.to_string()))?;
     fs::write(world_path.join(WORLD_META_FILE), text)
@@ -736,15 +758,57 @@ fn load_world_and_start(
         return;
     }
 
-    if let Err(error) = write_world_meta(&world.path, world.seed) {
+    let existing_meta = read_world_meta(&world.path);
+
+    let saved_player_data =
+        match read_player_data_from_file(world.path.join(PLAYER_INVENTORY_SAVE_FILE_NAME).as_path())
+        {
+            Ok(Some(data)) => Some(data),
+            Ok(None) => None,
+            Err(error) => {
+                warn!(
+                    "Failed to read saved player data for '{}': {}",
+                    world.folder_name, error
+                );
+                None
+            }
+        };
+    let saved_player_position = saved_player_data.as_ref().and_then(|data| data.position);
+    let saved_player_yaw_pitch = saved_player_data.as_ref().and_then(|data| data.yaw_pitch);
+    let (anchor_x, anchor_z) = api::core::world::spawn::spawn_anchor_from_seed(world.seed);
+    let default_meta_spawn = [anchor_x as f32 + 0.5, 180.0, anchor_z as f32 + 0.5];
+    let meta_spawn = existing_meta.and_then(|meta| meta.spawn_translation);
+    let world_spawn = meta_spawn.unwrap_or(default_meta_spawn);
+    let spawn_translation = saved_player_position.unwrap_or(world_spawn);
+
+    if let Err(error) = write_world_meta(&world.path, world.seed, Some(world_spawn)) {
         warn!(
             "Failed to store world metadata for '{}': {}",
             world.folder_name, error
         );
     }
+    let (spawn_chunk, _) = world_to_chunk_xz(
+        spawn_translation[0].floor() as i32,
+        spawn_translation[2].floor() as i32,
+    );
 
     world_gen_config.seed = world.seed;
+    let world_name = world.folder_name.clone();
+    let world_seed = world.seed;
+    commands.queue(move |world: &mut World| {
+        if let Some(mut multiplayer_connection) =
+            world.get_resource_mut::<MultiplayerConnectionState>()
+        {
+            multiplayer_connection.world_name = Some(world_name);
+            multiplayer_connection.world_seed = Some(world_seed);
+            multiplayer_connection.spawn_translation = Some(spawn_translation);
+            multiplayer_connection.spawn_yaw_pitch = saved_player_yaw_pitch;
+        }
+    });
     commands.insert_resource(WorldSave::new(world.path.clone()));
+    commands.insert_resource(LoadCenter {
+        world_xz: spawn_chunk,
+    });
     region_cache.0.clear();
     chunk_map.chunks.clear();
     fluid_map.0.clear();

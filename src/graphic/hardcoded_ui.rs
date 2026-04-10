@@ -83,6 +83,7 @@ const SINGLE_PLAYER_WORLD_CARD_PREFIX: &str = "single-player-world-card-";
 const SINGLE_PLAYER_CREATE_WORLD_ID: &str = "single-player-create-world";
 const SINGLE_PLAYER_PLAY_WORLD_ID: &str = "single-player-play-world";
 const SINGLE_PLAYER_DELETE_WORLD_ID: &str = "single-player-delete-world";
+const SINGLE_PLAYER_BACK_ID: &str = "single-player-back";
 const SINGLE_PLAYER_DELETE_CONFIRM_ID: &str = "single-player-delete-confirm";
 const SINGLE_PLAYER_DELETE_CANCEL_ID: &str = "single-player-delete-cancel";
 const SINGLE_PLAYER_DELETE_TEXT_ID: &str = "single-player-delete-text";
@@ -98,6 +99,7 @@ const MULTIPLAYER_REFRESH_ID: &str = "multi-player-refresh-server-list";
 const MULTIPLAYER_ADD_ID: &str = "multi-player-add-server";
 const MULTIPLAYER_EDIT_ID: &str = "multi-player-edit-server";
 const MULTIPLAYER_DELETE_ID: &str = "multi-player-delete-server";
+const MULTIPLAYER_BACK_ID: &str = "multi-player-back";
 
 const MULTIPLAYER_FORM_TITLE_ID: &str = "multi-player-form-title";
 const MULTIPLAYER_FORM_NAME_INPUT_ID: &str = "multi-player-form-name-input";
@@ -146,6 +148,7 @@ const CREATIVE_RECIPE_HINT_ID: &str = "creative-recipe-hint";
 
 const WORLD_GEN_PROGRESS_ID: &str = "world-gen-progress";
 const WORLD_GEN_CHUNKS_ID: &str = "world-gen-chunks";
+const WORLD_GEN_SPINNER_ID: &str = "world-gen-spinner";
 
 const ID_BUILD: &str = "debug-build";
 const ID_CPU_NAME: &str = "debug-cpu-name";
@@ -490,6 +493,8 @@ struct SinglePlayerUiState {
 #[derive(Serialize, Deserialize)]
 struct WorldMeta {
     seed: i32,
+    #[serde(default)]
+    spawn_translation: Option<[f32; 3]>,
 }
 
 /// Defines the possible single player action variants in the `graphic::hardcoded_ui` module.
@@ -499,6 +504,7 @@ enum SinglePlayerAction {
     OpenCreateWorld,
     PlayWorld,
     DeleteWorld,
+    BackToMenu,
     ConfirmDelete,
     CancelDelete,
     CreateWorldSubmit,
@@ -618,6 +624,7 @@ enum MultiplayerAction {
     SelectServer(usize),
     JoinServer,
     RefreshServers,
+    BackToMenu,
     DismissConnectError,
     OpenAddServer,
     OpenEditServer,

@@ -4,9 +4,9 @@ use crate::{
 };
 use api::core::network::protocols::{
     ClientBlockBreak, ClientBlockPlace, ClientChunkInterest, ClientDropItem, ClientDropPickup,
-    ClientKeepAlive, OrderedReliable, PlayerMove, PlayerSnapshot, ServerBlockBreak,
-    ServerBlockPlace, ServerChunkData, ServerDropPicked, ServerDropSpawn, UnorderedReliable,
-    UnorderedUnreliable,
+    ClientInventorySync, ClientKeepAlive, OrderedReliable, PlayerMove, PlayerSnapshot,
+    ServerBlockBreak, ServerBlockPlace, ServerChunkData, ServerDropPicked, ServerDropSpawn,
+    UnorderedReliable, UnorderedUnreliable,
 };
 use bevy::math::IVec2;
 use bevy::prelude::*;
@@ -14,6 +14,8 @@ use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use std::collections::{HashSet, VecDeque};
 use std::time::Instant;
+
+const PLAYER_POSITION_SAVE_INTERVAL_SECS: f32 = 1.0;
 
 /// Handles player move messages for the `services::gameplay` module.
 pub fn handle_player_move_messages(
@@ -41,6 +43,64 @@ pub fn handle_player_move_messages(
                     &NetworkTarget::All,
                 );
             }
+        }
+    }
+}
+
+/// Persists online player positions for the `services::gameplay` module.
+pub fn persist_online_player_positions(
+    time: Res<Time>,
+    state: Res<ServerState>,
+    mut save_timer: Local<Option<Timer>>,
+) {
+    let timer = save_timer.get_or_insert_with(|| {
+        Timer::from_seconds(PLAYER_POSITION_SAVE_INTERVAL_SECS, TimerMode::Repeating)
+    });
+
+    if !timer.tick(time.delta()).just_finished() {
+        return;
+    }
+
+    for player in state.players.values() {
+        state.persist_player_data(
+            player.client_uuid.as_str(),
+            player.translation,
+            player.yaw,
+            player.pitch,
+            &player.inventory_slots,
+        );
+    }
+}
+
+/// Handles inventory sync messages for the `services::gameplay` module.
+pub fn handle_inventory_sync_messages(
+    mut q: Query<(Entity, &mut MessageReceiver<ClientInventorySync>), With<ClientOf>>,
+    mut state: ResMut<ServerState>,
+) {
+    for (entity, mut receiver) in q.iter_mut() {
+        for message in receiver.receive() {
+            let Some((client_uuid, translation, yaw, pitch, inventory_slots)) = (|| {
+                let player = state.players.get_mut(&entity)?;
+                player.last_seen = Instant::now();
+                player.inventory_slots = message.to_slots();
+                Some((
+                    player.client_uuid.clone(),
+                    player.translation,
+                    player.yaw,
+                    player.pitch,
+                    player.inventory_slots,
+                ))
+            })() else {
+                continue;
+            };
+
+            state.persist_player_data(
+                client_uuid.as_str(),
+                translation,
+                yaw,
+                pitch,
+                &inventory_slots,
+            );
         }
     }
 }

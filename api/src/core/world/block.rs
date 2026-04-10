@@ -131,14 +131,32 @@ impl Default for BlockColliderDefinition {
 impl BlockColliderDefinition {
     pub fn sanitized(mut self) -> Self {
         self.size_m = [
-            self.size_m[0].clamp(BLOCK_COLLIDER_MIN_SIZE_METERS, BLOCK_COLLIDER_MAX_SIZE_METERS),
-            self.size_m[1].clamp(BLOCK_COLLIDER_MIN_SIZE_METERS, BLOCK_COLLIDER_MAX_SIZE_METERS),
-            self.size_m[2].clamp(BLOCK_COLLIDER_MIN_SIZE_METERS, BLOCK_COLLIDER_MAX_SIZE_METERS),
+            self.size_m[0].clamp(
+                BLOCK_COLLIDER_MIN_SIZE_METERS,
+                BLOCK_COLLIDER_MAX_SIZE_METERS,
+            ),
+            self.size_m[1].clamp(
+                BLOCK_COLLIDER_MIN_SIZE_METERS,
+                BLOCK_COLLIDER_MAX_SIZE_METERS,
+            ),
+            self.size_m[2].clamp(
+                BLOCK_COLLIDER_MIN_SIZE_METERS,
+                BLOCK_COLLIDER_MAX_SIZE_METERS,
+            ),
         ];
         self.offset_m = [
-            self.offset_m[0].clamp(-BLOCK_COLLIDER_MAX_OFFSET_METERS, BLOCK_COLLIDER_MAX_OFFSET_METERS),
-            self.offset_m[1].clamp(-BLOCK_COLLIDER_MAX_OFFSET_METERS, BLOCK_COLLIDER_MAX_OFFSET_METERS),
-            self.offset_m[2].clamp(-BLOCK_COLLIDER_MAX_OFFSET_METERS, BLOCK_COLLIDER_MAX_OFFSET_METERS),
+            self.offset_m[0].clamp(
+                -BLOCK_COLLIDER_MAX_OFFSET_METERS,
+                BLOCK_COLLIDER_MAX_OFFSET_METERS,
+            ),
+            self.offset_m[1].clamp(
+                -BLOCK_COLLIDER_MAX_OFFSET_METERS,
+                BLOCK_COLLIDER_MAX_OFFSET_METERS,
+            ),
+            self.offset_m[2].clamp(
+                -BLOCK_COLLIDER_MAX_OFFSET_METERS,
+                BLOCK_COLLIDER_MAX_OFFSET_METERS,
+            ),
         ];
         self
     }
@@ -185,7 +203,9 @@ impl BlockRegistry {
     /// Runs the `name_opt` routine for name opt in the `core::world::block` module.
     #[inline]
     pub fn name_opt(&self, id: BlockId) -> Option<&str> {
-        self.defs.get(id as usize).map(|d| d.localized_name.as_str())
+        self.defs
+            .get(id as usize)
+            .map(|d| d.localized_name.as_str())
     }
 
     /// Runs the `display_name` routine for display name in the `core::world::block` module.
@@ -273,8 +293,12 @@ impl BlockRegistry {
             return false;
         }
         match collider.kind {
-            BlockColliderKind::Auto => !self.is_air(id) && !self.is_fluid(id) && self.stats(id).solid,
-            BlockColliderKind::None | BlockColliderKind::FullBlock | BlockColliderKind::Box => false,
+            BlockColliderKind::Auto => {
+                !self.is_air(id) && !self.is_fluid(id) && self.stats(id).solid
+            }
+            BlockColliderKind::None | BlockColliderKind::FullBlock | BlockColliderKind::Box => {
+                false
+            }
         }
     }
     /// Returns optional box collider size/offset (both in block units).
@@ -409,7 +433,8 @@ impl BlockRegistry {
 
             // resolve faces (supports: specific keys, 'all', 'vertical', 'horizontal', and 'nord' fallback)
             let faces = block_json.texture.resolve();
-            let uv_top = tile_uv(&tileset, require_face(&faces.top, "top", &localized_name)).unwrap();
+            let uv_top =
+                tile_uv(&tileset, require_face(&faces.top, "top", &localized_name)).unwrap();
             let uv_bottom = tile_uv(
                 &tileset,
                 require_face(&faces.bottom, "bottom", &localized_name),
@@ -420,21 +445,15 @@ impl BlockRegistry {
                 require_face(&faces.north, "north", &localized_name),
             )
             .unwrap();
-            let uv_east = tile_uv(
-                &tileset,
-                require_face(&faces.east, "east", &localized_name),
-            )
-            .unwrap();
+            let uv_east =
+                tile_uv(&tileset, require_face(&faces.east, "east", &localized_name)).unwrap();
             let uv_south = tile_uv(
                 &tileset,
                 require_face(&faces.south, "south", &localized_name),
             )
             .unwrap();
-            let uv_west = tile_uv(
-                &tileset,
-                require_face(&faces.west, "west", &localized_name),
-            )
-            .unwrap();
+            let uv_west =
+                tile_uv(&tileset, require_face(&faces.west, "west", &localized_name)).unwrap();
 
             let (alpha_mode, base_color) = material_policy_from_stats(&block_json.stats);
 

@@ -153,6 +153,15 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         UiButtonKind::ActionRow,
                         UiButtonTone::Normal,
                     ));
+                    actions.spawn((
+                        Button {
+                            text: "Back".to_string(),
+                            ..default()
+                        },
+                        CssID(SINGLE_PLAYER_BACK_ID.to_string()),
+                        UiButtonKind::ActionRow,
+                        UiButtonTone::Normal,
+                    ));
                 });
 
                 panel.spawn((
@@ -409,6 +418,15 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         UiButtonKind::ActionRow,
                         UiButtonTone::Normal,
                     ));
+                    actions.spawn((
+                        Button {
+                            text: "Back".to_string(),
+                            ..default()
+                        },
+                        CssID(MULTIPLAYER_BACK_ID.to_string()),
+                        UiButtonKind::ActionRow,
+                        UiButtonTone::Normal,
+                    ));
                 });
 
                 panel.spawn((
@@ -654,6 +672,14 @@ fn spawn_hardcoded_ui(mut commands: Commands, world_gen_config: Option<Res<World
                         ..default()
                     },
                     UiTextTone::Heading,
+                ));
+                panel.spawn((
+                    Paragraph {
+                        text: "|".to_string(),
+                        ..default()
+                    },
+                    CssID(WORLD_GEN_SPINNER_ID.to_string()),
+                    UiTextTone::Darker,
                 ));
                 panel.spawn((
                     ProgressBar {

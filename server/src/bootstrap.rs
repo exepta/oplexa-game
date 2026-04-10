@@ -9,11 +9,16 @@ use bevy::prelude::*;
 use lightyear::connection::server::Start;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use log::info;
-use rand::RngExt;
+use log::{info, warn};
+use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+
+const WORLD_META_FILE: &str = "world.meta.json";
+const LEGACY_SEED_FILE: &str = "seed.txt";
+const LEGACY_SPAWN_FILE: &str = "spawn.txt";
 
 /// Represents bootstrap result used by the `bootstrap` module.
 pub struct BootstrapResult {
@@ -116,6 +121,13 @@ pub struct ServerBootstrapConfig {
     pub bind_addr: SocketAddr,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldMeta {
+    seed: i32,
+    #[serde(default)]
+    spawn_translation: Option<[f32; 3]>,
+}
+
 // ── World preparation helpers ─────────────────────────────────────────────────
 
 /// Runs the `prepare_server_world` routine for prepare server world in the `bootstrap` module.
@@ -130,23 +142,54 @@ fn prepare_server_world(settings: &DedicatedServerSettings) -> (PathBuf, i32, [f
         );
     }
 
-    let seed_file = world_root.join("seed.txt");
-    let world_seed = if let Some(seed) = read_world_seed(&seed_file) {
-        info!("Loaded world seed {} from {:?}", seed, seed_file);
-        seed
-    } else {
-        if let Err(error) = fs::write(&seed_file, settings.world_seed.to_string()) {
-            panic!("Failed to write world seed file {:?}: {}", seed_file, error);
+    let meta_path = world_root.join(WORLD_META_FILE);
+    let seed_file = world_root.join(LEGACY_SEED_FILE);
+    let spawn_file = world_root.join(LEGACY_SPAWN_FILE);
+
+    let world_meta = read_world_meta(&meta_path);
+    let world_seed = match world_meta.as_ref() {
+        Some(meta) => {
+            info!("Loaded world seed {} from {:?}", meta.seed, meta_path);
+            meta.seed
         }
-        info!(
-            "Created world seed {} at {:?}",
-            settings.world_seed, seed_file
-        );
-        settings.world_seed
+        None => {
+            if let Some(seed) = read_legacy_world_seed(&seed_file) {
+                info!("Loaded legacy world seed {} from {:?}", seed, seed_file);
+                seed
+            } else {
+                info!(
+                    "Using world seed {} from server settings",
+                    settings.world_seed
+                );
+                settings.world_seed
+            }
+        }
     };
 
+    let existing_spawn = world_meta
+        .as_ref()
+        .and_then(|meta| meta.spawn_translation)
+        .or_else(|| read_legacy_spawn_translation(&spawn_file));
+
+    if let Some(spawn_translation) = existing_spawn {
+        info!(
+            "Loaded world spawn [{:.2}, {:.2}, {:.2}]",
+            spawn_translation[0], spawn_translation[1], spawn_translation[2]
+        );
+    }
+
     info!("Ensuring spawn chunks are built...");
-    let spawn_translation = ensure_world_spawn_generated(&world_root, world_seed);
+    let generated_spawn = ensure_world_spawn_generated(&world_root, world_seed);
+    let spawn_translation = existing_spawn.unwrap_or(generated_spawn);
+
+    let final_meta = WorldMeta {
+        seed: world_seed,
+        spawn_translation: Some(spawn_translation),
+    };
+    if let Err(error) = write_world_meta(&meta_path, &final_meta) {
+        warn!("Failed to persist world meta {:?}: {}", meta_path, error);
+    }
+
     info!(
         "World ready. Spawn translation: [{:.2}, {:.2}, {:.2}]",
         spawn_translation[0], spawn_translation[1], spawn_translation[2]
@@ -155,14 +198,30 @@ fn prepare_server_world(settings: &DedicatedServerSettings) -> (PathBuf, i32, [f
     (world_root, world_seed, spawn_translation)
 }
 
-/// Reads world seed for the `bootstrap` module.
-fn read_world_seed(path: &Path) -> Option<i32> {
+/// Reads legacy world seed for the `bootstrap` module.
+fn read_legacy_world_seed(path: &Path) -> Option<i32> {
     let text = fs::read_to_string(path).ok()?;
-    if text.contains("random") {
-        let mut random = rand::rng();
-        return Some(random.random());
-    }
     text.trim().parse::<i32>().ok()
+}
+
+fn read_legacy_spawn_translation(path: &Path) -> Option<[f32; 3]> {
+    let text = fs::read_to_string(path).ok()?;
+    let mut parts = text.split_whitespace();
+    let x = parts.next()?.parse::<f32>().ok()?;
+    let y = parts.next()?.parse::<f32>().ok()?;
+    let z = parts.next()?.parse::<f32>().ok()?;
+    Some([x, y, z])
+}
+
+fn read_world_meta(path: &Path) -> Option<WorldMeta> {
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<WorldMeta>(&text).ok()
+}
+
+fn write_world_meta(path: &Path, world_meta: &WorldMeta) -> io::Result<()> {
+    let text = serde_json::to_string_pretty(world_meta)
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    fs::write(path, text)
 }
 
 /// Runs the `normalize_world_name` routine for normalize world name in the `bootstrap` module.

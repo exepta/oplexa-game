@@ -2,6 +2,9 @@ use crate::models::{HostedDrop, HostedPlayer};
 use api::{
     core::{
         config::WorldGenConfig,
+        entities::player::inventory::{
+            InventorySlot, PlayerInventory, PLAYER_INVENTORY_SLOTS, PLAYER_INVENTORY_STACK_MAX,
+        },
         world::{
             biome::registry::BiomeRegistry,
             block::{BlockId, BlockRegistry},
@@ -22,11 +25,33 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool};
 use futures_lite::future;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
 const STREAM_CHUNK_CACHE_LIMIT: usize = 512;
+const PLAYER_SAVE_FILE_NAME: &str = "save.data";
+const LEGACY_PLAYER_SAVE_PREFIX: &str = "save-";
+const LEGACY_PLAYER_SAVE_SUFFIX: &str = ".data";
+const BLOCK_OVERRIDES_FILE_NAME: &str = "blocks.bin";
+const LEGACY_BLOCK_OVERRIDES_FILE_NAME: &str = "blocks.txt";
+const BLOCK_OVERRIDES_MAGIC: [u8; 4] = *b"BOV1";
+const PLAYER_SAVE_MAGIC: [u8; 4] = *b"PINV";
+const PLAYER_SAVE_VERSION_LEGACY: u8 = 1;
+const PLAYER_SAVE_VERSION_POSITION: u8 = 2;
+const PLAYER_SAVE_VERSION: u8 = 3;
+const PLAYER_SAVE_FLAG_HAS_POSITION: u8 = 0x01;
+const PLAYER_SAVE_FLAG_HAS_YAW_PITCH: u8 = 0x02;
+
+/// Player save payload persisted in `world/data/<uuid>/save.data`.
+#[derive(Clone)]
+pub struct PlayerPersistedData {
+    pub translation: [f32; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub inventory_slots: [InventorySlot; PLAYER_INVENTORY_SLOTS],
+}
 
 /// Represents server runtime config used by the `state` module.
 #[derive(Resource)]
@@ -57,6 +82,8 @@ pub struct ServerState {
     pub biome_registry: Arc<BiomeRegistry>,
     pub tree_registry: Arc<TreeRegistry>,
     pub world_gen_config: WorldGenConfig,
+    /// Runtime block edits applied on top of generated chunks.
+    /// Persisted to `blocks.bin` and replayed when chunks are streamed.
     pub block_overrides: HashMap<[i32; 3], u16>,
     pub streamed_chunk_cache: HashMap<IVec2, Vec<u8>>,
     pub streamed_chunk_cache_order: VecDeque<IVec2>,
@@ -82,7 +109,7 @@ impl ServerState {
         let biome_registry = Arc::new(BiomeRegistry::load_from_folder("assets/biomes"));
         let tree_registry = Arc::new(TreeRegistry::load_from_folder("assets/data/trees"));
         let world_gen_config = WorldGenConfig { seed: world_seed };
-        let block_overrides = load_block_overrides(world_root.join("blocks.txt").as_path());
+        let block_overrides = load_block_overrides(world_root.as_path());
         AsyncComputeTaskPool::get_or_init(TaskPool::default);
         Self {
             world_root,
@@ -109,22 +136,94 @@ impl ServerState {
 
     /// Persists block overrides for the `state` module.
     pub fn persist_block_overrides(&self) {
-        let path = self.world_root.join("blocks.txt");
-        let mut lines = self
-            .block_overrides
-            .iter()
-            .map(|(location, block_id)| {
-                format!(
-                    "{} {} {} {}",
-                    location[0], location[1], location[2], block_id
-                )
-            })
-            .collect::<Vec<_>>();
-        lines.sort();
-
-        if let Err(error) = fs::write(&path, lines.join("\n")) {
+        let path = self.world_root.join(BLOCK_OVERRIDES_FILE_NAME);
+        if let Err(error) = persist_block_overrides_binary(path.as_path(), &self.block_overrides) {
             log::warn!("Failed to persist block overrides {:?}: {}", path, error);
         }
+    }
+
+    /// Loads persisted player data for the `state` module.
+    pub fn load_player_data(&self, client_uuid: &str) -> Option<PlayerPersistedData> {
+        let path = self.player_save_path(client_uuid);
+        if let Some(data) = read_player_data_from_file(path.as_path()) {
+            return Some(data);
+        }
+
+        // Migration path from legacy `<world>/data/save-<uuid>.data` format.
+        let legacy_path = self.legacy_player_save_path(client_uuid);
+        let data = read_player_data_from_file(legacy_path.as_path())?;
+        self.persist_player_data(
+            client_uuid,
+            data.translation,
+            data.yaw,
+            data.pitch,
+            &data.inventory_slots,
+        );
+        let _ = fs::remove_file(legacy_path);
+        Some(data)
+    }
+
+    /// Persists player data for the `state` module.
+    pub fn persist_player_data(
+        &self,
+        client_uuid: &str,
+        translation: [f32; 3],
+        yaw: f32,
+        pitch: f32,
+        inventory_slots: &[InventorySlot; PLAYER_INVENTORY_SLOTS],
+    ) {
+        let path = self.player_save_path(client_uuid);
+        let Some(parent) = path.parent() else {
+            return;
+        };
+
+        if let Err(error) = fs::create_dir_all(parent) {
+            log::warn!(
+                "Failed to prepare player save folder for uuid='{}': {}",
+                client_uuid,
+                error
+            );
+            return;
+        }
+
+        let tmp_path = parent.join("save.data.tmp");
+        let payload = encode_player_blob(translation, yaw, pitch, inventory_slots);
+        if let Err(error) = fs::write(&tmp_path, payload) {
+            log::warn!(
+                "Failed to write temporary player save for uuid='{}': {}",
+                client_uuid,
+                error
+            );
+            return;
+        }
+
+        if let Err(error) = fs::rename(&tmp_path, &path) {
+            log::warn!(
+                "Failed to persist player save for uuid='{}': {}",
+                client_uuid,
+                error
+            );
+            return;
+        }
+
+        // Best-effort cleanup from legacy one-file naming.
+        let _ = fs::remove_file(self.legacy_player_save_path(client_uuid));
+    }
+
+    /// Returns player save path for the `state` module.
+    fn player_save_path(&self, client_uuid: &str) -> PathBuf {
+        self.world_root
+            .join("data")
+            .join(sanitize_player_path_segment(client_uuid))
+            .join(PLAYER_SAVE_FILE_NAME)
+    }
+
+    /// Returns legacy player save path for the `state` module.
+    fn legacy_player_save_path(&self, client_uuid: &str) -> PathBuf {
+        self.world_root.join("data").join(format!(
+            "{LEGACY_PLAYER_SAVE_PREFIX}{}{LEGACY_PLAYER_SAVE_SUFFIX}",
+            sanitize_player_path_segment(client_uuid)
+        ))
     }
 
     /// Runs the `queue_chunk_for_stream` routine for queue chunk for stream in the `state` module.
@@ -471,7 +570,97 @@ fn apply_chunk_overrides_snapshot(overrides: &[(usize, usize, usize, u16)], chun
 }
 
 /// Loads block overrides for the `state` module.
-fn load_block_overrides(path: &Path) -> HashMap<[i32; 3], u16> {
+fn load_block_overrides(world_root: &Path) -> HashMap<[i32; 3], u16> {
+    let binary_path = world_root.join(BLOCK_OVERRIDES_FILE_NAME);
+    if let Some(overrides) = read_block_overrides_binary(binary_path.as_path()) {
+        return overrides;
+    }
+
+    let legacy_path = world_root.join(LEGACY_BLOCK_OVERRIDES_FILE_NAME);
+    let overrides = read_legacy_block_overrides_text(legacy_path.as_path());
+    if !overrides.is_empty() {
+        if let Err(error) = persist_block_overrides_binary(binary_path.as_path(), &overrides) {
+            log::warn!(
+                "Failed to migrate legacy block overrides {:?} -> {:?}: {}",
+                legacy_path,
+                binary_path,
+                error
+            );
+        } else {
+            let _ = fs::remove_file(legacy_path.as_path());
+        }
+    }
+    overrides
+}
+
+fn read_block_overrides_binary(path: &Path) -> Option<HashMap<[i32; 3], u16>> {
+    let bytes = fs::read(path).ok()?;
+    if bytes.len() < 8 || bytes[0..4] != BLOCK_OVERRIDES_MAGIC {
+        return None;
+    }
+
+    let count = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+    let entry_size = 14usize;
+    let expected = 8usize.saturating_add(count.saturating_mul(entry_size));
+    if bytes.len() < expected {
+        return None;
+    }
+
+    let mut overrides = HashMap::with_capacity(count);
+    let mut offset = 8usize;
+    for _ in 0..count {
+        let x = i32::from_le_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ]);
+        let y = i32::from_le_bytes([
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ]);
+        let z = i32::from_le_bytes([
+            bytes[offset + 8],
+            bytes[offset + 9],
+            bytes[offset + 10],
+            bytes[offset + 11],
+        ]);
+        let block_id = u16::from_le_bytes([bytes[offset + 12], bytes[offset + 13]]);
+        overrides.insert([x, y, z], block_id);
+        offset += entry_size;
+    }
+    Some(overrides)
+}
+
+fn persist_block_overrides_binary(
+    path: &Path,
+    overrides: &HashMap<[i32; 3], u16>,
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut entries = overrides.iter().collect::<Vec<_>>();
+    entries.sort_by_key(|([x, y, z], _)| (*x, *y, *z));
+
+    let mut payload = Vec::with_capacity(8 + entries.len().saturating_mul(14));
+    payload.extend_from_slice(&BLOCK_OVERRIDES_MAGIC);
+    payload.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    for (location, block_id) in entries {
+        payload.extend_from_slice(&location[0].to_le_bytes());
+        payload.extend_from_slice(&location[1].to_le_bytes());
+        payload.extend_from_slice(&location[2].to_le_bytes());
+        payload.extend_from_slice(&block_id.to_le_bytes());
+    }
+
+    let tmp_path = path.with_extension("bin.tmp");
+    fs::write(&tmp_path, payload)?;
+    fs::rename(tmp_path, path)
+}
+
+fn read_legacy_block_overrides_text(path: &Path) -> HashMap<[i32; 3], u16> {
     let Ok(contents) = fs::read_to_string(path) else {
         return HashMap::new();
     };
@@ -487,4 +676,210 @@ fn load_block_overrides(path: &Path) -> HashMap<[i32; 3], u16> {
             Some(([x, y, z], block_id))
         })
         .collect()
+}
+
+fn read_player_data_from_file(path: &Path) -> Option<PlayerPersistedData> {
+    let bytes = fs::read(path).ok()?;
+    if let Ok(decoded) = decode_player_blob(&bytes) {
+        return Some(decoded);
+    }
+
+    let text = std::str::from_utf8(&bytes).ok()?;
+    let (translation, yaw, pitch) = parse_legacy_player_pose_text(text)?;
+    Some(PlayerPersistedData {
+        translation,
+        yaw,
+        pitch,
+        inventory_slots: [InventorySlot::default(); PLAYER_INVENTORY_SLOTS],
+    })
+}
+
+fn parse_legacy_player_pose_text(text: &str) -> Option<([f32; 3], f32, f32)> {
+    let mut parts = text.split_whitespace();
+    let x = parts.next()?.parse::<f32>().ok()?;
+    let y = parts.next()?.parse::<f32>().ok()?;
+    let z = parts.next()?.parse::<f32>().ok()?;
+    let yaw = parts
+        .next()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    let pitch = parts
+        .next()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    Some(([x, y, z], yaw, pitch))
+}
+
+fn encode_player_blob(
+    translation: [f32; 3],
+    yaw: f32,
+    pitch: f32,
+    inventory_slots: &[InventorySlot; PLAYER_INVENTORY_SLOTS],
+) -> Vec<u8> {
+    let inventory = PlayerInventory {
+        slots: *inventory_slots,
+    };
+    encode_inventory_blob(&inventory, Some(translation), Some([yaw, pitch]))
+}
+
+fn encode_inventory_blob(
+    inventory: &PlayerInventory,
+    position: Option<[f32; 3]>,
+    yaw_pitch: Option<[f32; 2]>,
+) -> Vec<u8> {
+    let has_position = position.is_some();
+    let has_yaw_pitch = yaw_pitch.is_some();
+    let mut out = Vec::with_capacity(8 + PLAYER_INVENTORY_SLOTS * 4 + 20);
+    out.extend_from_slice(&PLAYER_SAVE_MAGIC);
+    out.push(PLAYER_SAVE_VERSION);
+    out.extend_from_slice(&(PLAYER_INVENTORY_SLOTS as u16).to_le_bytes());
+    let mut flags = 0u8;
+    if has_position {
+        flags |= PLAYER_SAVE_FLAG_HAS_POSITION;
+    }
+    if has_yaw_pitch {
+        flags |= PLAYER_SAVE_FLAG_HAS_YAW_PITCH;
+    }
+    out.push(flags);
+
+    for slot in inventory.slots {
+        out.extend_from_slice(&slot.item_id.to_le_bytes());
+        out.extend_from_slice(&slot.count.to_le_bytes());
+    }
+
+    if let Some([x, y, z]) = position {
+        out.extend_from_slice(&x.to_le_bytes());
+        out.extend_from_slice(&y.to_le_bytes());
+        out.extend_from_slice(&z.to_le_bytes());
+    }
+    if let Some([saved_yaw, saved_pitch]) = yaw_pitch {
+        out.extend_from_slice(&saved_yaw.to_le_bytes());
+        out.extend_from_slice(&saved_pitch.to_le_bytes());
+    }
+
+    out
+}
+
+fn decode_player_blob(blob: &[u8]) -> Result<PlayerPersistedData, &'static str> {
+    if blob.len() < 7 {
+        return Err("file too small");
+    }
+
+    if blob[0..4] != PLAYER_SAVE_MAGIC {
+        return Err("magic mismatch");
+    }
+
+    let version = blob[4];
+    if version != PLAYER_SAVE_VERSION
+        && version != PLAYER_SAVE_VERSION_POSITION
+        && version != PLAYER_SAVE_VERSION_LEGACY
+    {
+        return Err("unsupported version");
+    }
+
+    let slot_count = u16::from_le_bytes([blob[5], blob[6]]) as usize;
+    let header_len = if version == PLAYER_SAVE_VERSION || version == PLAYER_SAVE_VERSION_POSITION {
+        8usize
+    } else {
+        7usize
+    };
+    let expected_len = header_len + slot_count.saturating_mul(4);
+    if blob.len() < expected_len {
+        return Err("truncated payload");
+    }
+
+    let mut inventory = PlayerInventory::default();
+    let copy_count = slot_count.min(PLAYER_INVENTORY_SLOTS);
+    let mut offset = header_len;
+    for index in 0..copy_count {
+        let item_id = u16::from_le_bytes([blob[offset], blob[offset + 1]]);
+        let count = u16::from_le_bytes([blob[offset + 2], blob[offset + 3]]);
+        offset += 4;
+        if item_id == 0 || count == 0 {
+            inventory.slots[index] = InventorySlot::default();
+            continue;
+        }
+        inventory.slots[index] = InventorySlot {
+            item_id,
+            count: count.min(PLAYER_INVENTORY_STACK_MAX),
+        };
+    }
+
+    let mut translation = [0.0, 0.0, 0.0];
+    let mut yaw = 0.0;
+    let mut pitch = 0.0;
+    if version == PLAYER_SAVE_VERSION || version == PLAYER_SAVE_VERSION_POSITION {
+        let flags = blob[7];
+        if (flags & PLAYER_SAVE_FLAG_HAS_POSITION) != 0 {
+            if blob.len() < offset + 12 {
+                return Err("truncated player position");
+            }
+            translation = [
+                f32::from_le_bytes([
+                    blob[offset],
+                    blob[offset + 1],
+                    blob[offset + 2],
+                    blob[offset + 3],
+                ]),
+                f32::from_le_bytes([
+                    blob[offset + 4],
+                    blob[offset + 5],
+                    blob[offset + 6],
+                    blob[offset + 7],
+                ]),
+                f32::from_le_bytes([
+                    blob[offset + 8],
+                    blob[offset + 9],
+                    blob[offset + 10],
+                    blob[offset + 11],
+                ]),
+            ];
+            offset += 12;
+        }
+        if version == PLAYER_SAVE_VERSION && (flags & PLAYER_SAVE_FLAG_HAS_YAW_PITCH) != 0 {
+            if blob.len() < offset + 8 {
+                return Err("truncated yaw/pitch");
+            }
+            yaw = f32::from_le_bytes([
+                blob[offset],
+                blob[offset + 1],
+                blob[offset + 2],
+                blob[offset + 3],
+            ]);
+            pitch = f32::from_le_bytes([
+                blob[offset + 4],
+                blob[offset + 5],
+                blob[offset + 6],
+                blob[offset + 7],
+            ]);
+        }
+    }
+
+    Ok(PlayerPersistedData {
+        translation,
+        yaw,
+        pitch,
+        inventory_slots: inventory.slots,
+    })
+}
+
+/// Sanitizes path segment for player file storage in the `state` module.
+fn sanitize_player_path_segment(raw: &str) -> String {
+    let sanitized = raw
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
 }

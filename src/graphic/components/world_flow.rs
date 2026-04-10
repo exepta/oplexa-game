@@ -108,14 +108,20 @@ fn sync_world_gen_progress(
     }
 
     for (css_id, mut paragraph) in &mut paragraphs {
-        if css_id.0 != WORLD_GEN_CHUNKS_ID {
+        if css_id.0 == WORLD_GEN_CHUNKS_ID {
+            paragraph.text = format!(
+                "Chunks Loaded {} / {}",
+                progress_log_state.phase_peak_chunks,
+                metrics.total_chunks
+            );
             continue;
         }
-        paragraph.text = format!(
-            "Chunks Loaded {} / {}",
-            progress_log_state.phase_peak_chunks,
-            metrics.total_chunks
-        );
+
+        if css_id.0 == WORLD_GEN_SPINNER_ID {
+            const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
+            let frame = ((time.elapsed_secs() * 12.0) as usize) % SPINNER.len();
+            paragraph.text = format!("Loading {}  {:.0}%", SPINNER[frame], animation.displayed_pct);
+        }
     }
 }
 
