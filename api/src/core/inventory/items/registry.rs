@@ -272,6 +272,62 @@ impl ItemRegistry {
         registry
     }
 
+    /// Ensures one runtime item exists and is bound to the given block id.
+    pub fn ensure_runtime_block_item(
+        &mut self,
+        asset_server: &AssetServer,
+        block_registry: &BlockRegistry,
+        block_id: BlockId,
+    ) -> Option<ItemId> {
+        if block_id == 0 {
+            return None;
+        }
+
+        if self.block_to_item.len() <= block_id as usize {
+            self.block_to_item.resize(block_registry.defs.len(), None);
+        }
+        if let Some(existing) = self
+            .block_to_item
+            .get(block_id as usize)
+            .and_then(|entry| *entry)
+        {
+            return Some(existing);
+        }
+
+        let block_def = block_registry.def_opt(block_id)?;
+        let localized_name = format!("{DEFAULT_ITEM_PROVIDER}:{}", block_def.localized_name);
+        if let Some(existing) = self.id_opt(localized_name.as_str()) {
+            self.bind_block_item(block_id, existing);
+            return Some(existing);
+        }
+
+        let texture_path = block_icon_cache_key(block_id);
+        let image: Handle<Image> = asset_server.load("textures/items/missing.png");
+        let item_id = self.push_item(ItemDef {
+            provider: DEFAULT_ITEM_PROVIDER.to_string(),
+            key: block_def.localized_name.clone(),
+            localized_name,
+            name: normalize_item_name_key(
+                block_def.name.as_str(),
+                block_def.localized_name.as_str(),
+            ),
+            max_stack_size: DEFAULT_ITEM_STACK_SIZE,
+            category: "block".to_string(),
+            texture_path,
+            image,
+            material: block_def.material.clone(),
+            block_item: true,
+            placeable: true,
+            groups: Vec::new(),
+            tags: vec!["block".to_string()],
+            rarity: "common".to_string(),
+            tool: None,
+            world_drop: ItemWorldDropConfig { pickupable: true },
+        });
+        self.bind_block_item(block_id, item_id);
+        Some(item_id)
+    }
+
     /// Creates with empty for the `core::inventory::items::registry` module.
     fn new_with_empty(block_registry: &BlockRegistry) -> Self {
         let mut defs = Vec::with_capacity(64);

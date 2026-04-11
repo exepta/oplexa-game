@@ -1,0 +1,12 @@
+{
+  "type": "building_shaped",
+  "space": "2x1",
+  "build_time": 4,
+  "model": "work_table",
+  "requirements": [
+    {
+      "group": "logs",
+      "count": 2
+    }
+  ]
+}

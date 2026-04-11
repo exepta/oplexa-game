@@ -8,13 +8,19 @@ pub struct UiInteractionState {
     pub inventory_open: bool,
     pub menu_open: bool,
     pub chat_open: bool,
+    pub structure_menu_open: bool,
+    pub workbench_menu_open: bool,
 }
 
 impl UiInteractionState {
     /// Runs the `blocks_game_input` routine for blocks game input in the `core::ui` module.
     #[inline]
     pub fn blocks_game_input(&self) -> bool {
-        self.inventory_open || self.menu_open || self.chat_open
+        self.inventory_open
+            || self.menu_open
+            || self.chat_open
+            || self.structure_menu_open
+            || self.workbench_menu_open
     }
 }
 

@@ -1,4 +1,5 @@
 use crate::core::inventory::items::ItemRegistry;
+use crate::core::inventory::recipe::BUILDING_SHAPED_RECIPE_KIND;
 use crate::core::inventory::recipe::registry::{RecipeRegistry, RecipeTypeRegistry};
 use crate::core::inventory::recipe::types::{
     NamespacedKey, RecipeCraftingEntry, RecipeDefinition, RecipeResultTemplateDef,
@@ -13,10 +14,13 @@ use std::path::{Path, PathBuf};
 #[derive(Deserialize)]
 struct RecipeJson {
     #[serde(default, rename = "type")]
-    recipe_kind: String,
+    legacy_recipe_kind: String,
+    #[serde(default = "default_build_time_secs", rename = "build_time")]
+    build_time_secs: f32,
     #[serde(default)]
     crafting: Vec<RecipeCraftingEntryJson>,
-    result: RecipeResultJson,
+    #[serde(default)]
+    result: Option<RecipeResultJson>,
 }
 
 /// Represents recipe crafting entry json used by the `core::inventory::recipe::loader` module.
@@ -24,6 +28,8 @@ struct RecipeJson {
 struct RecipeCraftingEntryJson {
     #[serde(rename = "type")]
     recipe_type: String,
+    #[serde(default)]
+    format: String,
     #[serde(default)]
     data: Value,
 }
@@ -39,6 +45,17 @@ struct RecipeResultJson {
     group: String,
     #[serde(default = "default_result_count")]
     count: u16,
+}
+
+impl Default for RecipeResultJson {
+    fn default() -> Self {
+        Self {
+            item: String::new(),
+            slot: None,
+            group: String::new(),
+            count: default_result_count(),
+        }
+    }
 }
 
 /// Loads recipe registry for the `core::inventory::recipe::loader` module.
@@ -63,6 +80,13 @@ pub fn load_recipe_registry(
             warn!("Invalid recipe JSON '{}'", source_path);
             continue;
         };
+        if recipe_json
+            .legacy_recipe_kind
+            .trim()
+            .eq_ignore_ascii_case(BUILDING_SHAPED_RECIPE_KIND)
+        {
+            continue;
+        }
 
         let mut crafting = Vec::with_capacity(recipe_json.crafting.len());
         for raw_entry in recipe_json.crafting {
@@ -79,8 +103,13 @@ pub fn load_recipe_registry(
                     source_path, recipe_type
                 );
             }
+            let format = normalize_crafting_format(
+                raw_entry.format.as_str(),
+                recipe_json.legacy_recipe_kind.as_str(),
+            );
             crafting.push(RecipeCraftingEntry {
                 recipe_type,
+                format,
                 data: raw_entry.data,
             });
         }
@@ -93,23 +122,30 @@ pub fn load_recipe_registry(
             continue;
         }
 
-        let result_count = recipe_json.result.count.max(1);
-        let result = if !recipe_json.result.item.trim().is_empty() {
-            let Some(result_item_id) = item_registry.id_opt(recipe_json.result.item.as_str())
-            else {
+        let Some(result_json) = recipe_json.result else {
+            warn!(
+                "Skipping recipe '{}': result requires either `item` or `slot+group`",
+                source_path
+            );
+            continue;
+        };
+
+        let result_count = result_json.count.max(1);
+        let result = if !result_json.item.trim().is_empty() {
+            let Some(result_item_id) = item_registry.id_opt(result_json.item.as_str()) else {
                 warn!(
                     "Skipping recipe '{}': unknown result item '{}'",
-                    source_path, recipe_json.result.item
+                    source_path, result_json.item
                 );
                 continue;
             };
             RecipeResultTemplateDef::Static {
                 item_id: result_item_id,
-                item_localized_name: recipe_json.result.item,
+                item_localized_name: result_json.item,
                 count: result_count,
             }
-        } else if let Some(slot_index) = recipe_json.result.slot {
-            let result_group = normalize_recipe_group(recipe_json.result.group.as_str());
+        } else if let Some(slot_index) = result_json.slot {
+            let result_group = normalize_recipe_group(result_json.group.as_str());
             if result_group.is_empty() {
                 warn!(
                     "Skipping recipe '{}': dynamic result requires non-empty `result.group`",
@@ -132,7 +168,7 @@ pub fn load_recipe_registry(
 
         recipes.push(RecipeDefinition {
             source_path,
-            recipe_kind: recipe_json.recipe_kind,
+            build_time_secs: recipe_json.build_time_secs.max(0.0),
             crafting,
             result,
         });
@@ -174,6 +210,32 @@ fn default_result_count() -> u16 {
 }
 
 #[inline]
+fn default_build_time_secs() -> f32 {
+    0.0
+}
+
+#[inline]
 fn normalize_recipe_group(raw: &str) -> String {
     raw.trim().to_ascii_lowercase()
+}
+
+#[inline]
+fn normalize_crafting_format(raw_format: &str, legacy_kind: &str) -> String {
+    let normalized = raw_format.trim().to_ascii_lowercase();
+    if !normalized.is_empty() {
+        if normalized == "crafting_shapeless" {
+            return "shapeless".to_string();
+        }
+        if normalized == "crafting_shaped" {
+            return "shaped".to_string();
+        }
+        return normalized;
+    }
+    if legacy_kind
+        .trim()
+        .eq_ignore_ascii_case("crafting_shapeless")
+    {
+        return "shapeless".to_string();
+    }
+    "shaped".to_string()
 }

@@ -200,6 +200,14 @@ fn sample_chunk_debug_stats(
         .map_or(0.0, |t| t.chunk_ready_latency_p95_ms);
 }
 
+#[derive(SystemParam)]
+struct LookedBlockDeps<'w, 's> {
+    selection_state: Res<'w, SelectionState>,
+    block_registry: Res<'w, BlockRegistry>,
+    language: Res<'w, ClientLanguageState>,
+    q_structures: Query<'w, 's, &'static crate::logic::events::block_event_handler::PlacedStructureMetadata>,
+}
+
 /// Synchronizes system last ui for the `graphic::components::debug_overlay` module.
 #[allow(clippy::too_many_arguments)]
 fn sync_system_last_ui(
@@ -214,12 +222,16 @@ fn sync_system_last_ui(
     gpu_adapter: Option<Res<RenderAdapterInfo>>,
     world_gen_config: Res<WorldGenConfig>,
     biomes: Res<BiomeRegistry>,
-    selection_state: Res<SelectionState>,
-    block_registry: Res<BlockRegistry>,
-    language: Res<ClientLanguageState>,
+    looked_block_deps: LookedBlockDeps,
     player: Query<(&Transform, Option<&FpsController>), With<Player>>,
     mut paragraphs: Query<(&CssID, &mut Paragraph)>,
 ) {
+    let LookedBlockDeps {
+        selection_state,
+        block_registry,
+        language,
+        q_structures,
+    } = looked_block_deps;
     if !overlay.show {
         return;
     }
@@ -310,17 +322,32 @@ fn sync_system_last_ui(
             }
         })
         .unwrap_or_else(|| not_available.clone());
-    let looked_block_name = selection_state
-        .hit
-        .map(|hit| {
-            let id = hit.block_id;
-            if id == 0 {
-                language.as_ref().localize_name_key("KEY_AIR")
-            } else {
-                localize_block_name_for_id(language.as_ref(), &block_registry, id)
-            }
-        })
-        .unwrap_or_else(|| not_available.clone());
+    let looked_block_name = if let Some(hit) = selection_state.hit {
+        let id = hit.block_id;
+        if id == 0 {
+            language.as_ref().localize_name_key("KEY_AIR")
+        } else {
+            localize_block_name_for_id(language.as_ref(), &block_registry, id)
+        }
+    } else if let Some(structure_hit) = selection_state.structure_hit {
+        q_structures
+            .get(structure_hit.entity)
+            .ok()
+            .map(|meta| {
+                if let Some(registration) = meta.registration.as_ref() {
+                    if let Some(block_id) = registration.block_id {
+                        localize_block_name_for_id(language.as_ref(), &block_registry, block_id)
+                    } else {
+                        language.as_ref().localize_name_key(registration.name.as_str())
+                    }
+                } else {
+                    meta.recipe_name.clone()
+                }
+            })
+            .unwrap_or_else(|| not_available.clone())
+    } else {
+        not_available.clone()
+    };
 
     for (css_id, mut paragraph) in &mut paragraphs {
         paragraph.text = match css_id.0.as_str() {

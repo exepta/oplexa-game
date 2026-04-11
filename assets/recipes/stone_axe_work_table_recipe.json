@@ -1,0 +1,33 @@
+{
+  "build_time": 5,
+  "crafting": [
+    {
+      "type": "oplexa:work_table_crafting",
+      "format": "shaped",
+      "data": {
+        "craft": {
+          "3": {
+            "item": "oplexa:string",
+            "count": 1
+          },
+          "4": {
+            "item": "oplexa:stick",
+            "count": 2
+          },
+          "5": {
+            "item": "oplexa:cobble_stone_block",
+            "count": 1
+          },
+          "6": {
+            "item": "oplexa:cobble_stone_block",
+            "count": 1
+          }
+        }
+      }
+    }
+  ],
+  "result": {
+    "item": "oplexa:stone_axe",
+    "count": 1
+  }
+}

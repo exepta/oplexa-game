@@ -9,7 +9,9 @@ use crate::core::entities::player::inventory::{
 };
 use crate::core::entities::player::{FpsController, GameMode, GameModeState, Player};
 use crate::core::events::ui_events::{
-    ConnectToServerRequest, CraftHandCraftedRequest, DisconnectFromServerRequest, DropItemRequest,
+    ConnectToServerRequest, CraftHandCraftedRequest, CraftWorkTableRequest,
+    DisconnectFromServerRequest, DropItemRequest, OpenStructureBuildMenuRequest,
+    OpenWorkbenchMenuRequest,
 };
 use crate::core::inventory::creative_panel::{
     CREATIVE_PANEL_COLUMNS, CREATIVE_PANEL_PAGE_SIZE, CreativePanelState,
@@ -19,7 +21,10 @@ use crate::core::inventory::items::{
     player_drop_spawn_motion, player_drop_world_location, spawn_player_dropped_item_stack,
 };
 use crate::core::inventory::recipe::{
-    HAND_CRAFTED_INPUT_SLOTS, HandCraftedState, RecipeRegistry, RecipeTypeRegistry, ResolvedRecipe,
+    ActiveStructurePlacementState, ActiveStructureRecipeState, BuildingMaterialRequirementSource,
+    BuildingStructureRecipe, BuildingStructureRecipeRegistry, HAND_CRAFTED_INPUT_SLOTS,
+    HandCraftedState, RecipeRegistry, RecipeTypeRegistry, ResolvedRecipe,
+    WORK_TABLE_CRAFTING_INPUT_SLOTS, WorkTableCraftingState,
 };
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
 use crate::core::states::states::{
@@ -134,11 +139,39 @@ const INVENTORY_TOOLTIP_KEY_ID: &str = "inventory-tooltip-key";
 const INVENTORY_CURSOR_BADGE_ID: &str = "inventory-cursor-badge";
 const INVENTORY_TRASH_BUTTON_ID: &str = "inventory-trash-button";
 const RECIPE_PREVIEW_TITLE_ID: &str = "recipe-preview-title";
+const RECIPE_PREVIEW_MODE_ID: &str = "recipe-preview-mode";
+const RECIPE_PREVIEW_TAB_TOOLTIP_ID: &str = "recipe-preview-tab-tooltip";
+const RECIPE_PREVIEW_TAB_PREV_ID: &str = "recipe-preview-tab-prev";
+const RECIPE_PREVIEW_TAB_NEXT_ID: &str = "recipe-preview-tab-next";
+const RECIPE_PREVIEW_TAB_PREFIX: &str = "recipe-preview-tab-";
+const RECIPE_PREVIEW_TAB_ICON_PREFIX: &str = "recipe-preview-tab-icon-";
 const RECIPE_PREVIEW_INPUT_FRAME_PREFIX: &str = "recipe-preview-input-frame-";
 const RECIPE_PREVIEW_INPUT_BADGE_PREFIX: &str = "recipe-preview-input-badge-";
 const RECIPE_PREVIEW_RESULT_FRAME_ID: &str = "recipe-preview-result-frame";
 const RECIPE_PREVIEW_RESULT_BADGE_ID: &str = "recipe-preview-result-badge";
 const RECIPE_PREVIEW_FILL_ID: &str = "recipe-preview-fill";
+const RECIPE_PREVIEW_INPUT_SLOTS: usize = WORK_TABLE_CRAFTING_INPUT_SLOTS;
+const RECIPE_PREVIEW_TABS_PER_PAGE: usize = 4;
+const STRUCTURE_BUILD_WORKBENCH_ID: &str = "structure-build-workbench";
+const STRUCTURE_BUILD_HINT_ID: &str = "structure-build-hint";
+const WORKBENCH_RECIPE_TITLE_ID: &str = "workbench-recipe-title";
+const WORKBENCH_CRAFT_FRAME_PREFIX: &str = "workbench-craft-frame-";
+const WORKBENCH_CRAFT_BADGE_PREFIX: &str = "workbench-craft-badge-";
+const WORKBENCH_RESULT_FRAME_ID: &str = "workbench-result-frame";
+const WORKBENCH_RESULT_BADGE_ID: &str = "workbench-result-badge";
+const WORKBENCH_RESULT_TIME_ID: &str = "workbench-result-time";
+const WORKBENCH_RESULT_PROGRESS_ID: &str = "workbench-result-progress";
+const WORKBENCH_TOOL_FRAME_PREFIX: &str = "workbench-tool-frame-";
+const WORKBENCH_TOOL_BADGE_PREFIX: &str = "workbench-tool-badge-";
+const WORKBENCH_PLAYER_INVENTORY_FRAME_PREFIX: &str = "workbench-player-inventory-frame-";
+const WORKBENCH_PLAYER_INVENTORY_BADGE_PREFIX: &str = "workbench-player-inventory-badge-";
+const WORKBENCH_ITEMS_TOTAL_ID: &str = "workbench-items-total";
+const WORKBENCH_ITEMS_PAGE_ID: &str = "workbench-items-page";
+const WORKBENCH_ITEMS_PREV_ID: &str = "workbench-items-prev";
+const WORKBENCH_ITEMS_NEXT_ID: &str = "workbench-items-next";
+const WORKBENCH_ITEMS_SLOT_PREFIX: &str = "workbench-items-slot-";
+const WORKBENCH_RECIPE_HINT_ID: &str = "workbench-recipe-hint";
+const WORKBENCH_TRASH_BUTTON_ID: &str = "workbench-trash-button";
 const CREATIVE_PANEL_TOTAL_ID: &str = "creative-panel-total";
 const CREATIVE_PANEL_PAGE_ID: &str = "creative-panel-page";
 const CREATIVE_PANEL_PREV_ID: &str = "creative-panel-prev";
@@ -244,6 +277,21 @@ struct HotbarSelectionTooltipText;
 /// Represents player inventory root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct PlayerInventoryRoot;
+/// Represents structure build root used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct StructureBuildRoot;
+/// Represents workbench recipe root used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct WorkbenchRecipeRoot;
+/// Represents workbench recipe main panel used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct WorkbenchRecipeMainPanel;
+/// Represents workbench recipe player inventory panel used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct WorkbenchRecipeInventoryPanel;
+/// Represents workbench recipe item grid root used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct WorkbenchRecipeItemGridRoot;
 /// Represents inventory main panel used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct InventoryMainPanel;
@@ -268,6 +316,9 @@ struct RecipePreviewDialogRoot;
 /// Represents recipe preview dialog panel used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct RecipePreviewDialogPanel;
+/// Represents recipe preview input grid used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct RecipePreviewInputGrid;
 /// Represents creative panel grid root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct CreativePanelGridRoot;
@@ -280,6 +331,7 @@ struct DebugOverlayRoot;
 enum UiButtonKind {
     Action,
     ActionRow,
+    RecipeTab,
     Card,
     InventorySlot,
     InventoryResultSlot,
@@ -415,6 +467,54 @@ struct PlayerInventoryUiState {
     open: bool,
 }
 
+/// Represents structure build menu state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+struct StructureBuildMenuState {
+    open: bool,
+}
+
+/// Represents workbench recipe menu state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+struct WorkbenchRecipeMenuState {
+    open: bool,
+}
+
+/// Represents workbench crafting progress state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Clone)]
+struct WorkbenchCraftProgressState {
+    active: bool,
+    elapsed_secs: f32,
+    duration_secs: f32,
+    recipe_source_path: String,
+}
+
+impl Default for WorkbenchCraftProgressState {
+    /// Runs the `default` routine for default in the `graphic::hardcoded_ui` module.
+    fn default() -> Self {
+        Self {
+            active: false,
+            elapsed_secs: 0.0,
+            duration_secs: 0.0,
+            recipe_source_path: String::new(),
+        }
+    }
+}
+
+/// Represents workbench tool slots state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Clone, Copy)]
+struct WorkbenchToolSlotsState {
+    slots: [InventorySlot; 5],
+}
+
+impl Default for WorkbenchToolSlotsState {
+    /// Runs the `default` routine for default in the `graphic::hardcoded_ui` module.
+    fn default() -> Self {
+        Self {
+            slots: [InventorySlot::default(); 5],
+        }
+    }
+}
+
 /// Represents inventory cursor item state used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct InventoryCursorItemState {
@@ -422,10 +522,32 @@ struct InventoryCursorItemState {
 }
 
 /// Represents recipe preview dialog state used by the `graphic::hardcoded_ui` module.
-#[derive(Resource, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecipePreviewCraftingType {
+    HandCrafted,
+    WorkTable,
+}
+
+/// Represents recipe preview dialog state used by the `graphic::hardcoded_ui` module.
+#[derive(Debug, Clone)]
+struct RecipePreviewVariant {
+    crafting_type: RecipePreviewCraftingType,
+    input_slot_count: usize,
+    input_slots: [InventorySlot; RECIPE_PREVIEW_INPUT_SLOTS],
+    input_slot_alternatives: [Vec<ItemId>; RECIPE_PREVIEW_INPUT_SLOTS],
+    result_slot: InventorySlot,
+}
+
+/// Represents recipe preview dialog state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Clone)]
 struct RecipePreviewDialogState {
     open: bool,
-    input_slots: [InventorySlot; HAND_CRAFTED_INPUT_SLOTS],
+    variants: Vec<RecipePreviewVariant>,
+    selected_variant_index: usize,
+    tab_page: usize,
+    crafting_type: Option<RecipePreviewCraftingType>,
+    input_slot_count: usize,
+    input_slots: [InventorySlot; RECIPE_PREVIEW_INPUT_SLOTS],
     result_slot: InventorySlot,
 }
 
@@ -434,7 +556,12 @@ impl Default for RecipePreviewDialogState {
     fn default() -> Self {
         Self {
             open: false,
-            input_slots: [InventorySlot::default(); HAND_CRAFTED_INPUT_SLOTS],
+            variants: Vec::new(),
+            selected_variant_index: 0,
+            tab_page: 0,
+            crafting_type: None,
+            input_slot_count: 0,
+            input_slots: [InventorySlot::default(); RECIPE_PREVIEW_INPUT_SLOTS],
             result_slot: InventorySlot::default(),
         }
     }
@@ -668,6 +795,10 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<WorldUnloadUiState>()
             .init_resource::<PauseMenuState>()
             .init_resource::<PlayerInventoryUiState>()
+            .init_resource::<StructureBuildMenuState>()
+            .init_resource::<WorkbenchRecipeMenuState>()
+            .init_resource::<WorkbenchCraftProgressState>()
+            .init_resource::<WorkbenchToolSlotsState>()
             .init_resource::<InventoryCursorItemState>()
             .init_resource::<RecipePreviewDialogState>()
             .init_resource::<CreativePanelUiState>()
@@ -885,6 +1016,14 @@ impl Plugin for HardcodedUiPlugin {
             .add_systems(
                 Update,
                 (
+                    handle_open_structure_build_menu_request.in_set(InGameInventoryUiSet::Input),
+                    handle_open_workbench_recipe_menu_request.in_set(InGameInventoryUiSet::Input),
+                    handle_structure_build_menu_input.in_set(InGameInventoryUiSet::Input),
+                    handle_workbench_recipe_menu_input.in_set(InGameInventoryUiSet::Input),
+                    handle_workbench_recipe_menu_navigation.in_set(InGameInventoryUiSet::Input),
+                    handle_workbench_recipe_menu_item_clicks.in_set(InGameInventoryUiSet::Input),
+                    tick_workbench_craft_progress.in_set(InGameInventoryUiSet::Input),
+                    rotate_structure_preview_with_scroll.in_set(InGameInventoryUiSet::Input),
                     toggle_player_inventory_ui.in_set(InGameInventoryUiSet::Input),
                     sync_creative_panel_state_from_registry.in_set(InGameInventoryUiSet::Input),
                     handle_creative_panel_navigation.in_set(InGameInventoryUiSet::Input),
@@ -900,6 +1039,8 @@ impl Plugin for HardcodedUiPlugin {
             .add_systems(
                 Update,
                 (
+                    sync_structure_build_menu_ui.in_set(InGameInventoryUiSet::Sync),
+                    sync_workbench_recipe_menu_ui.in_set(InGameInventoryUiSet::Sync),
                     sync_player_inventory_ui.in_set(InGameInventoryUiSet::Sync),
                     sync_creative_panel_ui.in_set(InGameInventoryUiSet::Sync),
                     sync_inventory_cursor_item_ui.in_set(InGameInventoryUiSet::Sync),
@@ -919,6 +1060,8 @@ impl Plugin for HardcodedUiPlugin {
                 (
                     close_chat_ui_on_exit,
                     close_player_inventory_ui,
+                    close_structure_build_menu_ui,
+                    close_workbench_recipe_menu_ui,
                     persist_inventory_on_world_exit,
                     clear_inventory_after_world_exit,
                 )
@@ -954,6 +1097,8 @@ include!("components/chat.rs");
 include!("components/pause_menu.rs");
 include!("components/inventory.rs");
 include!("components/inventory_creative.rs");
+include!("components/structure_builder.rs");
+include!("components/workbench.rs");
 include!("components/inventory_persistence.rs");
 include!("components/ui_interaction_sync.rs");
 include!("components/debug_overlay.rs");

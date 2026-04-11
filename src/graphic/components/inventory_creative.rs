@@ -1,15 +1,17 @@
 use api::handlers::inventory::apply_creative_panel_click;
 
-/// Represents recipe preview hand crafted data json used by the `graphic::components::inventory_creative` module.
+/// Represents recipe preview crafting data json used by the `graphic::components::inventory_creative` module.
 #[derive(Deserialize)]
-struct RecipePreviewHandCraftedDataJson {
+struct RecipePreviewCraftDataJson {
     #[serde(default)]
-    craft: std::collections::HashMap<String, RecipePreviewHandCraftedEntryJson>,
+    craft: std::collections::HashMap<String, RecipePreviewCraftEntryJson>,
+    #[serde(default)]
+    ingredients: Vec<RecipePreviewCraftEntryJson>,
 }
 
-/// Represents recipe preview hand crafted entry json used by the `graphic::components::inventory_creative` module.
-#[derive(Deserialize)]
-struct RecipePreviewHandCraftedEntryJson {
+/// Represents recipe preview crafting entry json used by the `graphic::components::inventory_creative` module.
+#[derive(Deserialize, Clone)]
+struct RecipePreviewCraftEntryJson {
     #[serde(default)]
     item: String,
     #[serde(default)]
@@ -149,6 +151,7 @@ fn sync_creative_panel_ui(
     mut images: ResMut<Assets<Image>>,
     mut paragraphs: Query<(&CssID, &mut Paragraph)>,
     mut buttons: Query<(&CssID, &mut Button, &mut UiButtonTone), With<Button>>,
+    mut button_visibility: Query<(&CssID, &mut Visibility), With<Button>>,
 ) {
     for (css_id, mut paragraph) in &mut paragraphs {
         if css_id.0 == CREATIVE_PANEL_TOTAL_ID {
@@ -201,6 +204,17 @@ fn sync_creative_panel_ui(
         }
     }
 
+    let show_trash = matches!(game_mode.0, GameMode::Creative);
+    for (css_id, mut visibility) in &mut button_visibility {
+        if css_id.0 == INVENTORY_TRASH_BUTTON_ID || css_id.0 == WORKBENCH_TRASH_BUTTON_ID {
+            *visibility = if show_trash {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        }
+    }
+
 }
 
 /// Runs the `open_recipe_preview_dialog_for_item` routine for open recipe preview dialog for item in the `graphic::components::inventory_creative` module.
@@ -210,6 +224,8 @@ fn open_recipe_preview_dialog_for_item(
     item_registry: &ItemRegistry,
     recipe_preview: &mut RecipePreviewDialogState,
 ) -> bool {
+    let mut variants = Vec::new();
+
     for recipe in &recipe_registry.recipes {
         let Some(result_slot) = recipe_preview_result_slot_for_item(recipe, item_id, item_registry)
         else {
@@ -217,70 +233,32 @@ fn open_recipe_preview_dialog_for_item(
         };
 
         for crafting in &recipe.crafting {
-            if crafting.recipe_type.localized_name()
-                != crate::core::inventory::recipe::HAND_CRAFTED_TYPE_LOCALIZED
-            {
-                continue;
-            }
-
-            let Ok(parsed) = serde_json::from_value::<RecipePreviewHandCraftedDataJson>(
-                crafting.data.clone(),
-            ) else {
+            let Some(parsed_preview) =
+                parse_recipe_preview_inputs(recipe, crafting, item_id, item_registry)
+            else {
                 continue;
             };
-            if parsed.craft.is_empty() {
-                continue;
-            }
 
-            let mut input_slots = [InventorySlot::default(); HAND_CRAFTED_INPUT_SLOTS];
-            let mut valid = true;
-
-            for (slot_raw, requirement) in parsed.craft {
-                let Some(slot_index) = slot_raw.parse::<usize>().ok() else {
-                    valid = false;
-                    break;
-                };
-                if slot_index >= HAND_CRAFTED_INPUT_SLOTS {
-                    valid = false;
-                    break;
-                }
-                let requirement_item_id = if !requirement.item.trim().is_empty() {
-                    item_registry.id_opt(requirement.item.as_str())
-                } else if !requirement.group.trim().is_empty() {
-                    resolve_preview_group_requirement_item_id(
-                        recipe,
-                        item_id,
-                        slot_index,
-                        requirement.group.as_str(),
-                        item_registry,
-                    )
-                } else {
-                    None
-                };
-                let Some(requirement_item_id) = requirement_item_id else {
-                    valid = false;
-                    break;
-                };
-                input_slots[slot_index] = InventorySlot {
-                    item_id: requirement_item_id,
-                    count: requirement.count.max(1),
-                };
-            }
-
-            if !valid {
-                continue;
-            }
-
-            recipe_preview.open = true;
-            recipe_preview.input_slots = input_slots;
-            recipe_preview.result_slot = result_slot;
-            return true;
+            push_or_merge_recipe_preview_variant(
+                &mut variants,
+                RecipePreviewVariant {
+                    crafting_type: parsed_preview.crafting_type,
+                    input_slot_count: parsed_preview.slot_count,
+                    input_slots: parsed_preview.input_slots,
+                    input_slot_alternatives: parsed_preview.input_slot_alternatives,
+                    result_slot,
+                },
+                item_registry,
+            );
         }
     }
 
-    recipe_preview.open = false;
-    recipe_preview.input_slots = [InventorySlot::default(); HAND_CRAFTED_INPUT_SLOTS];
-    recipe_preview.result_slot = InventorySlot::default();
+    if !variants.is_empty() {
+        apply_recipe_preview_state(recipe_preview, variants);
+        return true;
+    }
+
+    clear_recipe_preview_state(recipe_preview);
     false
 }
 
@@ -290,103 +268,313 @@ fn open_recipe_preview_dialog_for_hovered_item(
     item_registry: &ItemRegistry,
     recipe_preview: &mut RecipePreviewDialogState,
 ) -> bool {
-    if open_recipe_preview_dialog_for_item(
+    open_recipe_preview_dialog_for_item(
         hovered_item_id,
         recipe_registry,
         item_registry,
         recipe_preview,
-    ) {
-        return true;
+    )
+}
+
+struct ParsedRecipePreviewInputs {
+    crafting_type: RecipePreviewCraftingType,
+    slot_count: usize,
+    input_slots: [InventorySlot; RECIPE_PREVIEW_INPUT_SLOTS],
+    input_slot_alternatives: [Vec<ItemId>; RECIPE_PREVIEW_INPUT_SLOTS],
+}
+
+fn parse_recipe_preview_inputs(
+    recipe: &crate::core::inventory::recipe::RecipeDefinition,
+    crafting: &crate::core::inventory::recipe::RecipeCraftingEntry,
+    selected_result_item_id: ItemId,
+    item_registry: &ItemRegistry,
+) -> Option<ParsedRecipePreviewInputs> {
+    let (crafting_type, slot_count) =
+        recipe_preview_input_capacity_and_type(crafting.recipe_type.localized_name().as_str())?;
+
+    let Ok(parsed) = serde_json::from_value::<RecipePreviewCraftDataJson>(crafting.data.clone())
+    else {
+        return None;
+    };
+
+    let is_shapeless = crafting
+        .format
+        .trim()
+        .eq_ignore_ascii_case(crate::core::inventory::recipe::CRAFTING_SHAPELESS_RECIPE_KIND);
+    let requirements = collect_preview_requirements(parsed, is_shapeless, slot_count)?;
+    if requirements.is_empty() {
+        return None;
     }
 
-    for recipe in &recipe_registry.recipes {
-        for crafting in &recipe.crafting {
-            if crafting.recipe_type.localized_name()
-                != crate::core::inventory::recipe::HAND_CRAFTED_TYPE_LOCALIZED
-            {
-                continue;
-            }
+    let mut input_slots = [InventorySlot::default(); RECIPE_PREVIEW_INPUT_SLOTS];
+    let mut input_slot_alternatives = empty_preview_slot_alternatives();
 
-            let Ok(parsed) = serde_json::from_value::<RecipePreviewHandCraftedDataJson>(
-                crafting.data.clone(),
-            ) else {
-                continue;
-            };
-            if parsed.craft.is_empty() {
-                continue;
-            }
-
-            let mut input_slots = [InventorySlot::default(); HAND_CRAFTED_INPUT_SLOTS];
-            let mut valid = true;
-            let mut hovered_matches_ingredient = false;
-
-            for (slot_raw, requirement) in parsed.craft {
-                let Some(slot_index) = slot_raw.parse::<usize>().ok() else {
-                    valid = false;
-                    break;
-                };
-                if slot_index >= HAND_CRAFTED_INPUT_SLOTS {
-                    valid = false;
-                    break;
-                }
-
-                let requirement_item_id = if !requirement.item.trim().is_empty() {
-                    let item_id = item_registry.id_opt(requirement.item.as_str());
-                    if item_id == Some(hovered_item_id) {
-                        hovered_matches_ingredient = true;
-                    }
-                    item_id
-                } else if !requirement.group.trim().is_empty() {
-                    if item_registry.has_group(hovered_item_id, requirement.group.as_str()) {
-                        hovered_matches_ingredient = true;
-                        Some(hovered_item_id)
-                    } else {
-                        resolve_preview_group_requirement_item_id(
-                            recipe,
-                            hovered_item_id,
-                            slot_index,
-                            requirement.group.as_str(),
-                            item_registry,
-                        )
-                    }
-                } else {
-                    None
-                };
-
-                let Some(requirement_item_id) = requirement_item_id else {
-                    valid = false;
-                    break;
-                };
-                input_slots[slot_index] = InventorySlot {
-                    item_id: requirement_item_id,
-                    count: requirement.count.max(1),
-                };
-            }
-
-            if !valid || !hovered_matches_ingredient {
-                continue;
-            }
-
-            let Some(result_slot) = recipe_preview_result_slot_for_hovered_item(
+    for (slot_index, requirement) in requirements {
+        let requirement_item_id = if !requirement.item.trim().is_empty() {
+            item_registry.id_opt(requirement.item.as_str())
+        } else if !requirement.group.trim().is_empty() {
+            input_slot_alternatives[slot_index] =
+                preview_items_in_group(item_registry, requirement.group.as_str());
+            resolve_preview_group_requirement_item_id(
                 recipe,
-                hovered_item_id,
-                &input_slots,
+                selected_result_item_id,
+                slot_index,
+                requirement.group.as_str(),
                 item_registry,
-            ) else {
-                continue;
-            };
+            )
+        } else {
+            None
+        }?;
 
-            recipe_preview.open = true;
-            recipe_preview.input_slots = input_slots;
-            recipe_preview.result_slot = result_slot;
-            return true;
+        input_slots[slot_index] = InventorySlot {
+            item_id: requirement_item_id,
+            count: requirement.count.max(1),
+        };
+    }
+
+    Some(ParsedRecipePreviewInputs {
+        crafting_type,
+        slot_count,
+        input_slots,
+        input_slot_alternatives,
+    })
+}
+
+fn empty_preview_slot_alternatives() -> [Vec<ItemId>; RECIPE_PREVIEW_INPUT_SLOTS] {
+    std::array::from_fn(|_| Vec::new())
+}
+
+fn preview_items_in_group(item_registry: &ItemRegistry, group: &str) -> Vec<ItemId> {
+    let mut items = Vec::new();
+    for (index, _) in item_registry.defs.iter().enumerate().skip(1) {
+        let item_id = index as ItemId;
+        if item_registry.has_group(item_id, group) {
+            items.push(item_id);
+        }
+    }
+    items
+}
+
+fn recipe_preview_input_capacity_and_type(
+    recipe_type_localized: &str,
+) -> Option<(RecipePreviewCraftingType, usize)> {
+    if recipe_type_localized == crate::core::inventory::recipe::HAND_CRAFTED_TYPE_LOCALIZED {
+        return Some((RecipePreviewCraftingType::HandCrafted, HAND_CRAFTED_INPUT_SLOTS));
+    }
+    if recipe_type_localized == crate::core::inventory::recipe::WORK_TABLE_CRAFTING_TYPE_LOCALIZED {
+        return Some((
+            RecipePreviewCraftingType::WorkTable,
+            WORK_TABLE_CRAFTING_INPUT_SLOTS,
+        ));
+    }
+    None
+}
+
+fn collect_preview_requirements(
+    parsed: RecipePreviewCraftDataJson,
+    is_shapeless: bool,
+    slot_count: usize,
+) -> Option<Vec<(usize, RecipePreviewCraftEntryJson)>> {
+    if is_shapeless {
+        let ingredients = if parsed.ingredients.is_empty() {
+            let mut craft_entries = parsed
+                .craft
+                .into_iter()
+                .filter_map(|(slot_raw, entry)| Some((slot_raw.parse::<usize>().ok()?, entry)))
+                .collect::<Vec<_>>();
+            craft_entries.sort_by_key(|(slot_index, _)| *slot_index);
+            craft_entries
+                .into_iter()
+                .map(|(_, entry)| entry)
+                .collect::<Vec<_>>()
+        } else {
+            parsed.ingredients
+        };
+
+        let expanded = expand_shapeless_preview_ingredients(ingredients);
+        if expanded.is_empty() || expanded.len() > slot_count {
+            return None;
+        }
+
+        let mut requirements = Vec::with_capacity(expanded.len());
+        for (slot_index, entry) in expanded.into_iter().enumerate() {
+            requirements.push((slot_index, entry));
+        }
+        return Some(requirements);
+    }
+
+    if parsed.craft.is_empty() {
+        return None;
+    }
+
+    let mut requirements = Vec::with_capacity(parsed.craft.len());
+    for (slot_raw, entry) in parsed.craft {
+        let slot_index = slot_raw.parse::<usize>().ok()?;
+        if slot_index >= slot_count {
+            return None;
+        }
+        requirements.push((slot_index, entry));
+    }
+    requirements.sort_by_key(|(slot_index, _)| *slot_index);
+    Some(requirements)
+}
+
+fn expand_shapeless_preview_ingredients(
+    ingredients: Vec<RecipePreviewCraftEntryJson>,
+) -> Vec<RecipePreviewCraftEntryJson> {
+    let mut expanded = Vec::new();
+    for mut ingredient in ingredients {
+        let repeats = ingredient.count.max(1);
+        ingredient.count = 1;
+        for _ in 0..repeats {
+            expanded.push(ingredient.clone());
+        }
+    }
+    expanded
+}
+
+fn apply_recipe_preview_state(
+    recipe_preview: &mut RecipePreviewDialogState,
+    variants: Vec<RecipePreviewVariant>,
+) {
+    recipe_preview.open = true;
+    recipe_preview.variants = variants;
+    recipe_preview.selected_variant_index = 0;
+    recipe_preview.tab_page = 0;
+    sync_selected_recipe_preview_variant(recipe_preview);
+}
+
+fn sync_selected_recipe_preview_variant(recipe_preview: &mut RecipePreviewDialogState) {
+    let Some(variant) = recipe_preview
+        .variants
+        .get(recipe_preview.selected_variant_index)
+    else {
+        recipe_preview.crafting_type = None;
+        recipe_preview.input_slot_count = 0;
+        recipe_preview.input_slots = [InventorySlot::default(); RECIPE_PREVIEW_INPUT_SLOTS];
+        recipe_preview.result_slot = InventorySlot::default();
+        return;
+    };
+
+    recipe_preview.crafting_type = Some(variant.crafting_type);
+    recipe_preview.input_slot_count = variant.input_slot_count.min(RECIPE_PREVIEW_INPUT_SLOTS);
+    recipe_preview.input_slots = variant.input_slots;
+    recipe_preview.result_slot = variant.result_slot;
+}
+
+fn recipe_preview_variant_at(
+    recipe_preview: &RecipePreviewDialogState,
+    variant_index: usize,
+) -> Option<&RecipePreviewVariant> {
+    recipe_preview.variants.get(variant_index)
+}
+
+fn select_recipe_preview_variant(
+    recipe_preview: &mut RecipePreviewDialogState,
+    variant_index: usize,
+) -> bool {
+    if variant_index >= recipe_preview.variants.len() {
+        return false;
+    }
+    recipe_preview.selected_variant_index = variant_index;
+    recipe_preview.tab_page = variant_index / RECIPE_PREVIEW_TABS_PER_PAGE;
+    sync_selected_recipe_preview_variant(recipe_preview);
+    true
+}
+
+fn clear_recipe_preview_state(recipe_preview: &mut RecipePreviewDialogState) {
+    recipe_preview.open = false;
+    recipe_preview.variants.clear();
+    recipe_preview.selected_variant_index = 0;
+    recipe_preview.tab_page = 0;
+    recipe_preview.crafting_type = None;
+    recipe_preview.input_slot_count = 0;
+    recipe_preview.input_slots = [InventorySlot::default(); RECIPE_PREVIEW_INPUT_SLOTS];
+    recipe_preview.result_slot = InventorySlot::default();
+}
+
+fn push_or_merge_recipe_preview_variant(
+    variants: &mut Vec<RecipePreviewVariant>,
+    mut candidate: RecipePreviewVariant,
+    item_registry: &ItemRegistry,
+) {
+    for existing in variants.iter_mut() {
+        if !can_merge_recipe_preview_variants(existing, &candidate, item_registry) {
+            continue;
+        }
+        merge_recipe_preview_variant(existing, &mut candidate);
+        return;
+    }
+    variants.push(candidate);
+}
+
+fn can_merge_recipe_preview_variants(
+    left: &RecipePreviewVariant,
+    right: &RecipePreviewVariant,
+    item_registry: &ItemRegistry,
+) -> bool {
+    if left.crafting_type != right.crafting_type
+        || left.input_slot_count != right.input_slot_count
+        || left.result_slot != right.result_slot
+    {
+        return false;
+    }
+
+    for slot_index in 0..RECIPE_PREVIEW_INPUT_SLOTS {
+        let left_slot = left.input_slots[slot_index];
+        let right_slot = right.input_slots[slot_index];
+        if left_slot.is_empty() != right_slot.is_empty() || left_slot.count != right_slot.count {
+            return false;
+        }
+        if left_slot.is_empty() || left_slot.item_id == right_slot.item_id {
+            continue;
+        }
+        if !items_share_any_group(item_registry, left_slot.item_id, right_slot.item_id) {
+            return false;
         }
     }
 
-    recipe_preview.open = false;
-    recipe_preview.input_slots = [InventorySlot::default(); HAND_CRAFTED_INPUT_SLOTS];
-    recipe_preview.result_slot = InventorySlot::default();
-    false
+    true
+}
+
+fn merge_recipe_preview_variant(
+    target: &mut RecipePreviewVariant,
+    source: &mut RecipePreviewVariant,
+) {
+    for slot_index in 0..RECIPE_PREVIEW_INPUT_SLOTS {
+        let target_slot = target.input_slots[slot_index];
+        let source_slot = source.input_slots[slot_index];
+        if target_slot.is_empty() || source_slot.is_empty() || target_slot.item_id == source_slot.item_id {
+            continue;
+        }
+
+        if target.input_slot_alternatives[slot_index].is_empty() {
+            target.input_slot_alternatives[slot_index].push(target_slot.item_id);
+        }
+        target.input_slot_alternatives[slot_index].push(source_slot.item_id);
+        target.input_slot_alternatives[slot_index]
+            .extend(source.input_slot_alternatives[slot_index].iter().copied());
+        target.input_slot_alternatives[slot_index].sort_unstable();
+        target.input_slot_alternatives[slot_index].dedup();
+
+        if let Some(first) = target.input_slot_alternatives[slot_index].first().copied() {
+            target.input_slots[slot_index].item_id = first;
+        }
+    }
+}
+
+fn items_share_any_group(item_registry: &ItemRegistry, left: ItemId, right: ItemId) -> bool {
+    let Some(left_def) = item_registry.def_opt(left) else {
+        return false;
+    };
+    let Some(right_def) = item_registry.def_opt(right) else {
+        return false;
+    };
+
+    left_def
+        .groups
+        .iter()
+        .any(|group| right_def.groups.iter().any(|other| other == group))
 }
 
 fn recipe_preview_result_slot_for_item(
@@ -416,51 +604,6 @@ fn recipe_preview_result_slot_for_item(
             }
             Some(InventorySlot {
                 item_id: selected_item_id,
-                count: (*count).max(1),
-            })
-        }
-    }
-}
-
-fn recipe_preview_result_slot_for_hovered_item(
-    recipe: &crate::core::inventory::recipe::RecipeDefinition,
-    hovered_item_id: ItemId,
-    input_slots: &[InventorySlot; HAND_CRAFTED_INPUT_SLOTS],
-    item_registry: &ItemRegistry,
-) -> Option<InventorySlot> {
-    match &recipe.result {
-        crate::core::inventory::recipe::RecipeResultTemplateDef::Static {
-            item_id,
-            count,
-            ..
-        } => Some(InventorySlot {
-            item_id: *item_id,
-            count: (*count).max(1),
-        }),
-        crate::core::inventory::recipe::RecipeResultTemplateDef::ByGroupFromSlot {
-            slot_index,
-            group,
-            count,
-        } => {
-            let result_item_id = if item_registry.has_group(hovered_item_id, group.as_str()) {
-                Some(hovered_item_id)
-            } else {
-                item_registry
-                    .related_item_in_group(hovered_item_id, group.as_str())
-                    .or_else(|| {
-                        input_slots
-                            .get(*slot_index)
-                            .copied()
-                            .filter(|slot| !slot.is_empty())
-                            .and_then(|slot| {
-                                item_registry.related_item_in_group(slot.item_id, group.as_str())
-                            })
-                    })
-                    .or_else(|| first_item_in_group(item_registry, group.as_str()))
-            }?;
-
-            Some(InventorySlot {
-                item_id: result_item_id,
                 count: (*count).max(1),
             })
         }

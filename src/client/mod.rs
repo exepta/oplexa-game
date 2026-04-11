@@ -167,6 +167,7 @@ struct RemotePlayerVisuals {
 struct MultiplayerDroppedItem {
     drop_id: u64,
     item_id: u16,
+    block_visual: bool,
     pickup_ready_at: f32,
     next_pickup_request_at: f32,
     resting: bool,
@@ -1841,14 +1842,20 @@ fn simulate_multiplayer_drop_items(
         if drop.resting {
             if has_support {
                 drop.velocity = Vec3::ZERO;
-                let drag = (1.0 - 4.0 * delta).clamp(0.0, 1.0);
-                drop.angular_velocity *= drag;
-                drop.spin_speed *= drag;
-                if drop.angular_velocity.length_squared() < 0.000_1 {
+                if drop.block_visual {
+                    let drag = (1.0 - 4.0 * delta).clamp(0.0, 1.0);
+                    drop.angular_velocity *= drag;
+                    drop.spin_speed *= drag;
+                    if drop.angular_velocity.length_squared() < 0.000_1 {
+                        drop.angular_velocity = Vec3::ZERO;
+                    }
+                    if drop.spin_speed.abs() < 0.01 {
+                        drop.spin_speed = 0.0;
+                    }
+                } else {
                     drop.angular_velocity = Vec3::ZERO;
-                }
-                if drop.spin_speed.abs() < 0.01 {
                     drop.spin_speed = 0.0;
+                    transform.rotation = flat_item_rotation(transform.rotation);
                 }
                 continue;
             }
@@ -1877,9 +1884,22 @@ fn simulate_multiplayer_drop_items(
         transform.translation.y = ground_top + half;
         drop.velocity = Vec3::ZERO;
         drop.resting = true;
-        drop.angular_velocity *= 0.4;
-        drop.spin_speed *= 0.5;
+        if drop.block_visual {
+            drop.angular_velocity *= 0.4;
+            drop.spin_speed *= 0.5;
+        } else {
+            drop.angular_velocity = Vec3::ZERO;
+            drop.spin_speed = 0.0;
+            transform.rotation = flat_item_rotation(transform.rotation);
+        }
     }
+}
+
+#[inline]
+fn flat_item_rotation(current_rotation: Quat) -> Quat {
+    let forward = current_rotation * Vec3::Z;
+    let yaw = forward.x.atan2(forward.z);
+    Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)
 }
 
 /// Runs the `send_local_inventory_sync` routine for send local inventory sync in the `client` module.
@@ -2197,7 +2217,7 @@ fn spawn_multiplayer_drop(
         return;
     }
 
-    let Some((mesh, material, visual_scale)) =
+    let Some((mesh, material, visual_scale, block_visual)) =
         build_world_item_drop_visual(registry, item_registry, item_id, MULTIPLAYER_DROP_ITEM_SIZE)
     else {
         return;
@@ -2233,6 +2253,7 @@ fn spawn_multiplayer_drop(
             MultiplayerDroppedItem {
                 drop_id,
                 item_id,
+                block_visual,
                 pickup_ready_at: spawn_now + MULTIPLAYER_DROP_PICKUP_DELAY_SECS,
                 next_pickup_request_at: 0.0,
                 resting: false,

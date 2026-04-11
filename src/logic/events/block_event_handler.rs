@@ -5,9 +5,16 @@ use crate::core::events::block::block_player_events::{
     BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
+use crate::core::events::ui_events::{OpenStructureBuildMenuRequest, OpenWorkbenchMenuRequest};
 use crate::core::inventory::items::{
-    ItemRegistry, block_requirement_for_id, can_drop_from_block, mining_speed_multiplier,
-    spawn_world_item_for_block_break,
+    ItemId, ItemRegistry, block_requirement_for_id, can_drop_from_block, mining_speed_multiplier,
+    spawn_world_item_for_block_break, spawn_world_item_with_motion,
+};
+use crate::core::inventory::recipe::{
+    ActiveStructurePlacementState, ActiveStructureRecipeState, BuildingMaterialRequirement,
+    BuildingMaterialRequirementSource, BuildingModelAnchor, BuildingStructureBlockRegistration,
+    BuildingStructureColliderSource, BuildingStructureRecipe, BuildingStructureRecipeRegistry,
+    BuildingStructureTextureBinding, BuildingStructureTextureSource,
 };
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::states::states::{AppState, InGameStates};
@@ -16,46 +23,160 @@ use crate::core::world::block::*;
 use crate::core::world::chunk::*;
 use crate::core::world::chunk_dimension::*;
 use crate::core::world::fluid::FluidMap;
+use crate::core::world::save::{
+    RegionCache, StructureRegionDropItem, StructureRegionEntry, TAG_STR1, WorldSave,
+    container_find, container_upsert, decode_structure_entries, encode_structure_entries,
+};
 use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
 use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::ecs::relationship::RelatedSpawnerCommands;
+use bevy::ecs::system::SystemParam;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
+use bevy::math::Affine2;
+use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
+use bevy_rapier3d::prelude::{
+    AsyncSceneCollider, Collider, ComputedColliderShape, QueryFilter, ReadRapierContext, RigidBody,
+    TriMeshFlags,
+};
+use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
 
-/// Resolved block placement target for one place action.
-#[derive(Clone, Copy)]
-pub(crate) struct PlacementResolution {
-    pub world_pos: IVec3,
-    pub block_id: BlockId,
-    pub place_into_stacked: bool,
+#[derive(Component, Clone, Copy)]
+struct StructureStyleSourceItem {
+    item_id: ItemId,
 }
 
-/// Represents mining overlay used by the `logic::events::block_event_handler` module.
-#[derive(Component)]
-struct MiningOverlay;
+#[derive(Component, Clone, Default)]
+struct StructureTextureBindings {
+    entries: Vec<BuildingStructureTextureBinding>,
+}
 
-/// Represents mining overlay face used by the `logic::events::block_event_handler` module.
-#[derive(Component)]
-struct MiningOverlayFace;
+#[derive(Component, Default)]
+struct StructureStyleMaterialPending;
 
-/// Defines the possible axis variants in the `logic::events::block_event_handler` module.
-#[derive(Clone, Copy)]
-enum Axis {
-    XY,
-    XZ,
-    YZ,
+#[derive(Component, Default)]
+struct StructureMeshColliderNameFilterPending;
+
+#[derive(Component, Default)]
+struct StructureMeshColliderCleanupPending;
+
+#[derive(Component, Clone)]
+#[allow(dead_code)]
+pub(crate) struct PlacedStructureMetadata {
+    pub recipe_name: String,
+    pub stats: BlockStats,
+    pub place_origin: IVec3,
+    pub rotation_quarters: u8,
+    pub rotation_steps: u8,
+    pub origin_chunk: IVec2,
+    pub drop_requirements: Vec<BuildingMaterialRequirement>,
+    pub registration: Option<BuildingStructureBlockRegistration>,
+    pub selection_center_world: Vec3,
+    pub selection_size_world: Vec3,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct PlacedStructureKey {
+    origin_chunk: IVec2,
+    recipe_name: String,
+    place_origin: IVec3,
+    rotation_quarters: u8,
+    rotation_steps: u8,
+}
+
+#[derive(Resource, Default)]
+struct StructureRuntimeState {
+    loaded_chunks: HashSet<IVec2>,
+    records_by_chunk: HashMap<IVec2, Vec<StructureRegionEntry>>,
+    spawned_entities: HashMap<PlacedStructureKey, Entity>,
+    entity_to_key: HashMap<Entity, PlacedStructureKey>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StructureMiningTarget {
+    entity: Entity,
+    started_at: f32,
+    duration: f32,
+}
+
+#[derive(Resource, Default)]
+struct StructureMiningState {
+    target: Option<StructureMiningTarget>,
 }
 
 /// Represents block event handler used by the `logic::events::block_event_handler` module.
 pub struct BlockEventHandler;
 
+#[derive(SystemParam)]
+struct StructurePlacementDeps<'w, 's> {
+    commands: Commands<'w, 's>,
+    asset_server: Res<'w, AssetServer>,
+    structure_recipe_registry: Option<Res<'w, BuildingStructureRecipeRegistry>>,
+    active_structure_recipe: ResMut<'w, ActiveStructureRecipeState>,
+    active_structure_placement: ResMut<'w, ActiveStructurePlacementState>,
+    open_structure_menu_requests: MessageWriter<'w, OpenStructureBuildMenuRequest>,
+    open_workbench_menu_requests: MessageWriter<'w, OpenWorkbenchMenuRequest>,
+}
+
+#[derive(SystemParam)]
+struct ActiveStructureCancelState<'w> {
+    active_structure_recipe: ResMut<'w, ActiveStructureRecipeState>,
+    active_structure_placement: ResMut<'w, ActiveStructurePlacementState>,
+}
+
+#[derive(SystemParam)]
+struct BreakInputContext<'w> {
+    multiplayer_connection: Option<Res<'w, MultiplayerConnectionState>>,
+    ui_state: Option<Res<'w, UiInteractionState>>,
+}
+
+#[derive(SystemParam)]
+struct StructureBreakDeps<'w, 's> {
+    structure_runtime: ResMut<'w, StructureRuntimeState>,
+    structure_mining: ResMut<'w, StructureMiningState>,
+    q_structure_meta: Query<'w, 's, &'static PlacedStructureMetadata>,
+    ws: Option<Res<'w, WorldSave>>,
+    region_cache: Option<ResMut<'w, RegionCache>>,
+}
+
+#[derive(SystemParam)]
+struct BreakWorldMut<'w> {
+    state: ResMut<'w, MiningState>,
+    chunk_map: ResMut<'w, ChunkMap>,
+    ev_dirty: MessageWriter<'w, SubChunkNeedRemeshEvent>,
+    break_ev: MessageWriter<'w, BlockBreakByPlayerEvent>,
+}
+
+#[derive(SystemParam)]
+struct PlacementWorldDeps<'w> {
+    inventory: ResMut<'w, PlayerInventory>,
+    fluids: ResMut<'w, FluidMap>,
+    chunk_map: ResMut<'w, ChunkMap>,
+    multiplayer_connection: Res<'w, MultiplayerConnectionState>,
+    ws: Option<Res<'w, WorldSave>>,
+    region_cache: Option<ResMut<'w, RegionCache>>,
+    structure_runtime: ResMut<'w, StructureRuntimeState>,
+    ev_dirty: MessageWriter<'w, SubChunkNeedRemeshEvent>,
+    place_ev: MessageWriter<'w, BlockPlaceByPlayerEvent>,
+}
+
 impl Plugin for BlockEventHandler {
     /// Builds this component for the `logic::events::block_event_handler` module.
     fn build(&self, app: &mut App) {
+        app.init_resource::<StructureRuntimeState>();
+        app.init_resource::<StructureMiningState>();
         app.add_systems(
             Update,
             (
+                sync_structures_for_loaded_chunks.in_set(VoxelStage::WorldEdit),
+                enforce_block_texture_nearest_sampler_system.in_set(VoxelStage::WorldEdit),
+                configure_structure_mesh_collider_name_filters.in_set(VoxelStage::WorldEdit),
+                cleanup_structure_none_mesh_colliders.in_set(VoxelStage::WorldEdit),
+                apply_structure_style_material_system.in_set(VoxelStage::WorldEdit),
                 (block_break_handler, sync_mining_overlay)
                     .chain()
                     .in_set(VoxelStage::WorldEdit),
@@ -63,7 +184,48 @@ impl Plugin for BlockEventHandler {
             )
                 .run_if(in_state(AppState::InGame(InGameStates::Game))),
         );
+        app.add_systems(
+            OnExit(AppState::InGame(InGameStates::Game)),
+            cleanup_structure_runtime_on_exit,
+        );
     }
+}
+
+fn enforce_block_texture_nearest_sampler_system(
+    mut image_events: MessageReader<AssetEvent<Image>>,
+    asset_server: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    for event in image_events.read() {
+        let image_id = match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => *id,
+            AssetEvent::Removed { .. } | AssetEvent::Unused { .. } => continue,
+        };
+        let Some(path) = asset_server.get_path(image_id) else {
+            continue;
+        };
+        let asset_path = path.path().to_string_lossy();
+        if !asset_path.starts_with("textures/blocks/") {
+            continue;
+        }
+        apply_nearest_sampler_to_image(images.as_mut(), image_id, true);
+    }
+}
+
+fn cleanup_structure_runtime_on_exit(
+    mut commands: Commands,
+    mut runtime: ResMut<StructureRuntimeState>,
+    mut structure_mining: ResMut<StructureMiningState>,
+) {
+    for (_, entity) in runtime.spawned_entities.drain() {
+        safe_despawn_entity(&mut commands, entity);
+    }
+    runtime.entity_to_key.clear();
+    runtime.records_by_chunk.clear();
+    runtime.loaded_chunks.clear();
+    structure_mining.target = None;
 }
 
 /// Runs the `block_break_handler` routine for block break handler in the `logic::events::block_event_handler` module.
@@ -78,19 +240,53 @@ fn block_break_handler(
     game_mode: Res<GameModeState>,
     inventory: Res<PlayerInventory>,
     hotbar_selection: Option<Res<HotbarSelectionState>>,
-
-    mut state: ResMut<MiningState>,
-    mut chunk_map: ResMut<ChunkMap>,
-    mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
-    mut break_ev: MessageWriter<BlockBreakByPlayerEvent>,
-    multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
-    ui_state: Option<Res<UiInteractionState>>,
+    structure_cancel: ActiveStructureCancelState,
+    structure_break_deps: StructureBreakDeps,
+    break_world: BreakWorldMut,
+    break_input_context: BreakInputContext,
 ) {
+    let BreakInputContext {
+        multiplayer_connection,
+        ui_state,
+    } = break_input_context;
+    let ActiveStructureCancelState {
+        mut active_structure_recipe,
+        mut active_structure_placement,
+    } = structure_cancel;
+    let StructureBreakDeps {
+        mut structure_runtime,
+        mut structure_mining,
+        q_structure_meta,
+        ws,
+        mut region_cache,
+    } = structure_break_deps;
+    let BreakWorldMut {
+        mut state,
+        mut chunk_map,
+        mut ev_dirty,
+        mut break_ev,
+    } = break_world;
+
     if ui_state
         .as_ref()
         .is_some_and(|state| state.blocks_game_input())
     {
         state.target = None;
+        structure_mining.target = None;
+        return;
+    }
+
+    let held_item_id = selected_hotbar_item_id(&inventory, hotbar_selection.as_deref());
+    let holding_hammer = held_item_id
+        .and_then(|item_id| item_registry.def_opt(item_id))
+        .is_some_and(|item| item.localized_name == "oplexa:hammer" || item.key == "hammer");
+    if holding_hammer && active_structure_recipe.selected_recipe_name.is_some() {
+        if buttons.just_pressed(MouseButton::Left) {
+            active_structure_recipe.selected_recipe_name = None;
+            active_structure_placement.rotation_quarters = 0;
+        }
+        state.target = None;
+        structure_mining.target = None;
         return;
     }
 
@@ -99,12 +295,38 @@ fn block_break_handler(
         .is_some_and(|state| state.connected);
 
     if game_mode.0.eq(&GameMode::Spectator) {
+        structure_mining.target = None;
         return;
     }
     if !buttons.pressed(MouseButton::Left) {
         state.target = None;
+        structure_mining.target = None;
         return;
     }
+
+    if let Some(structure_hit) = selection.structure_hit {
+        state.target = None;
+        handle_structure_break(
+            &mut commands,
+            &mut meshes,
+            &time,
+            &buttons,
+            &game_mode,
+            &registry,
+            &item_registry,
+            &inventory,
+            hotbar_selection.as_deref(),
+            structure_hit.entity,
+            &q_structure_meta,
+            &mut structure_runtime,
+            &mut structure_mining,
+            multiplayer_connection.as_deref(),
+            ws.as_deref(),
+            region_cache.as_deref_mut(),
+        );
+        return;
+    }
+    structure_mining.target = None;
 
     let Some(hit) = selection.hit else {
         state.target = None;
@@ -217,6 +439,147 @@ fn block_break_handler(
     state.target = None;
 }
 
+#[allow(clippy::too_many_arguments)]
+fn handle_structure_break(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    time: &Time,
+    buttons: &ButtonInput<MouseButton>,
+    game_mode: &GameModeState,
+    registry: &BlockRegistry,
+    item_registry: &ItemRegistry,
+    inventory: &PlayerInventory,
+    hotbar_selection: Option<&HotbarSelectionState>,
+    structure_entity: Entity,
+    q_structure_meta: &Query<&PlacedStructureMetadata>,
+    runtime: &mut StructureRuntimeState,
+    structure_mining: &mut StructureMiningState,
+    multiplayer_connection: Option<&MultiplayerConnectionState>,
+    ws: Option<&WorldSave>,
+    region_cache: Option<&mut RegionCache>,
+) {
+    let Ok(meta) = q_structure_meta.get(structure_entity) else {
+        structure_mining.target = None;
+        return;
+    };
+
+    let held_tool = selected_hotbar_tool(inventory, hotbar_selection, item_registry);
+    let duration = ((BASE_BREAK_TIME + meta.stats.hardness.max(0.0) * PER_HARDNESS)
+        / mining_speed_multiplier(None, held_tool))
+    .clamp(MIN_BREAK_TIME, MAX_BREAK_TIME);
+    let now = time.elapsed_secs();
+
+    let creative_mode = matches!(game_mode.0, GameMode::Creative);
+    if !creative_mode {
+        let target_matches = structure_mining
+            .target
+            .is_some_and(|target| target.entity == structure_entity);
+        if !target_matches {
+            structure_mining.target = Some(StructureMiningTarget {
+                entity: structure_entity,
+                started_at: now,
+                duration,
+            });
+            return;
+        }
+        if let Some(target) = structure_mining.target {
+            if mining_progress(
+                now,
+                &MiningTarget {
+                    loc: meta.place_origin,
+                    id: 0,
+                    started_at: target.started_at,
+                    duration: target.duration,
+                },
+            ) < 1.0
+            {
+                return;
+            }
+        } else {
+            return;
+        }
+    } else if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    structure_mining.target = None;
+    safe_despawn_entity(commands, structure_entity);
+
+    let uses_local_save_data = multiplayer_connection
+        .map(MultiplayerConnectionState::uses_local_save_data)
+        .unwrap_or(true);
+    remove_structure_from_runtime(
+        runtime,
+        structure_entity,
+        uses_local_save_data,
+        ws,
+        region_cache,
+    );
+
+    let multiplayer_connected = multiplayer_connection.is_some_and(|state| state.connected);
+    if creative_mode || multiplayer_connected {
+        return;
+    }
+    for requirement in &meta.drop_requirements {
+        let (item_id, count) = match &requirement.source {
+            BuildingMaterialRequirementSource::Item { item_id, .. } => {
+                (*item_id, requirement.count)
+            }
+            BuildingMaterialRequirementSource::Group { .. } => continue,
+        };
+        if item_id == 0 || count == 0 {
+            continue;
+        }
+        spawn_world_item_with_motion(
+            commands,
+            meshes,
+            registry,
+            item_registry,
+            item_id,
+            count,
+            meta.selection_center_world + Vec3::Y * 0.15,
+            Vec3::ZERO,
+            meta.place_origin,
+            now,
+        );
+    }
+}
+
+fn remove_structure_from_runtime(
+    runtime: &mut StructureRuntimeState,
+    structure_entity: Entity,
+    uses_local_save_data: bool,
+    ws: Option<&WorldSave>,
+    mut region_cache: Option<&mut RegionCache>,
+) {
+    let Some(key) = runtime.entity_to_key.remove(&structure_entity) else {
+        return;
+    };
+    runtime.spawned_entities.remove(&key);
+
+    let Some(entries) = runtime.records_by_chunk.get_mut(&key.origin_chunk) else {
+        return;
+    };
+    entries.retain(|entry| {
+        !(entry.recipe_name == key.recipe_name
+            && entry.place_origin == [key.place_origin.x, key.place_origin.y, key.place_origin.z]
+            && normalize_rotation_quarters(entry.rotation_quarters as i32) == key.rotation_quarters
+            && normalize_rotation_steps(
+                entry
+                    .rotation_steps
+                    .map_or((entry.rotation_quarters as i32) * 2, i32::from),
+            ) == key.rotation_steps)
+    });
+
+    if !uses_local_save_data {
+        return;
+    }
+    let (Some(ws), Some(cache)) = (ws, region_cache.as_deref_mut()) else {
+        return;
+    };
+    let _ = persist_structure_records_for_chunk(ws, cache, key.origin_chunk, entries);
+}
+
 fn remove_unsupported_props_above(
     chunk_map: &mut ChunkMap,
     registry: &BlockRegistry,
@@ -261,7 +624,9 @@ fn remove_unsupported_props_above(
 
 /// Runs the `block_place_handler` routine for block place handler in the `logic::events::block_event_handler` module.
 fn block_place_handler(
+    structure_deps: StructurePlacementDeps,
     buttons: Res<ButtonInput<MouseButton>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     sel: Res<SelectionState>,
     selected: Res<SelectedBlock>,
     registry: Res<BlockRegistry>,
@@ -269,14 +634,33 @@ fn block_place_handler(
     game_mode: Res<GameModeState>,
     hotbar_selection: Option<Res<HotbarSelectionState>>,
     ui_state: Option<Res<UiInteractionState>>,
+    rapier_context: ReadRapierContext,
     q_player_controls: Query<&FpsController, With<Player>>,
-
-    mut inventory: ResMut<PlayerInventory>,
-    mut fluids: ResMut<FluidMap>,
-    mut chunk_map: ResMut<ChunkMap>,
-    mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
-    mut place_ev: MessageWriter<BlockPlaceByPlayerEvent>,
+    q_structures: Query<&PlacedStructureMetadata>,
+    q_structure_parents: Query<&ChildOf>,
+    world_deps: PlacementWorldDeps,
 ) {
+    let StructurePlacementDeps {
+        mut commands,
+        asset_server,
+        structure_recipe_registry,
+        mut active_structure_recipe,
+        mut active_structure_placement,
+        mut open_structure_menu_requests,
+        mut open_workbench_menu_requests,
+    } = structure_deps;
+    let PlacementWorldDeps {
+        mut inventory,
+        mut fluids,
+        mut chunk_map,
+        multiplayer_connection,
+        ws,
+        mut region_cache,
+        mut structure_runtime,
+        mut ev_dirty,
+        mut place_ev,
+    } = world_deps;
+
     if ui_state
         .as_ref()
         .is_some_and(|state| state.blocks_game_input())
@@ -290,6 +674,105 @@ fn block_place_handler(
     if !buttons.just_pressed(MouseButton::Right) {
         return;
     }
+
+    let shift_held = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    if let Some(structure_hit) = sel.structure_hit
+        && let Ok(meta) = q_structures.get(structure_hit.entity)
+        && structure_has_workbench_ui(meta)
+        && !shift_held
+    {
+        // Block interaction UI has priority over hammer right-click interaction.
+        active_structure_recipe.selected_recipe_name = None;
+        active_structure_placement.rotation_quarters = 0;
+        open_workbench_menu_requests.write(OpenWorkbenchMenuRequest);
+        return;
+    }
+
+    let held_item_id = selected_hotbar_item_id(&inventory, hotbar_selection.as_deref());
+    let holding_hammer = held_item_id
+        .and_then(|item_id| item_registry.def_opt(item_id))
+        .is_some_and(|item| item.localized_name == "oplexa:hammer" || item.key == "hammer");
+    if holding_hammer {
+        let Some(structure_recipe_registry) = structure_recipe_registry.as_ref() else {
+            return;
+        };
+
+        if let Some(active_recipe_name) = active_structure_recipe.selected_recipe_name.as_deref() {
+            let Some(recipe) = structure_recipe_registry.recipe_by_name(active_recipe_name) else {
+                active_structure_recipe.selected_recipe_name = None;
+                active_structure_placement.rotation_quarters = 0;
+                return;
+            };
+            let Some(hit) = sel.hit else {
+                return;
+            };
+            let rotation_steps =
+                normalize_rotation_steps(active_structure_placement.rotation_quarters) & !1;
+            let rotation_quarters = rotation_steps_to_placement_quarters(rotation_steps);
+            let place_origin = resolve_structure_place_origin(hit, &chunk_map, &registry);
+            if !can_place_structure_recipe_at(
+                place_origin,
+                recipe,
+                rotation_quarters,
+                &chunk_map,
+                &registry,
+            ) {
+                return;
+            }
+
+            let Some(consumed_requirements) = consume_structure_requirements_from_inventory(
+                &mut inventory,
+                &recipe.requirements,
+                &item_registry,
+            ) else {
+                return;
+            };
+            let style_source_item_id = consumed_requirements
+                .style_source_item_id
+                .or_else(|| resolve_default_structure_style_item_id(recipe, &item_registry));
+
+            let structure_entity = spawn_structure_model_entity(
+                &mut commands,
+                &asset_server,
+                recipe,
+                place_origin,
+                rotation_quarters,
+                rotation_steps,
+                consumed_requirements.drop_requirements.clone(),
+                style_source_item_id,
+            );
+            clear_props_within_structure_volume(
+                place_origin,
+                recipe,
+                rotation_quarters,
+                &mut chunk_map,
+                &registry,
+                &mut ev_dirty,
+            );
+            register_structure_in_runtime(
+                &mut structure_runtime,
+                structure_entity,
+                recipe,
+                place_origin,
+                rotation_quarters,
+                rotation_steps,
+                style_source_item_id,
+                consumed_requirements.drop_requirements.as_slice(),
+                &item_registry,
+                multiplayer_connection.uses_local_save_data(),
+                ws.as_deref(),
+                region_cache.as_deref_mut(),
+            );
+            active_structure_recipe.selected_recipe_name = None;
+            active_structure_placement.rotation_quarters = 0;
+            return;
+        }
+
+        active_structure_placement.rotation_quarters = 0;
+        open_structure_menu_requests.write(OpenStructureBuildMenuRequest);
+        return;
+    }
+
     let id = selected.id;
     if id == 0 {
         return;
@@ -306,7 +789,14 @@ fn block_place_handler(
     {
         return;
     }
-    let Some(hit) = sel.hit else {
+    let hit = if let Some(hit) = sel.hit {
+        hit
+    } else if let Some(structure_hit) = sel.structure_hit {
+        let Some(hit) = build_structure_surface_hit(structure_hit, &q_structures) else {
+            return;
+        };
+        hit
+    } else {
         return;
     };
     let (player_yaw, player_pitch) = q_player_controls
@@ -342,6 +832,14 @@ fn block_place_handler(
         })
         .unwrap_or(false);
     if !can_place {
+        return;
+    }
+    if world_cell_intersects_structure(
+        world_pos,
+        &rapier_context,
+        &q_structures,
+        &q_structure_parents,
+    ) {
         return;
     }
 
@@ -386,732 +884,1579 @@ fn block_place_handler(
     });
 }
 
-pub(crate) fn resolve_placement_for_selected(
-    selected_id: BlockId,
+include!("block_event_handler/placement.rs");
+
+fn resolve_structure_place_origin(
     hit: crate::core::entities::player::block_selection::BlockHit,
-    player_yaw: f32,
-    player_pitch: f32,
     chunk_map: &ChunkMap,
     registry: &BlockRegistry,
-) -> PlacementResolution {
-    let (adjacent_place_id, same_voxel_place_id, _slab_mode) =
-        resolve_placement_block_id(selected_id, hit, player_yaw, player_pitch, registry);
-    let mut world_pos = hit.place_pos;
-    let mut place_id = adjacent_place_id;
-    let mut place_into_stacked = false;
-
-    if let Some((stack_pos, use_same_voxel_id)) = try_resolve_slab_stack(
-        selected_id,
-        adjacent_place_id,
-        same_voxel_place_id,
-        hit,
-        world_pos,
-        chunk_map,
-        registry,
-    ) {
-        world_pos = stack_pos;
-        place_id = if use_same_voxel_id {
-            same_voxel_place_id
-        } else {
-            adjacent_place_id
-        };
-        place_into_stacked = true;
-    }
-
-    PlacementResolution {
-        world_pos,
-        block_id: place_id,
-        place_into_stacked,
-    }
-}
-
-#[inline]
-fn resolve_placement_block_id(
-    requested_id: BlockId,
-    hit: crate::core::entities::player::block_selection::BlockHit,
-    player_yaw: f32,
-    _player_pitch: f32,
-    registry: &BlockRegistry,
-) -> (BlockId, BlockId, Option<SlabPlacementMode>) {
-    let Some(name) = registry.name_opt(requested_id) else {
-        return (requested_id, requested_id, None);
-    };
-    let Some(prefix) = slab_family_prefix(name) else {
-        return (requested_id, requested_id, None);
-    };
-
-    let mode = resolve_slab_mode_for_click(hit.face, hit.hit_local);
-    let adjacent_variant = resolve_slab_variant_for_click(hit, mode, player_yaw, false);
-    let same_voxel_variant = resolve_slab_variant_for_click(hit, mode, player_yaw, true);
-    let adjacent_id =
-        slab_block_id_for_variant(prefix, adjacent_variant, registry).unwrap_or(requested_id);
-    let same_voxel_id =
-        slab_block_id_for_variant(prefix, same_voxel_variant, registry).unwrap_or(adjacent_id);
-    (adjacent_id, same_voxel_id, Some(mode))
-}
-
-#[inline]
-fn slab_family_prefix(name: &str) -> Option<&str> {
-    const SUFFIXES: [&str; 6] = [
-        "_slab_block",
-        "_slab_top_block",
-        "_slab_north_block",
-        "_slab_south_block",
-        "_slab_east_block",
-        "_slab_west_block",
-    ];
-
-    SUFFIXES.iter().find_map(|suffix| name.strip_suffix(suffix))
-}
-
-fn try_resolve_slab_stack(
-    selected_id: BlockId,
-    adjacent_stack_id: BlockId,
-    same_voxel_stack_id: BlockId,
-    hit: crate::core::entities::player::block_selection::BlockHit,
-    place_pos: IVec3,
-    chunk_map: &ChunkMap,
-    registry: &BlockRegistry,
-) -> Option<(IVec3, bool)> {
-    let selected_name = registry.name_opt(selected_id)?;
-    slab_family_prefix(selected_name)?;
-
-    // Rule: slab on slab should share one voxel slot whenever possible.
-    let hit_existing_id = get_block_world(chunk_map, hit.block_pos);
-    let hit_stacked_id = get_stacked_block_world(chunk_map, hit.block_pos);
-    if slab_cell_accepts_second_slab_for_incoming(
-        hit_existing_id,
-        hit_stacked_id,
-        same_voxel_stack_id,
-        registry,
-    ) {
-        return Some((hit.block_pos, true));
-    }
-
-    let place_existing_id = get_block_world(chunk_map, place_pos);
-    let place_stacked_id = get_stacked_block_world(chunk_map, place_pos);
-    if slab_cell_accepts_second_slab_for_incoming(
-        place_existing_id,
-        place_stacked_id,
-        adjacent_stack_id,
-        registry,
-    ) {
-        return Some((place_pos, false));
-    }
-
-    None
-}
-
-#[inline]
-fn slab_cell_accepts_second_slab(
-    existing_id: BlockId,
-    existing_stacked_id: BlockId,
-    registry: &BlockRegistry,
-) -> bool {
-    if existing_id == 0 {
-        return false;
-    }
-    if existing_stacked_id != 0 {
-        return false;
-    }
-    is_any_slab_variant(existing_id, registry)
-}
-
-#[inline]
-fn slab_cell_accepts_second_slab_for_incoming(
-    existing_id: BlockId,
-    existing_stacked_id: BlockId,
-    incoming_id: BlockId,
-    registry: &BlockRegistry,
-) -> bool {
-    if !slab_cell_accepts_second_slab(existing_id, existing_stacked_id, registry) {
-        return false;
-    }
-    let Some(existing_variant) = slab_variant_from_block_id(existing_id, registry) else {
-        return false;
-    };
-    let Some(incoming_variant) = slab_variant_from_block_id(incoming_id, registry) else {
-        return false;
-    };
-    slabs_are_complementary(existing_variant, incoming_variant)
-}
-
-#[inline]
-fn slab_variant_from_block_id(block_id: BlockId, registry: &BlockRegistry) -> Option<SlabVariant> {
-    let name = registry.name_opt(block_id)?;
-    slab_variant_from_name(name)
-}
-
-fn resolve_slab_variant_for_click(
-    hit: crate::core::entities::player::block_selection::BlockHit,
-    mode: SlabPlacementMode,
-    player_yaw: f32,
-    for_same_voxel: bool,
-) -> SlabVariant {
-    match mode {
-        SlabPlacementMode::Horizontal => {
-            resolve_horizontal_half_variant_for_face(hit.face, hit.hit_local.y, for_same_voxel)
-        }
-        SlabPlacementMode::Vertical => resolve_vertical_side_variant_for_face(
-            hit.face,
-            hit.hit_local,
-            player_yaw,
-            for_same_voxel,
-        ),
-    }
-}
-
-#[inline]
-fn resolve_slab_mode_for_click(face: Face, local: Vec3) -> SlabPlacementMode {
-    // Requested rule: edge => vertical, center => horizontal.
-    const EDGE_THRESHOLD: f32 = 0.30;
-    let edge_metric = edge_metric_for_face(face, local);
-    if edge_metric >= EDGE_THRESHOLD {
-        SlabPlacementMode::Vertical
+) -> IVec3 {
+    let hit_primary_id = get_block_world(chunk_map, hit.block_pos);
+    if hit_primary_id != 0 && registry.is_overridable(hit_primary_id) {
+        hit.block_pos
     } else {
-        SlabPlacementMode::Horizontal
+        hit.place_pos
     }
 }
 
-#[inline]
-fn edge_metric_for_face(face: Face, local: Vec3) -> f32 {
-    let l = local.clamp(Vec3::ZERO, Vec3::ONE);
-    match face {
-        Face::Top | Face::Bottom => (l.x - 0.5).abs().max((l.z - 0.5).abs()),
-        Face::East | Face::West => (l.y - 0.5).abs().max((l.z - 0.5).abs()),
-        Face::North | Face::South => (l.x - 0.5).abs().max((l.y - 0.5).abs()),
-    }
-}
-
-#[inline]
-fn resolve_vertical_side_variant_for_face(
-    face: Face,
-    local: Vec3,
-    player_yaw: f32,
-    for_same_voxel: bool,
-) -> SlabVariant {
-    match face {
-        Face::East => {
-            if for_same_voxel {
-                SlabVariant::East
-            } else {
-                SlabVariant::West
-            }
-        }
-        Face::West => {
-            if for_same_voxel {
-                SlabVariant::West
-            } else {
-                SlabVariant::East
-            }
-        }
-        Face::South => {
-            if for_same_voxel {
-                SlabVariant::South
-            } else {
-                SlabVariant::North
-            }
-        }
-        Face::North => {
-            if for_same_voxel {
-                SlabVariant::North
-            } else {
-                SlabVariant::South
-            }
-        }
-        Face::Top | Face::Bottom => {
-            let l = local.clamp(Vec3::ZERO, Vec3::ONE);
-            let dx = l.x - 0.5;
-            let dz = l.z - 0.5;
-            if (dx.abs() - dz.abs()).abs() <= 0.05 {
-                return yaw_to_horizontal_variant(player_yaw);
-            }
-            if dx.abs() >= dz.abs() {
-                if dx >= 0.0 {
-                    SlabVariant::East
-                } else {
-                    SlabVariant::West
+fn can_place_structure_recipe_at(
+    place_origin: IVec3,
+    recipe: &BuildingStructureRecipe,
+    rotation_quarters: u8,
+    chunk_map: &ChunkMap,
+    registry: &BlockRegistry,
+) -> bool {
+    for y_offset in 0..recipe.space.y as i32 {
+        for local_z in 0..recipe.space.z as i32 {
+            for local_x in 0..recipe.space.x as i32 {
+                let (x_offset, z_offset) = rotated_structure_offset(
+                    local_x,
+                    local_z,
+                    recipe.space.x as i32,
+                    recipe.space.z as i32,
+                    rotation_quarters,
+                );
+                let world_pos = place_origin + IVec3::new(x_offset, y_offset, z_offset);
+                if !is_structure_cell_placeable(world_pos, chunk_map, registry) {
+                    return false;
                 }
-            } else if dz >= 0.0 {
-                SlabVariant::South
-            } else {
-                SlabVariant::North
             }
         }
     }
-}
 
-#[inline]
-fn resolve_horizontal_half_variant_for_face(
-    face: Face,
-    local_y: f32,
-    for_same_voxel: bool,
-) -> SlabVariant {
-    match face {
-        Face::Top => {
-            if for_same_voxel {
-                SlabVariant::Top
-            } else {
-                SlabVariant::Bottom
-            }
-        }
-        Face::Bottom => {
-            if for_same_voxel {
-                SlabVariant::Bottom
-            } else {
-                SlabVariant::Top
-            }
-        }
-        Face::East | Face::West | Face::North | Face::South => {
-            if local_y >= 0.5 {
-                SlabVariant::Top
-            } else {
-                SlabVariant::Bottom
+    for local_z in 0..recipe.space.z as i32 {
+        for local_x in 0..recipe.space.x as i32 {
+            let (x_offset, z_offset) = rotated_structure_offset(
+                local_x,
+                local_z,
+                recipe.space.x as i32,
+                recipe.space.z as i32,
+                rotation_quarters,
+            );
+            let support_pos = place_origin + IVec3::new(x_offset, -1, z_offset);
+            if !is_structure_support_cell(support_pos, chunk_map, registry) {
+                return false;
             }
         }
     }
-}
 
-#[inline]
-fn yaw_to_horizontal_variant(player_yaw: f32) -> SlabVariant {
-    let look = Quat::from_rotation_y(player_yaw) * Vec3::NEG_Z;
-    if look.x.abs() >= look.z.abs() {
-        if look.x >= 0.0 {
-            SlabVariant::East
-        } else {
-            SlabVariant::West
-        }
-    } else if look.z >= 0.0 {
-        SlabVariant::South
-    } else {
-        SlabVariant::North
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum SlabVariant {
-    Bottom,
-    Top,
-    North,
-    South,
-    East,
-    West,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum SlabPlacementMode {
-    Horizontal,
-    Vertical,
-}
-
-#[inline]
-fn slab_variant_from_name(name: &str) -> Option<SlabVariant> {
-    if name.ends_with("_slab_block") {
-        return Some(SlabVariant::Bottom);
-    }
-    if name.ends_with("_slab_top_block") {
-        return Some(SlabVariant::Top);
-    }
-    if name.ends_with("_slab_north_block") {
-        return Some(SlabVariant::North);
-    }
-    if name.ends_with("_slab_south_block") {
-        return Some(SlabVariant::South);
-    }
-    if name.ends_with("_slab_east_block") {
-        return Some(SlabVariant::East);
-    }
-    if name.ends_with("_slab_west_block") {
-        return Some(SlabVariant::West);
-    }
-    None
-}
-
-#[inline]
-fn is_any_slab_variant(block_id: BlockId, registry: &BlockRegistry) -> bool {
-    let Some(name) = registry.name_opt(block_id) else {
-        return false;
-    };
-    slab_variant_from_name(name).is_some()
-}
-
-#[inline]
-fn slab_block_id_for_variant(
-    slab_prefix: &str,
-    variant: SlabVariant,
-    registry: &BlockRegistry,
-) -> Option<BlockId> {
-    let name = match variant {
-        SlabVariant::Bottom => format!("{slab_prefix}_slab_block"),
-        SlabVariant::Top => format!("{slab_prefix}_slab_top_block"),
-        SlabVariant::North => format!("{slab_prefix}_slab_north_block"),
-        SlabVariant::South => format!("{slab_prefix}_slab_south_block"),
-        SlabVariant::East => format!("{slab_prefix}_slab_east_block"),
-        SlabVariant::West => format!("{slab_prefix}_slab_west_block"),
-    };
-    registry.id_opt(name.as_str())
-}
-
-#[inline]
-fn slabs_are_complementary(a: SlabVariant, b: SlabVariant) -> bool {
-    matches!(
-        (a, b),
-        (SlabVariant::Bottom, SlabVariant::Top)
-            | (SlabVariant::Top, SlabVariant::Bottom)
-            | (SlabVariant::North, SlabVariant::South)
-            | (SlabVariant::South, SlabVariant::North)
-            | (SlabVariant::East, SlabVariant::West)
-            | (SlabVariant::West, SlabVariant::East)
-    )
-}
-
-fn remove_hit_block_occupant(
-    chunk_map: &mut ChunkMap,
-    world_loc: IVec3,
-    hit_id: BlockId,
-    hit_is_stacked: bool,
-) -> bool {
-    let Some(mut access) = world_access_mut(chunk_map, world_loc) else {
-        return false;
-    };
-
-    let primary = access.get();
-    let stacked = access.get_stacked();
-
-    if hit_is_stacked {
-        if stacked == 0 {
-            return false;
-        }
-        access.set_stacked(0);
-        return true;
-    }
-
-    if primary != hit_id {
-        if stacked == hit_id {
-            access.set_stacked(0);
-            return true;
-        }
-        return false;
-    }
-
-    if stacked != 0 {
-        access.set(stacked);
-        access.set_stacked(0);
-    } else {
-        access.set(0);
-    }
     true
 }
 
-/// Checks whether place from selected slot in the `logic::events::block_event_handler` module.
-fn can_place_from_selected_slot(
-    inventory: &PlayerInventory,
-    hotbar_selection: Option<&HotbarSelectionState>,
-    block_id: BlockId,
-    item_registry: &ItemRegistry,
+fn clear_props_within_structure_volume(
+    place_origin: IVec3,
+    recipe: &BuildingStructureRecipe,
+    rotation_quarters: u8,
+    chunk_map: &mut ChunkMap,
     registry: &BlockRegistry,
-) -> bool {
-    let canonical_block_id = canonical_inventory_match_block_id(block_id, registry);
+    ev_dirty: &mut MessageWriter<SubChunkNeedRemeshEvent>,
+) {
+    let mut dirty_positions = Vec::new();
+    for y_offset in 0..recipe.space.y as i32 {
+        for local_z in 0..recipe.space.z as i32 {
+            for local_x in 0..recipe.space.x as i32 {
+                let (x_offset, z_offset) = rotated_structure_offset(
+                    local_x,
+                    local_z,
+                    recipe.space.x as i32,
+                    recipe.space.z as i32,
+                    rotation_quarters,
+                );
+                let world_pos = place_origin + IVec3::new(x_offset, y_offset, z_offset);
+                let Some(mut access) = world_access_mut(chunk_map, world_pos) else {
+                    continue;
+                };
 
-    if let Some(index) = hotbar_selection.map(|selection| selection.selected_index) {
-        let Some(slot) = inventory.slots.get(index) else {
-            return false;
-        };
-        return !slot.is_empty()
-            && item_registry
-                .block_for_item(slot.item_id)
-                .is_some_and(|item_block| {
-                    item_block == block_id || item_block == canonical_block_id
-                })
-            && slot.count > 0;
+                let mut changed = false;
+                let current = access.get();
+                if current != 0 && registry.is_prop(current) {
+                    access.set(0);
+                    changed = true;
+                }
+                let stacked = access.get_stacked();
+                if stacked != 0 && registry.is_prop(stacked) {
+                    access.set_stacked(0);
+                    changed = true;
+                }
+                if changed {
+                    dirty_positions.push(world_pos);
+                }
+            }
+        }
     }
 
-    inventory.slots.iter().any(|slot| {
-        !slot.is_empty()
-            && item_registry
-                .block_for_item(slot.item_id)
-                .is_some_and(|item_block| {
-                    item_block == block_id || item_block == canonical_block_id
-                })
-            && slot.count > 0
+    for world_pos in dirty_positions {
+        mark_dirty_block_and_neighbors(chunk_map, world_pos, ev_dirty);
+    }
+}
+
+fn is_structure_cell_placeable(
+    world_pos: IVec3,
+    chunk_map: &ChunkMap,
+    registry: &BlockRegistry,
+) -> bool {
+    if world_pos.y < Y_MIN || world_pos.y > Y_MAX {
+        return false;
+    }
+
+    let (chunk_coord, local) = world_to_chunk_xz(world_pos.x, world_pos.z);
+    let Some(chunk) = chunk_map.chunks.get(&chunk_coord) else {
+        return false;
+    };
+
+    let lx = local.x.clamp(0, (CX as i32 - 1) as u32) as usize;
+    let lz = local.y.clamp(0, (CZ as i32 - 1) as u32) as usize;
+    let ly = (world_pos.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+
+    let existing = chunk.get(lx, ly, lz);
+    let stacked = chunk.get_stacked(lx, ly, lz);
+    (existing == 0 || registry.is_overridable(existing)) && stacked == 0
+}
+
+fn is_structure_support_cell(
+    world_pos: IVec3,
+    chunk_map: &ChunkMap,
+    registry: &BlockRegistry,
+) -> bool {
+    if world_pos.y < Y_MIN || world_pos.y > Y_MAX {
+        return false;
+    }
+
+    let (chunk_coord, local) = world_to_chunk_xz(world_pos.x, world_pos.z);
+    let Some(chunk) = chunk_map.chunks.get(&chunk_coord) else {
+        return false;
+    };
+
+    let lx = local.x.clamp(0, (CX as i32 - 1) as u32) as usize;
+    let lz = local.y.clamp(0, (CZ as i32 - 1) as u32) as usize;
+    let ly = (world_pos.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+
+    let existing = chunk.get(lx, ly, lz);
+    let stacked = chunk.get_stacked(lx, ly, lz);
+    (existing != 0 && !registry.is_overridable(existing))
+        || (stacked != 0 && !registry.is_overridable(stacked))
+}
+
+fn world_cell_intersects_structure(
+    world_pos: IVec3,
+    rapier_context: &ReadRapierContext,
+    q_structures: &Query<&PlacedStructureMetadata>,
+    q_structure_parents: &Query<&ChildOf>,
+) -> bool {
+    let Ok(ctx) = rapier_context.single() else {
+        return false;
+    };
+    // Slightly shrink probe so touching at a face/edge is still placeable,
+    // while true overlap with structure colliders stays blocked.
+    let cell_half = (VOXEL_SIZE * 0.5 - 0.02).max(0.01);
+    let cell_center_world = Vec3::new(
+        (world_pos.x as f32 + 0.5) * VOXEL_SIZE,
+        (world_pos.y as f32 + 0.5) * VOXEL_SIZE,
+        (world_pos.z as f32 + 0.5) * VOXEL_SIZE,
+    );
+    let probe = Collider::cuboid(cell_half, cell_half, cell_half);
+    let mut intersects_structure = false;
+    let structure_filter = |entity: Entity| -> bool {
+        is_structure_collider_entity(entity, q_structures, q_structure_parents)
+    };
+
+    ctx.intersect_shape(
+        cell_center_world,
+        Quat::IDENTITY,
+        (&probe).into(),
+        QueryFilter::default()
+            .exclude_sensors()
+            .predicate(&structure_filter),
+        |_| {
+            intersects_structure = true;
+            false
+        },
+    );
+
+    intersects_structure
+}
+
+#[inline]
+fn structure_has_workbench_ui(meta: &PlacedStructureMetadata) -> bool {
+    if meta.recipe_name.eq_ignore_ascii_case("work_table") {
+        return true;
+    }
+    meta.registration.as_ref().is_some_and(|registration| {
+        registration
+            .localized_name
+            .eq_ignore_ascii_case("workbench_block")
     })
 }
 
-/// Runs the `consume_from_selected_slot` routine for consume from selected slot in the `logic::events::block_event_handler` module.
-fn consume_from_selected_slot(
-    inventory: &mut PlayerInventory,
-    hotbar_selection: Option<&HotbarSelectionState>,
-    block_id: BlockId,
-    item_registry: &ItemRegistry,
-    registry: &BlockRegistry,
+fn is_structure_collider_entity(
+    entity: Entity,
+    q_structures: &Query<&PlacedStructureMetadata>,
+    q_structure_parents: &Query<&ChildOf>,
 ) -> bool {
-    let canonical_block_id = canonical_inventory_match_block_id(block_id, registry);
-
-    if let Some(index) = hotbar_selection.map(|selection| selection.selected_index) {
-        let Some(slot) = inventory.slots.get_mut(index) else {
+    let mut current = entity;
+    loop {
+        if q_structures.get(current).is_ok() {
+            return true;
+        }
+        let Ok(parent) = q_structure_parents.get(current) else {
             return false;
         };
-        if slot.is_empty()
-            || !item_registry
-                .block_for_item(slot.item_id)
-                .is_some_and(|item_block| {
-                    item_block == block_id || item_block == canonical_block_id
-                })
-            || slot.count == 0
-        {
-            return false;
-        }
+        current = parent.parent();
+    }
+}
 
-        slot.count -= 1;
+fn build_structure_surface_hit(
+    structure_hit: crate::core::entities::player::block_selection::StructureHit,
+    q_structures: &Query<&PlacedStructureMetadata>,
+) -> Option<crate::core::entities::player::block_selection::BlockHit> {
+    let meta = q_structures.get(structure_hit.entity).ok()?;
+    let face = face_from_normal(structure_hit.hit_normal_world);
+    let inward_probe = structure_hit.hit_world - structure_hit.hit_normal_world * 0.02;
+
+    let block_pos = IVec3::new(
+        inward_probe.x.floor() as i32,
+        inward_probe.y.floor() as i32,
+        inward_probe.z.floor() as i32,
+    );
+    let place_pos = block_pos + face_to_block_offset(face);
+    let hit_local = Vec3::new(
+        structure_hit.hit_world.x - block_pos.x as f32,
+        structure_hit.hit_world.y - block_pos.y as f32,
+        structure_hit.hit_world.z - block_pos.z as f32,
+    )
+    .clamp(Vec3::splat(0.0), Vec3::splat(0.999));
+
+    let block_id = meta
+        .registration
+        .as_ref()
+        .and_then(|registration| registration.block_id)
+        .unwrap_or(1);
+
+    Some(crate::core::entities::player::block_selection::BlockHit {
+        block_pos,
+        block_id,
+        is_stacked: false,
+        face,
+        hit_local,
+        place_pos,
+    })
+}
+
+#[inline]
+fn face_to_block_offset(face: Face) -> IVec3 {
+    match face {
+        Face::Top => IVec3::new(0, 1, 0),
+        Face::Bottom => IVec3::new(0, -1, 0),
+        Face::North => IVec3::new(0, 0, -1),
+        Face::South => IVec3::new(0, 0, 1),
+        Face::East => IVec3::new(1, 0, 0),
+        Face::West => IVec3::new(-1, 0, 0),
+    }
+}
+
+#[inline]
+fn face_from_normal(normal: Vec3) -> Face {
+    let axis = normal.abs();
+    if axis.x >= axis.y && axis.x >= axis.z {
+        if normal.x >= 0.0 {
+            Face::East
+        } else {
+            Face::West
+        }
+    } else if axis.y >= axis.z {
+        if normal.y >= 0.0 {
+            Face::Top
+        } else {
+            Face::Bottom
+        }
+    } else if normal.z >= 0.0 {
+        Face::South
+    } else {
+        Face::North
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PlannedStructureConsumption {
+    slot_index: usize,
+    requirement_index: usize,
+    item_id: ItemId,
+    count: u16,
+}
+
+struct ConsumedStructureRequirements {
+    drop_requirements: Vec<BuildingMaterialRequirement>,
+    style_source_item_id: Option<ItemId>,
+}
+
+fn consume_structure_requirements_from_inventory(
+    inventory: &mut PlayerInventory,
+    requirements: &[BuildingMaterialRequirement],
+    item_registry: &ItemRegistry,
+) -> Option<ConsumedStructureRequirements> {
+    let plan = plan_structure_requirement_consumption(inventory, requirements, item_registry)?;
+
+    let mut consumed_totals: Vec<(ItemId, u16)> = Vec::new();
+    let mut logs_style_candidate: Option<ItemId> = None;
+    let mut first_consumed_item: Option<ItemId> = None;
+
+    for planned in &plan {
+        let Some(slot) = inventory.slots.get_mut(planned.slot_index) else {
+            return None;
+        };
+        if slot.is_empty() || slot.item_id != planned.item_id || slot.count < planned.count {
+            return None;
+        }
+        slot.count -= planned.count;
         if slot.count == 0 {
             slot.item_id = 0;
         }
-        return true;
+
+        if first_consumed_item.is_none() {
+            first_consumed_item = Some(planned.item_id);
+        }
+        if logs_style_candidate.is_none()
+            && requirements
+                .get(planned.requirement_index)
+                .is_some_and(is_logs_requirement)
+        {
+            logs_style_candidate = Some(planned.item_id);
+        }
+
+        if let Some((_, total)) = consumed_totals
+            .iter_mut()
+            .find(|(item_id, _)| *item_id == planned.item_id)
+        {
+            *total = total.saturating_add(planned.count);
+        } else {
+            consumed_totals.push((planned.item_id, planned.count));
+        }
     }
 
-    for slot in &mut inventory.slots {
-        if slot.is_empty()
-            || !item_registry
-                .block_for_item(slot.item_id)
-                .is_some_and(|item_block| {
-                    item_block == block_id || item_block == canonical_block_id
-                })
-            || slot.count == 0
-        {
+    let mut drop_requirements = Vec::with_capacity(consumed_totals.len());
+    for (item_id, count) in consumed_totals {
+        let Some(item_def) = item_registry.def_opt(item_id) else {
+            continue;
+        };
+        drop_requirements.push(BuildingMaterialRequirement::item(
+            item_id,
+            item_def.localized_name.clone(),
+            count.max(1),
+        ));
+    }
+
+    Some(ConsumedStructureRequirements {
+        drop_requirements,
+        style_source_item_id: logs_style_candidate.or(first_consumed_item),
+    })
+}
+
+fn plan_structure_requirement_consumption(
+    inventory: &PlayerInventory,
+    requirements: &[BuildingMaterialRequirement],
+    item_registry: &ItemRegistry,
+) -> Option<Vec<PlannedStructureConsumption>> {
+    let mut remaining_per_slot: Vec<u16> = inventory
+        .slots
+        .iter()
+        .map(|slot| if slot.is_empty() { 0 } else { slot.count })
+        .collect();
+    let mut plan = Vec::new();
+
+    for (requirement_index, required) in requirements.iter().enumerate() {
+        let mut missing = required.count;
+        if missing == 0 {
             continue;
         }
-        slot.count -= 1;
-        if slot.count == 0 {
-            slot.item_id = 0;
+        for (slot_index, slot) in inventory.slots.iter().enumerate() {
+            if missing == 0 {
+                break;
+            }
+            let available = *remaining_per_slot.get(slot_index).unwrap_or(&0);
+            if available == 0 || slot.is_empty() {
+                continue;
+            }
+            if !structure_requirement_matches_item(required, slot.item_id, item_registry) {
+                continue;
+            }
+
+            let take = available.min(missing);
+            if let Some(remaining_slot_count) = remaining_per_slot.get_mut(slot_index) {
+                *remaining_slot_count -= take;
+            }
+            missing -= take;
+            plan.push(PlannedStructureConsumption {
+                slot_index,
+                requirement_index,
+                item_id: slot.item_id,
+                count: take,
+            });
         }
-        return true;
+        if missing > 0 {
+            return None;
+        }
     }
 
-    false
+    Some(plan)
 }
 
-#[inline]
-fn canonical_inventory_match_block_id(block_id: BlockId, registry: &BlockRegistry) -> BlockId {
-    let Some(name) = registry.name_opt(block_id) else {
-        return block_id;
-    };
-    let Some(prefix) = slab_family_prefix(name) else {
-        return block_id;
-    };
-    registry
-        .id_opt(format!("{prefix}_slab_block").as_str())
-        .unwrap_or(block_id)
-}
-
-/// Runs the `selected_hotbar_tool` routine for selected hotbar tool in the `logic::events::block_event_handler` module.
-fn selected_hotbar_tool(
-    inventory: &PlayerInventory,
-    hotbar_selection: Option<&HotbarSelectionState>,
+fn structure_requirement_matches_item(
+    requirement: &BuildingMaterialRequirement,
+    item_id: ItemId,
     item_registry: &ItemRegistry,
-) -> Option<crate::core::inventory::items::ToolDef> {
-    let index = hotbar_selection
-        .map(|selection| selection.selected_index)
-        .unwrap_or(0);
-
-    let slot = inventory.slots.get(index)?;
-    if slot.is_empty() {
-        return None;
+) -> bool {
+    match &requirement.source {
+        BuildingMaterialRequirementSource::Item {
+            item_id: required_item_id,
+            ..
+        } => *required_item_id == item_id,
+        BuildingMaterialRequirementSource::Group { group } => {
+            item_registry.has_group(item_id, group.as_str())
+        }
     }
-
-    item_registry.tool_for_item(slot.item_id)
 }
 
-/// Synchronizes mining overlay for the `logic::events::block_event_handler` module.
-fn sync_mining_overlay(
+fn is_logs_requirement(requirement: &BuildingMaterialRequirement) -> bool {
+    matches!(
+        &requirement.source,
+        BuildingMaterialRequirementSource::Group { group } if group == "logs"
+    )
+}
+
+fn sync_structures_for_loaded_chunks(
     mut commands: Commands,
-    mut root: ResMut<MiningOverlayRoot>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
-    time: Res<Time>,
-    state: Res<MiningState>,
-    mut q_faces: Query<
-        (&mut Transform, &MiningOverlayFace),
-        (With<MiningOverlayFace>, Without<MiningOverlay>),
-    >,
-    mut q_parent_tf: Query<&mut Transform, (With<MiningOverlay>, Without<MiningOverlayFace>)>,
+    asset_server: Res<AssetServer>,
+    item_registry: Res<ItemRegistry>,
+    chunk_map: Res<ChunkMap>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
+    structure_recipe_registry: Option<Res<BuildingStructureRecipeRegistry>>,
+    ws: Option<Res<WorldSave>>,
+    mut region_cache: Option<ResMut<RegionCache>>,
+    mut runtime: ResMut<StructureRuntimeState>,
 ) {
-    let Some(target) = state.target else {
-        if let Some(e) = root.0.take() {
-            safe_despawn_entity(&mut commands, e);
-        }
+    let Some(structure_recipe_registry) = structure_recipe_registry.as_ref() else {
         return;
     };
+    let uses_local_save_data = multiplayer_connection.uses_local_save_data();
 
-    let now = time.elapsed_secs();
-    let progress = ((now - target.started_at) / target.duration).clamp(0.0, 1.0);
+    let mut newly_loaded = Vec::new();
+    for &coord in chunk_map.chunks.keys() {
+        if runtime.loaded_chunks.insert(coord) {
+            newly_loaded.push(coord);
+        }
+    }
+    for coord in newly_loaded {
+        let entries = if uses_local_save_data {
+            if let (Some(ws), Some(cache)) = (ws.as_deref(), region_cache.as_deref_mut()) {
+                load_structure_records_for_chunk(ws, cache, coord)
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        runtime.records_by_chunk.insert(coord, entries.clone());
 
-    let s = VOXEL_SIZE;
-    let center = Vec3::new(
-        (target.loc.x as f32 + 0.5) * s,
-        (target.loc.y as f32 + 0.5) * s,
-        (target.loc.z as f32 + 0.5) * s,
-    );
-
-    let parent_e = if let Some(e) = root.0 {
-        e
-    } else {
-        let e = spawn_overlay_at(
-            &mut commands,
-            &mut meshes,
-            &mut mats,
-            center,
-            Some(RenderLayers::layer(2)),
-            progress,
-        );
-        root.0 = Some(e);
-        e
-    };
-
-    if let Ok(mut tf) = q_parent_tf.get_mut(parent_e) {
-        tf.translation = center;
+        for entry in entries {
+            let place_origin = IVec3::new(
+                entry.place_origin[0],
+                entry.place_origin[1],
+                entry.place_origin[2],
+            );
+            let rotation_steps = normalize_rotation_steps(
+                entry
+                    .rotation_steps
+                    .map_or((entry.rotation_quarters as i32) * 2, i32::from),
+            );
+            let rotation_quarters = rotation_steps_to_placement_quarters(rotation_steps);
+            let Some(recipe) = structure_recipe_registry.recipe_by_name(entry.recipe_name.as_str())
+            else {
+                continue;
+            };
+            let key = placed_structure_key(
+                coord,
+                recipe.name.clone(),
+                place_origin,
+                rotation_quarters,
+                rotation_steps,
+            );
+            if runtime.spawned_entities.contains_key(&key) {
+                continue;
+            }
+            let drop_requirements =
+                resolve_structure_drop_requirements_for_entry(&entry, recipe, &item_registry);
+            let style_source_item_id = resolve_structure_style_source_item_id_for_entry(
+                &entry,
+                drop_requirements.as_slice(),
+                recipe,
+                &item_registry,
+            );
+            let entity = spawn_structure_model_entity(
+                &mut commands,
+                &asset_server,
+                recipe,
+                place_origin,
+                rotation_quarters,
+                rotation_steps,
+                drop_requirements,
+                style_source_item_id,
+            );
+            runtime.spawned_entities.insert(key.clone(), entity);
+            runtime.entity_to_key.insert(entity, key);
+        }
     }
 
-    let max_scale = 0.98 * s;
-    let size = max_scale * progress;
-    let face_scale = Vec3::new(size, size, 1.0);
+    let unloaded: Vec<IVec2> = runtime
+        .loaded_chunks
+        .iter()
+        .copied()
+        .filter(|coord| !chunk_map.chunks.contains_key(coord))
+        .collect();
+    for coord in unloaded {
+        runtime.loaded_chunks.remove(&coord);
+        runtime.records_by_chunk.remove(&coord);
 
-    for (mut tf, _) in q_faces.iter_mut() {
-        tf.scale = face_scale;
-    }
-
-    if progress >= 1.0 {
-        if let Some(e) = root.0.take() {
-            safe_despawn_entity(&mut commands, e);
+        let keys: Vec<PlacedStructureKey> = runtime
+            .spawned_entities
+            .keys()
+            .filter(|key| key.origin_chunk == coord)
+            .cloned()
+            .collect();
+        for key in keys {
+            if let Some(entity) = runtime.spawned_entities.remove(&key) {
+                runtime.entity_to_key.remove(&entity);
+                safe_despawn_entity(&mut commands, entity);
+            }
         }
     }
 }
 
-/// Spawns overlay at for the `logic::events::block_event_handler` module.
-#[inline]
-fn spawn_overlay_at(
+fn register_structure_in_runtime(
+    runtime: &mut StructureRuntimeState,
+    structure_entity: Entity,
+    recipe: &BuildingStructureRecipe,
+    place_origin: IVec3,
+    rotation_quarters: u8,
+    rotation_steps: u8,
+    style_source_item_id: Option<ItemId>,
+    drop_requirements: &[BuildingMaterialRequirement],
+    item_registry: &ItemRegistry,
+    uses_local_save_data: bool,
+    ws: Option<&WorldSave>,
+    mut region_cache: Option<&mut RegionCache>,
+) {
+    let (origin_chunk, _) = world_to_chunk_xz(place_origin.x, place_origin.z);
+    runtime.loaded_chunks.insert(origin_chunk);
+    let key = placed_structure_key(
+        origin_chunk,
+        recipe.name.clone(),
+        place_origin,
+        rotation_quarters,
+        rotation_steps,
+    );
+    runtime
+        .spawned_entities
+        .insert(key.clone(), structure_entity);
+    runtime.entity_to_key.insert(structure_entity, key);
+
+    let entries = runtime.records_by_chunk.entry(origin_chunk).or_default();
+    let style_item = style_source_item_id
+        .and_then(|item_id| item_registry.def_opt(item_id))
+        .map(|item| item.localized_name.clone())
+        .unwrap_or_default();
+    let drop_items = structure_region_drop_items_from_requirements(drop_requirements);
+    if let Some(existing_entry) = entries.iter_mut().find(|entry| {
+        entry.recipe_name == recipe.name
+            && entry.place_origin == [place_origin.x, place_origin.y, place_origin.z]
+            && normalize_rotation_quarters(entry.rotation_quarters as i32) == rotation_quarters
+            && normalize_rotation_steps(
+                entry
+                    .rotation_steps
+                    .map_or((entry.rotation_quarters as i32) * 2, i32::from),
+            ) == rotation_steps
+    }) {
+        existing_entry.style_item = style_item;
+        existing_entry.drop_items = drop_items;
+    } else {
+        entries.push(StructureRegionEntry {
+            recipe_name: recipe.name.clone(),
+            place_origin: [place_origin.x, place_origin.y, place_origin.z],
+            rotation_quarters,
+            rotation_steps: Some(rotation_steps),
+            style_item,
+            drop_items,
+        });
+    }
+
+    if !uses_local_save_data {
+        return;
+    }
+    let (Some(ws), Some(cache)) = (ws, region_cache.as_deref_mut()) else {
+        return;
+    };
+    let _ = persist_structure_records_for_chunk(ws, cache, origin_chunk, entries);
+}
+
+fn placed_structure_key(
+    origin_chunk: IVec2,
+    recipe_name: String,
+    place_origin: IVec3,
+    rotation_quarters: u8,
+    rotation_steps: u8,
+) -> PlacedStructureKey {
+    PlacedStructureKey {
+        origin_chunk,
+        recipe_name,
+        place_origin,
+        rotation_quarters,
+        rotation_steps,
+    }
+}
+
+fn load_structure_records_for_chunk(
+    ws: &WorldSave,
+    cache: &mut RegionCache,
+    coord: IVec2,
+) -> Vec<StructureRegionEntry> {
+    let Ok(Some(slot)) = cache.read_chunk(ws, coord) else {
+        return Vec::new();
+    };
+    let Some(payload) = container_find(slot.as_slice(), TAG_STR1) else {
+        return Vec::new();
+    };
+    decode_structure_entries(payload).unwrap_or_default()
+}
+
+fn persist_structure_records_for_chunk(
+    ws: &WorldSave,
+    cache: &mut RegionCache,
+    coord: IVec2,
+    entries: &[StructureRegionEntry],
+) -> std::io::Result<()> {
+    let payload = encode_structure_entries(entries);
+    let old = cache.read_chunk(ws, coord).ok().flatten();
+    let merged = container_upsert(old.as_deref(), TAG_STR1, payload.as_slice());
+    cache.write_chunk_replace(ws, coord, merged.as_slice())
+}
+
+fn structure_region_drop_items_from_requirements(
+    requirements: &[BuildingMaterialRequirement],
+) -> Vec<StructureRegionDropItem> {
+    let mut entries = Vec::new();
+    for requirement in requirements {
+        if requirement.count == 0 {
+            continue;
+        }
+        let BuildingMaterialRequirementSource::Item {
+            item_localized_name,
+            ..
+        } = &requirement.source
+        else {
+            continue;
+        };
+        if item_localized_name.trim().is_empty() {
+            continue;
+        }
+        entries.push(StructureRegionDropItem {
+            item: item_localized_name.clone(),
+            count: requirement.count.max(1),
+        });
+    }
+    entries
+}
+
+fn resolve_structure_drop_requirements_for_entry(
+    entry: &StructureRegionEntry,
+    recipe: &BuildingStructureRecipe,
+    item_registry: &ItemRegistry,
+) -> Vec<BuildingMaterialRequirement> {
+    let mut from_save = Vec::new();
+    for drop_item in &entry.drop_items {
+        let item_name = drop_item.item.trim();
+        if item_name.is_empty() {
+            continue;
+        }
+        let Some(item_id) = item_registry.id_opt(item_name) else {
+            continue;
+        };
+        from_save.push(BuildingMaterialRequirement::item(
+            item_id,
+            item_name.to_string(),
+            drop_item.count.max(1),
+        ));
+    }
+    if !from_save.is_empty() {
+        return from_save;
+    }
+
+    let mut fallback = Vec::new();
+    for requirement in &recipe.requirements {
+        if requirement.count == 0 {
+            continue;
+        }
+        match &requirement.source {
+            BuildingMaterialRequirementSource::Item {
+                item_id,
+                item_localized_name,
+            } => {
+                fallback.push(BuildingMaterialRequirement::item(
+                    *item_id,
+                    item_localized_name.clone(),
+                    requirement.count.max(1),
+                ));
+            }
+            BuildingMaterialRequirementSource::Group { group } => {
+                let Some(item_id) = first_item_in_group(item_registry, group.as_str()) else {
+                    continue;
+                };
+                let Some(item_def) = item_registry.def_opt(item_id) else {
+                    continue;
+                };
+                fallback.push(BuildingMaterialRequirement::item(
+                    item_id,
+                    item_def.localized_name.clone(),
+                    requirement.count.max(1),
+                ));
+            }
+        }
+    }
+    fallback
+}
+
+fn resolve_structure_style_source_item_id_for_entry(
+    entry: &StructureRegionEntry,
+    drop_requirements: &[BuildingMaterialRequirement],
+    recipe: &BuildingStructureRecipe,
+    item_registry: &ItemRegistry,
+) -> Option<ItemId> {
+    let style_item_name = entry.style_item.trim();
+    if !style_item_name.is_empty()
+        && let Some(item_id) = item_registry.id_opt(style_item_name)
+    {
+        return Some(item_id);
+    }
+    first_requirement_item_id_in_group(drop_requirements, item_registry, "logs")
+        .or_else(|| first_requirement_item_id(drop_requirements))
+        .or_else(|| resolve_default_structure_style_item_id(recipe, item_registry))
+}
+
+fn resolve_default_structure_style_item_id(
+    recipe: &BuildingStructureRecipe,
+    item_registry: &ItemRegistry,
+) -> Option<ItemId> {
+    for requirement in &recipe.requirements {
+        let BuildingMaterialRequirementSource::Item { item_id, .. } = &requirement.source else {
+            continue;
+        };
+        if item_registry.has_group(*item_id, "logs") {
+            return Some(*item_id);
+        }
+    }
+    for requirement in &recipe.requirements {
+        let BuildingMaterialRequirementSource::Group { group } = &requirement.source else {
+            continue;
+        };
+        if group == "logs" {
+            return first_item_in_group(item_registry, group.as_str());
+        }
+    }
+    first_requirement_item_id(&recipe.requirements).or_else(|| {
+        recipe.requirements.iter().find_map(|requirement| {
+            let BuildingMaterialRequirementSource::Group { group } = &requirement.source else {
+                return None;
+            };
+            first_item_in_group(item_registry, group.as_str())
+        })
+    })
+}
+
+fn first_requirement_item_id(requirements: &[BuildingMaterialRequirement]) -> Option<ItemId> {
+    requirements.iter().find_map(|requirement| {
+        let BuildingMaterialRequirementSource::Item { item_id, .. } = &requirement.source else {
+            return None;
+        };
+        Some(*item_id)
+    })
+}
+
+fn first_requirement_item_id_in_group(
+    requirements: &[BuildingMaterialRequirement],
+    item_registry: &ItemRegistry,
+    group: &str,
+) -> Option<ItemId> {
+    requirements.iter().find_map(|requirement| {
+        let BuildingMaterialRequirementSource::Item { item_id, .. } = &requirement.source else {
+            return None;
+        };
+        if item_registry.has_group(*item_id, group) {
+            Some(*item_id)
+        } else {
+            None
+        }
+    })
+}
+
+fn first_item_in_group(item_registry: &ItemRegistry, group: &str) -> Option<ItemId> {
+    let max_item_id = item_registry.defs.len().saturating_sub(1) as ItemId;
+    (1..=max_item_id).find(|item_id| item_registry.has_group(*item_id, group))
+}
+
+fn spawn_structure_model_entity(
     commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    mats: &mut Assets<StandardMaterial>,
-    world_center: Vec3,
-    layer: Option<RenderLayers>,
-    initial_progress: f32,
+    asset_server: &AssetServer,
+    recipe: &BuildingStructureRecipe,
+    place_origin: IVec3,
+    rotation_quarters: u8,
+    rotation_steps: u8,
+    drop_requirements: Vec<BuildingMaterialRequirement>,
+    style_source_item_id: Option<ItemId>,
 ) -> Entity {
-    let quad = meshes.add(unit_centered_quad());
-    let mat = mats.add(StandardMaterial {
-        base_color: Color::srgba(0.9, 0.9, 0.9, 0.02),
-        alpha_mode: AlphaMode::Blend,
-        unlit: true,
-        cull_mode: None,
-        perceptual_roughness: 1.0,
+    let model_rotation_quarters = normalize_rotation_quarters(
+        rotation_quarters as i32 + recipe.model_meta.model_rotation_quarters as i32,
+    );
+    let model_rotation_steps = normalize_rotation_steps(
+        rotation_steps as i32 + (recipe.model_meta.model_rotation_quarters as i32 * 2),
+    );
+    let model_rotation =
+        Quat::from_rotation_y(-(model_rotation_steps as f32) * std::f32::consts::FRAC_PI_4);
+    let placement_size_world = rotated_structure_space(recipe.space, rotation_quarters).as_vec3();
+    let selection_center_world = Vec3::new(
+        (place_origin.x as f32 + placement_size_world.x * 0.5) * VOXEL_SIZE,
+        (place_origin.y as f32 + placement_size_world.y * 0.5) * VOXEL_SIZE,
+        (place_origin.z as f32 + placement_size_world.z * 0.5) * VOXEL_SIZE,
+    );
+    let selection_size_world = placement_size_world * VOXEL_SIZE;
+    let translation = structure_model_translation(
+        recipe,
+        place_origin,
+        rotation_quarters,
+        model_rotation_quarters,
+    ) + (model_rotation * recipe.model_meta.model_offset) * VOXEL_SIZE;
+    let scene_handle = asset_server.load(recipe.model_asset_path.clone());
+    let (origin_chunk, _) = world_to_chunk_xz(place_origin.x, place_origin.z);
+
+    let structure_entity = commands
+        .spawn((
+            Name::new(format!("Structure:{}", recipe.name)),
+            PlacedStructureMetadata {
+                recipe_name: recipe.name.clone(),
+                stats: recipe.model_meta.stats.clone(),
+                place_origin,
+                rotation_quarters,
+                rotation_steps,
+                origin_chunk,
+                drop_requirements,
+                registration: recipe.model_meta.block_registration.clone(),
+                selection_center_world,
+                selection_size_world,
+            },
+            RigidBody::Fixed,
+            SceneRoot(scene_handle),
+            Transform::from_translation(translation).with_rotation(model_rotation),
+            GlobalTransform::default(),
+            Visibility::Inherited,
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+        ))
+        .id();
+    let mut style_source = None;
+    if let Some(style_item_id) = style_source_item_id.filter(|item_id| *item_id != 0) {
+        style_source = Some(StructureStyleSourceItem {
+            item_id: style_item_id,
+        });
+    }
+    let texture_bindings = if recipe.model_meta.textures.is_empty() {
+        None
+    } else {
+        Some(StructureTextureBindings {
+            entries: recipe.model_meta.textures.clone(),
+        })
+    };
+    if style_source.is_some() || texture_bindings.is_some() {
+        if let Some(style_source) = style_source {
+            commands.entity(structure_entity).insert(style_source);
+        }
+        if let Some(texture_bindings) = texture_bindings {
+            commands.entity(structure_entity).insert(texture_bindings);
+        }
+        commands
+            .entity(structure_entity)
+            .insert(StructureStyleMaterialPending);
+    }
+
+    match &recipe.model_meta.colliders {
+        BuildingStructureColliderSource::Boxes(colliders) => {
+            if colliders.is_empty() {
+                return structure_entity;
+            }
+            commands.entity(structure_entity).with_children(|children| {
+                for (index, collider) in colliders.iter().enumerate() {
+                    if !collider.block_entities {
+                        continue;
+                    }
+                    let half_x = (collider.size_m[0] * 0.5).max(0.005);
+                    let half_y = (collider.size_m[1] * 0.5).max(0.005);
+                    let half_z = (collider.size_m[2] * 0.5).max(0.005);
+                    children.spawn((
+                        Name::new(format!("StructureCollider:{}:{}", recipe.name, index)),
+                        Collider::cuboid(half_x, half_y, half_z),
+                        Transform::from_translation(Vec3::new(
+                            collider.offset_m[0],
+                            collider.offset_m[1],
+                            collider.offset_m[2],
+                        )),
+                        GlobalTransform::default(),
+                    ));
+                }
+            });
+        }
+        BuildingStructureColliderSource::Mesh => {
+            let mesh_flags = TriMeshFlags::FIX_INTERNAL_EDGES
+                | TriMeshFlags::MERGE_DUPLICATE_VERTICES
+                | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES;
+            commands.entity(structure_entity).insert((
+                AsyncSceneCollider {
+                    shape: Some(ComputedColliderShape::TriMesh(mesh_flags)),
+                    named_shapes: default(),
+                },
+                StructureMeshColliderNameFilterPending,
+                StructureMeshColliderCleanupPending,
+            ));
+        }
+    }
+    structure_entity
+}
+
+fn configure_structure_mesh_collider_name_filters(
+    mut commands: Commands,
+    scene_spawner: Res<bevy::scene::SceneSpawner>,
+    children: Query<&Children>,
+    mesh_names: Query<&Name, With<Mesh3d>>,
+    mut q_pending: Query<
+        (Entity, &bevy::scene::SceneInstance, &mut AsyncSceneCollider),
+        With<StructureMeshColliderNameFilterPending>,
+    >,
+) {
+    for (structure_entity, scene_instance, mut async_scene_collider) in &mut q_pending {
+        if !scene_spawner.instance_is_ready(**scene_instance) {
+            continue;
+        }
+
+        for child_entity in children.iter_descendants(structure_entity) {
+            let Ok(name) = mesh_names.get(child_entity) else {
+                continue;
+            };
+            if !name.as_str().to_ascii_lowercase().contains("none") {
+                continue;
+            }
+            async_scene_collider
+                .named_shapes
+                .insert(name.as_str().to_string(), None);
+        }
+
+        commands
+            .entity(structure_entity)
+            .remove::<StructureMeshColliderNameFilterPending>();
+    }
+}
+
+fn cleanup_structure_none_mesh_colliders(
+    mut commands: Commands,
+    scene_spawner: Res<bevy::scene::SceneSpawner>,
+    q_children: Query<&Children>,
+    q_names: Query<&Name>,
+    q_parents: Query<&ChildOf>,
+    q_colliders: Query<(), With<Collider>>,
+    q_pending: Query<
+        (Entity, &bevy::scene::SceneInstance, Has<AsyncSceneCollider>),
+        With<StructureMeshColliderCleanupPending>,
+    >,
+) {
+    for (structure_entity, scene_instance, has_async_scene_collider) in &q_pending {
+        if !scene_spawner.instance_is_ready(**scene_instance) {
+            continue;
+        }
+        // Wait until Rapier has finished generating child colliders.
+        if has_async_scene_collider {
+            continue;
+        }
+
+        for child_entity in q_children.iter_descendants(structure_entity) {
+            if q_colliders.get(child_entity).is_err() {
+                continue;
+            }
+            if !entity_or_ancestor_name_contains_none(
+                child_entity,
+                structure_entity,
+                &q_names,
+                &q_parents,
+            ) {
+                continue;
+            }
+            commands.entity(child_entity).remove::<Collider>();
+        }
+
+        commands
+            .entity(structure_entity)
+            .remove::<StructureMeshColliderCleanupPending>();
+    }
+}
+
+fn entity_or_ancestor_name_contains_none(
+    entity: Entity,
+    root_entity: Entity,
+    q_names: &Query<&Name>,
+    q_parents: &Query<&ChildOf>,
+) -> bool {
+    let mut current = entity;
+    loop {
+        if q_names
+            .get(current)
+            .is_ok_and(|name| name.as_str().to_ascii_lowercase().contains("none"))
+        {
+            return true;
+        }
+        if current == root_entity {
+            return false;
+        }
+        let Ok(parent) = q_parents.get(current) else {
+            return false;
+        };
+        current = parent.parent();
+    }
+}
+
+fn apply_structure_style_material_system(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    meshes: Res<Assets<Mesh>>,
+    item_registry: Res<ItemRegistry>,
+    block_registry: Res<BlockRegistry>,
+    q_pending: Query<
+        (
+            Entity,
+            Option<&StructureStyleSourceItem>,
+            Option<&StructureTextureBindings>,
+        ),
+        With<StructureStyleMaterialPending>,
+    >,
+    q_children: Query<&Children>,
+    q_names: Query<&Name>,
+    q_parents: Query<&ChildOf>,
+    q_meshes: Query<&Mesh3d>,
+    mut q_mesh_materials: Query<&mut MeshMaterial3d<StandardMaterial>>,
+) {
+    for (structure_entity, style_source, texture_bindings) in &q_pending {
+        let style_source_item_id = style_source
+            .map(|style_source| style_source.item_id)
+            .filter(|item_id| *item_id != 0);
+        let style_material = style_source_item_id.and_then(|item_id| {
+            resolve_structure_style_material_handle(item_id, &item_registry, &block_registry)
+        });
+        let apply_stats = apply_materials_to_structure_descendants(
+            structure_entity,
+            style_source_item_id,
+            style_material.as_ref(),
+            texture_bindings.map(|bindings| bindings.entries.as_slice()),
+            &asset_server,
+            &mut materials,
+            &mut images,
+            &meshes,
+            &item_registry,
+            &block_registry,
+            &q_children,
+            &q_names,
+            &q_parents,
+            &q_meshes,
+            &mut q_mesh_materials,
+        );
+
+        if apply_stats.mesh_count > 0 || (style_material.is_none() && texture_bindings.is_none()) {
+            commands
+                .entity(structure_entity)
+                .remove::<StructureStyleMaterialPending>();
+        }
+    }
+}
+
+fn resolve_structure_style_material_handle(
+    style_source_item_id: ItemId,
+    item_registry: &ItemRegistry,
+    block_registry: &BlockRegistry,
+) -> Option<Handle<StandardMaterial>> {
+    if style_source_item_id == 0 {
+        return None;
+    }
+    let style_item_id = item_registry
+        .related_item_in_group(style_source_item_id, "planks")
+        .unwrap_or(style_source_item_id);
+    let block_id = item_registry
+        .block_for_item(style_item_id)
+        .or_else(|| item_registry.block_for_item(style_source_item_id))?;
+    block_registry
+        .def_opt(block_id)
+        .map(|block| block.material.clone())
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct StructureMaterialApplyStats {
+    mesh_count: usize,
+    changed: usize,
+}
+
+fn apply_materials_to_structure_descendants(
+    structure_entity: Entity,
+    style_source_item_id: Option<ItemId>,
+    style_material: Option<&Handle<StandardMaterial>>,
+    texture_bindings: Option<&[BuildingStructureTextureBinding]>,
+    asset_server: &AssetServer,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    meshes: &Assets<Mesh>,
+    item_registry: &ItemRegistry,
+    block_registry: &BlockRegistry,
+    q_children: &Query<&Children>,
+    q_names: &Query<&Name>,
+    q_parents: &Query<&ChildOf>,
+    q_meshes: &Query<&Mesh3d>,
+    q_mesh_materials: &mut Query<&mut MeshMaterial3d<StandardMaterial>>,
+) -> StructureMaterialApplyStats {
+    let mut stats = StructureMaterialApplyStats::default();
+    let mut stack: Vec<Entity> = Vec::new();
+    let mut uv_bounds_cache: HashMap<AssetId<Mesh>, Option<[[f32; 2]; 2]>> = HashMap::new();
+    if let Ok(children) = q_children.get(structure_entity) {
+        stack.extend(children.iter());
+    }
+
+    while let Some(entity) = stack.pop() {
+        if let Ok(mut mesh_material) = q_mesh_materials.get_mut(entity) {
+            stats.mesh_count += 1;
+            let mesh_name_haystack =
+                mesh_name_haystack(entity, structure_entity, q_names, q_parents);
+            let uv_bounds =
+                mesh_uv_bounds_for_entity(entity, q_meshes, meshes, &mut uv_bounds_cache);
+            let target_material = texture_bindings.and_then(|bindings| {
+                resolve_texture_binding_material_for_mesh(
+                    bindings,
+                    mesh_name_haystack.as_str(),
+                    style_source_item_id,
+                    style_material,
+                    asset_server,
+                    materials,
+                    images,
+                    item_registry,
+                    block_registry,
+                    uv_bounds,
+                )
+            });
+            if let Some(target_material) = target_material.or_else(|| style_material.cloned())
+                && mesh_material.0 != target_material
+            {
+                mesh_material.0 = target_material;
+                stats.changed += 1;
+            }
+        }
+        if let Ok(children) = q_children.get(entity) {
+            stack.extend(children.iter());
+        }
+    }
+
+    stats
+}
+
+fn resolve_texture_binding_material_for_mesh(
+    texture_bindings: &[BuildingStructureTextureBinding],
+    mesh_name_haystack: &str,
+    style_source_item_id: Option<ItemId>,
+    style_material: Option<&Handle<StandardMaterial>>,
+    asset_server: &AssetServer,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    item_registry: &ItemRegistry,
+    block_registry: &BlockRegistry,
+    uv_bounds: Option<[[f32; 2]; 2]>,
+) -> Option<Handle<StandardMaterial>> {
+    let binding = texture_bindings
+        .iter()
+        .find(|binding| mesh_name_haystack.contains(binding.mesh_name_contains.as_str()))?;
+
+    let resolved = match &binding.source {
+        BuildingStructureTextureSource::Group { group, tile } => resolve_group_texture_material(
+            style_source_item_id,
+            style_material,
+            group.as_str(),
+            *tile,
+            binding.uv_repeat,
+            materials,
+            images,
+            item_registry,
+            block_registry,
+            uv_bounds,
+        )?,
+        BuildingStructureTextureSource::DirectPath { asset_path } => {
+            let mut material = style_material
+                .and_then(|handle| materials.get(handle))
+                .cloned()
+                .unwrap_or(StandardMaterial {
+                    metallic: 0.0,
+                    perceptual_roughness: 1.0,
+                    reflectance: 0.0,
+                    ..default()
+                });
+            let texture_handle: Handle<Image> = asset_server.load(asset_path.clone());
+            apply_nearest_sampler_to_texture_handle(images, &texture_handle, true);
+            material.base_color_texture = Some(texture_handle);
+            material.uv_transform =
+                build_uv_transform([0.0, 0.0], [1.0, 1.0], binding.uv_repeat, uv_bounds);
+            materials.add(material)
+        }
+    };
+    Some(resolved)
+}
+
+fn mesh_name_haystack(
+    entity: Entity,
+    root_entity: Entity,
+    q_names: &Query<&Name>,
+    q_parents: &Query<&ChildOf>,
+) -> String {
+    let mut names = Vec::<String>::new();
+    let mut current = entity;
+    loop {
+        if let Ok(name) = q_names.get(current) {
+            names.push(name.as_str().to_ascii_lowercase());
+        }
+        if current == root_entity {
+            break;
+        }
+        let Ok(parent) = q_parents.get(current) else {
+            break;
+        };
+        current = parent.parent();
+    }
+    names.join(" > ")
+}
+
+fn resolve_group_texture_material(
+    style_source_item_id: Option<ItemId>,
+    style_material: Option<&Handle<StandardMaterial>>,
+    group: &str,
+    tile: Option<[u32; 2]>,
+    uv_repeat: Option<[f32; 2]>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    item_registry: &ItemRegistry,
+    block_registry: &BlockRegistry,
+    uv_bounds: Option<[[f32; 2]; 2]>,
+) -> Option<Handle<StandardMaterial>> {
+    let style_item_id = resolve_item_for_group(style_source_item_id, group, item_registry)?;
+    let block_id = item_registry
+        .block_for_item(style_item_id)
+        .or_else(|| style_source_item_id.and_then(|source| item_registry.block_for_item(source)))?;
+    let block_def = block_registry.def_opt(block_id)?;
+    apply_nearest_sampler_to_texture_handle(images, &block_def.image, tile.is_none());
+
+    let mut material = materials
+        .get(&block_def.material)
+        .cloned()
+        .or_else(|| {
+            style_material
+                .and_then(|handle| materials.get(handle))
+                .cloned()
+        })
+        .unwrap_or(StandardMaterial {
+            metallic: 0.0,
+            perceptual_roughness: 1.0,
+            reflectance: 0.0,
+            ..default()
+        });
+
+    if let Some([tile_x, tile_y]) = tile {
+        let (tile_offset, tile_scale) =
+            uv_rect_for_block_tile(block_def.localized_name.as_str(), tile_x, tile_y)?;
+        material.uv_transform = build_uv_transform(tile_offset, tile_scale, uv_repeat, uv_bounds);
+    } else {
+        material.uv_transform = build_uv_transform([0.0, 0.0], [1.0, 1.0], uv_repeat, uv_bounds);
+    }
+
+    Some(materials.add(material))
+}
+
+#[inline]
+fn mesh_uv_bounds_for_entity(
+    entity: Entity,
+    q_meshes: &Query<&Mesh3d>,
+    meshes: &Assets<Mesh>,
+    cache: &mut HashMap<AssetId<Mesh>, Option<[[f32; 2]; 2]>>,
+) -> Option<[[f32; 2]; 2]> {
+    let mesh_handle = q_meshes.get(entity).ok()?;
+    let mesh_id = mesh_handle.0.id();
+    if let Some(cached) = cache.get(&mesh_id) {
+        return *cached;
+    }
+    let bounds = meshes
+        .get(&mesh_handle.0)
+        .and_then(mesh_uv_bounds)
+        .map(|(min, max)| [min, max]);
+    cache.insert(mesh_id, bounds);
+    bounds
+}
+
+fn mesh_uv_bounds(mesh: &Mesh) -> Option<([f32; 2], [f32; 2])> {
+    let values = mesh.attribute(Mesh::ATTRIBUTE_UV_0)?;
+    let VertexAttributeValues::Float32x2(uvs) = values else {
+        return None;
+    };
+    let first = uvs.first()?;
+    let mut min_u = first[0];
+    let mut max_u = first[0];
+    let mut min_v = first[1];
+    let mut max_v = first[1];
+    for uv in uvs.iter().skip(1) {
+        min_u = min_u.min(uv[0]);
+        max_u = max_u.max(uv[0]);
+        min_v = min_v.min(uv[1]);
+        max_v = max_v.max(uv[1]);
+    }
+    Some(([min_u, min_v], [max_u, max_v]))
+}
+
+fn build_uv_transform(
+    base_offset: [f32; 2],
+    base_scale: [f32; 2],
+    uv_repeat: Option<[f32; 2]>,
+    uv_bounds: Option<[[f32; 2]; 2]>,
+) -> Affine2 {
+    let repeat = uv_repeat.unwrap_or([1.0, 1.0]);
+    let bounds = uv_bounds.unwrap_or([[0.0, 0.0], [1.0, 1.0]]);
+    let min_u = bounds[0][0];
+    let min_v = bounds[0][1];
+    let range_u = (bounds[1][0] - bounds[0][0]).abs().max(0.000_01);
+    let range_v = (bounds[1][1] - bounds[0][1]).abs().max(0.000_01);
+
+    let scale_u = base_scale[0] * repeat[0] / range_u;
+    let scale_v = base_scale[1] * repeat[1] / range_v;
+    let translate_u = base_offset[0] - (min_u * scale_u);
+    let translate_v = base_offset[1] - (min_v * scale_v);
+
+    Affine2::from_scale_angle_translation(
+        Vec2::new(scale_u, scale_v),
+        0.0,
+        Vec2::new(translate_u, translate_v),
+    )
+}
+
+#[inline]
+fn apply_nearest_sampler_to_image(
+    images: &mut Assets<Image>,
+    image_id: AssetId<Image>,
+    repeat: bool,
+) {
+    let Some(image) = images.get_mut(image_id) else {
+        return;
+    };
+    let address_mode = if repeat {
+        bevy::image::ImageAddressMode::Repeat
+    } else {
+        bevy::image::ImageAddressMode::ClampToEdge
+    };
+    image.sampler = bevy::image::ImageSampler::Descriptor(bevy::image::ImageSamplerDescriptor {
+        address_mode_u: address_mode,
+        address_mode_v: address_mode,
+        address_mode_w: address_mode,
+        mag_filter: bevy::image::ImageFilterMode::Nearest,
+        min_filter: bevy::image::ImageFilterMode::Nearest,
+        mipmap_filter: bevy::image::ImageFilterMode::Nearest,
+        anisotropy_clamp: 1,
         ..default()
     });
-
-    let s = VOXEL_SIZE;
-    let half = 0.5 * s;
-    let eps = 0.003 * s;
-
-    let max_scale = 0.98 * s;
-    let init_scale = (initial_progress.clamp(0.0, 1.0).max(0.001)) * max_scale;
-    let init_vec = Vec3::new(init_scale, init_scale, 1.0);
-
-    let mut parent = commands.spawn((
-        MiningOverlay,
-        Visibility::default(),
-        NoFrustumCulling,
-        Transform::from_translation(world_center),
-        GlobalTransform::default(),
-        NotShadowCaster,
-        NotShadowReceiver,
-        Name::new("MiningOverlay"),
-    ));
-    if let Some(l) = layer.as_ref() {
-        parent.insert(l.clone());
-    }
-    let parent_id = parent.id();
-
-    let spawn_face = |c: &mut RelatedSpawnerCommands<ChildOf>, _: Axis, tf: Transform| {
-        let mut e = c.spawn((
-            MiningOverlayFace,
-            Visibility::default(),
-            Mesh3d(quad.clone()),
-            MeshMaterial3d(mat.clone()),
-            tf.with_scale(init_vec),
-            GlobalTransform::default(),
-            NotShadowCaster,
-            NotShadowReceiver,
-            Name::new("MiningOverlayFace"),
-        ));
-        if let Some(l) = layer.as_ref() {
-            e.insert(l.clone());
-        }
-    };
-
-    commands.entity(parent_id).with_children(|c| {
-        // +Z / -Z (XY)
-        spawn_face(
-            c,
-            Axis::XY,
-            Transform::from_translation(Vec3::new(0.0, 0.0, half + eps)),
-        );
-        spawn_face(
-            c,
-            Axis::XY,
-            Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::PI))
-                .with_translation(Vec3::new(0.0, 0.0, -half - eps)),
-        );
-
-        // +Y / -Y (XZ)
-        spawn_face(
-            c,
-            Axis::XZ,
-            Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
-                .with_translation(Vec3::new(0.0, half + eps, 0.0)),
-        );
-        spawn_face(
-            c,
-            Axis::XZ,
-            Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
-                .with_translation(Vec3::new(0.0, -half - eps, 0.0)),
-        );
-
-        // +X / -X (YZ)
-        spawn_face(
-            c,
-            Axis::YZ,
-            Transform::from_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2))
-                .with_translation(Vec3::new(half + eps, 0.0, 0.0)),
-        );
-        spawn_face(
-            c,
-            Axis::YZ,
-            Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))
-                .with_translation(Vec3::new(-half - eps, 0.0, 0.0)),
-        );
-    });
-
-    parent_id
 }
 
-/// Runs the `unit_centered_quad` routine for unit centered quad in the `logic::events::block_event_handler` module.
 #[inline]
-fn unit_centered_quad() -> Mesh {
-    use bevy::mesh::{Indices, PrimitiveTopology};
-    use bevy::prelude::Mesh;
-    let mut m = Mesh::new(PrimitiveTopology::TriangleList, Default::default());
-    m.insert_attribute(
-        Mesh::ATTRIBUTE_POSITION,
-        vec![
-            [-0.5, -0.5, 0.0],
-            [0.5, -0.5, 0.0],
-            [0.5, 0.5, 0.0],
-            [-0.5, 0.5, 0.0],
-        ],
-    );
-    m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4]);
-    m.insert_attribute(
-        Mesh::ATTRIBUTE_UV_0,
-        vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-    );
-    m.insert_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
-    m
+fn apply_nearest_sampler_to_texture_handle(
+    images: &mut Assets<Image>,
+    texture: &Handle<Image>,
+    repeat: bool,
+) {
+    apply_nearest_sampler_to_image(images, texture.id(), repeat);
 }
+
+fn resolve_item_for_group(
+    style_source_item_id: Option<ItemId>,
+    group: &str,
+    item_registry: &ItemRegistry,
+) -> Option<ItemId> {
+    if let Some(style_source_item_id) = style_source_item_id {
+        if let Some(related_item_id) =
+            item_registry.related_item_in_group(style_source_item_id, group)
+        {
+            return Some(related_item_id);
+        }
+        if item_registry.has_group(style_source_item_id, group) {
+            return Some(style_source_item_id);
+        }
+    }
+    first_item_in_group(item_registry, group)
+}
+
+#[derive(Deserialize)]
+struct StructureTextureDirJson {
+    #[serde(default)]
+    texture_dir: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StructureTilesetJson {
+    #[serde(default)]
+    tile_size: u32,
+    columns: u32,
+    rows: u32,
+}
+
+fn uv_rect_for_block_tile(
+    block_localized_name: &str,
+    tile_x: u32,
+    tile_y: u32,
+) -> Option<([f32; 2], [f32; 2])> {
+    const ATLAS_PAD_PX: f32 = 0.5;
+    let texture_dir = resolve_texture_dir_for_block(block_localized_name);
+    let tileset_path = format!("assets/{texture_dir}/data.json");
+    let raw = fs::read_to_string(tileset_path).ok()?;
+    let tileset = serde_json::from_str::<StructureTilesetJson>(raw.as_str()).ok()?;
+    if tileset.columns == 0 || tileset.rows == 0 {
+        return None;
+    }
+    if tile_x >= tileset.columns || tile_y >= tileset.rows {
+        return None;
+    }
+    let tile_size = tileset.tile_size.max(1);
+    let image_w = tileset.columns as f32 * tile_size as f32;
+    let image_h = tileset.rows as f32 * tile_size as f32;
+    let tile_w = image_w / tileset.columns as f32;
+    let tile_h = image_h / tileset.rows as f32;
+
+    let u0 = (tile_x as f32 * tile_w + ATLAS_PAD_PX) / image_w;
+    let v0 = (tile_y as f32 * tile_h + ATLAS_PAD_PX) / image_h;
+    let u1 = ((tile_x as f32 + 1.0) * tile_w - ATLAS_PAD_PX) / image_w;
+    let v1 = ((tile_y as f32 + 1.0) * tile_h - ATLAS_PAD_PX) / image_h;
+
+    let scale_x = (u1 - u0).max(0.000_01);
+    let scale_y = (v1 - v0).max(0.000_01);
+    Some(([u0, v0], [scale_x, scale_y]))
+}
+
+fn resolve_texture_dir_for_block(block_localized_name: &str) -> String {
+    let block_file = format!("assets/blocks/{block_localized_name}.json");
+    if let Ok(raw) = fs::read_to_string(block_file.as_str())
+        && let Ok(parsed) = serde_json::from_str::<StructureTextureDirJson>(raw.as_str())
+        && let Some(texture_dir) = parsed.texture_dir
+    {
+        let normalized = normalize_asset_path(texture_dir.as_str());
+        if !normalized.is_empty() {
+            return normalized;
+        }
+    }
+    let base = block_localized_name
+        .trim()
+        .strip_suffix("_block")
+        .unwrap_or(block_localized_name)
+        .trim_matches('/');
+    format!("textures/blocks/{base}")
+}
+
+#[inline]
+fn normalize_asset_path(raw: &str) -> String {
+    let mut value = raw.trim().replace('\\', "/");
+    if let Some(stripped) = value.strip_prefix("assets/") {
+        value = stripped.to_string();
+    }
+    if let Some(stripped) = value.strip_prefix("./") {
+        value = stripped.to_string();
+    }
+    if Path::new(value.as_str()).as_os_str().is_empty() {
+        return String::new();
+    }
+    value
+}
+
+fn structure_model_translation(
+    recipe: &BuildingStructureRecipe,
+    place_origin: IVec3,
+    placement_rotation_quarters: u8,
+    model_rotation_quarters: u8,
+) -> Vec3 {
+    match recipe.model_meta.model_anchor {
+        BuildingModelAnchor::Center => {
+            // Center anchor follows occupied recipe space (player preview / placement logic).
+            let recipe_space =
+                rotated_structure_space(recipe.space, placement_rotation_quarters).as_vec3();
+            Vec3::new(
+                (place_origin.x as f32 + recipe_space.x * 0.5) * VOXEL_SIZE,
+                (place_origin.y as f32 + recipe_space.y * 0.5) * VOXEL_SIZE,
+                (place_origin.z as f32 + recipe_space.z * 0.5) * VOXEL_SIZE,
+            )
+        }
+        BuildingModelAnchor::MinCorner => {
+            let offset = rotated_model_corner_offset(recipe.space, model_rotation_quarters);
+            Vec3::new(
+                (place_origin.x as f32 + offset.x) * VOXEL_SIZE,
+                (place_origin.y as f32) * VOXEL_SIZE,
+                (place_origin.z as f32 + offset.z) * VOXEL_SIZE,
+            )
+        }
+    }
+}
+
+#[inline]
+fn rotated_model_corner_offset(space: UVec3, rotation_quarters: u8) -> Vec3 {
+    match rotation_quarters % 4 {
+        0 => Vec3::ZERO,
+        1 => Vec3::new(space.z as f32, 0.0, 0.0),
+        2 => Vec3::new(space.x as f32, 0.0, space.z as f32),
+        _ => Vec3::new(0.0, 0.0, space.x as f32),
+    }
+}
+
+#[inline]
+fn normalize_rotation_quarters(raw: i32) -> u8 {
+    raw.rem_euclid(4) as u8
+}
+
+#[inline]
+fn normalize_rotation_steps(raw: i32) -> u8 {
+    raw.rem_euclid(8) as u8
+}
+
+#[inline]
+fn rotation_steps_to_placement_quarters(rotation_steps: u8) -> u8 {
+    normalize_rotation_quarters((rotation_steps as i32) / 2)
+}
+
+#[inline]
+fn rotated_structure_space(space: UVec3, rotation_quarters: u8) -> UVec3 {
+    if rotation_quarters % 2 == 0 {
+        space
+    } else {
+        UVec3::new(space.z, space.y, space.x)
+    }
+}
+
+#[inline]
+fn rotated_structure_offset(
+    local_x: i32,
+    local_z: i32,
+    size_x: i32,
+    size_z: i32,
+    rotation_quarters: u8,
+) -> (i32, i32) {
+    match rotation_quarters % 4 {
+        0 => (local_x, local_z),
+        1 => (local_z, size_x - 1 - local_x),
+        2 => (size_x - 1 - local_x, size_z - 1 - local_z),
+        _ => (size_z - 1 - local_z, local_x),
+    }
+}
+
+include!("block_event_handler/overlay.rs");

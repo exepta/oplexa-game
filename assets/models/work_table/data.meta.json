@@ -1,0 +1,23 @@
+{
+  "model_anchor": "center",
+  "model_rotation_quarters": 1,
+  "model_offset": [0.0, -0.5, 0.0],
+  "register_as": "block",
+  "localized_name": "workbench_block",
+  "name": "KEY_WORKBENCH_BLOCK",
+  "stats": {
+    "hardness": 2.0,
+    "blast_resistance": 6.0,
+    "level": 1,
+    "opaque": false,
+    "solid": true
+  },
+  "textures": {
+    "Leg": "logs[0, 1]",
+    "Top": "planks",
+    "Bottom": "planks",
+    "Wand": "textures/blocks/border/border.png",
+    "Wand_mount": "textures/blocks/stone/stone.png"
+  },
+  "colliders": "mesh"
+}

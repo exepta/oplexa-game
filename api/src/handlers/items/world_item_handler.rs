@@ -91,10 +91,15 @@ fn simulate_world_items(
         if item.resting {
             if has_support {
                 velocity.0 = Vec3::ZERO;
-                let drag = (1.0 - 5.0 * delta).clamp(0.0, 1.0);
-                angular_velocity.0 *= drag;
-                if angular_velocity.0.length_squared() < 0.0001 {
+                if item.block_visual {
+                    let drag = (1.0 - 5.0 * delta).clamp(0.0, 1.0);
+                    angular_velocity.0 *= drag;
+                    if angular_velocity.0.length_squared() < 0.0001 {
+                        angular_velocity.0 = Vec3::ZERO;
+                    }
+                } else {
                     angular_velocity.0 = Vec3::ZERO;
+                    transform.rotation = flat_item_rotation(transform.rotation);
                 }
                 continue;
             }
@@ -122,9 +127,21 @@ fn simulate_world_items(
 
         transform.translation.y = ground_top + half;
         velocity.0 = Vec3::ZERO;
-        angular_velocity.0 *= 0.55;
+        if item.block_visual {
+            angular_velocity.0 *= 0.55;
+        } else {
+            angular_velocity.0 = Vec3::ZERO;
+            transform.rotation = flat_item_rotation(transform.rotation);
+        }
         item.resting = true;
     }
+}
+
+#[inline]
+fn flat_item_rotation(current_rotation: Quat) -> Quat {
+    let forward = current_rotation * Vec3::Z;
+    let yaw = forward.x.atan2(forward.z);
+    Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)
 }
 
 /// Picks up world items for the `handlers::items::world_item_handler` module.

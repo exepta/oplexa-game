@@ -40,6 +40,7 @@ impl fmt::Display for NamespacedKey {
 #[derive(Clone, Debug)]
 pub struct RecipeCraftingEntry {
     pub recipe_type: NamespacedKey,
+    pub format: String,
     pub data: Value,
 }
 
@@ -80,7 +81,7 @@ impl RecipeResultTemplateDef {
 #[derive(Clone, Debug)]
 pub struct RecipeDefinition {
     pub source_path: String,
-    pub recipe_kind: String,
+    pub build_time_secs: f32,
     pub crafting: Vec<RecipeCraftingEntry>,
     pub result: RecipeResultTemplateDef,
 }
@@ -97,8 +98,9 @@ pub struct RecipeInputRequirement {
 #[derive(Clone, Debug)]
 pub struct ResolvedRecipe {
     pub source_path: String,
-    pub recipe_kind: String,
+    pub build_time_secs: f32,
     pub recipe_type: NamespacedKey,
+    pub recipe_format: String,
     pub required_inputs: Vec<RecipeInputRequirement>,
     pub result: RecipeResultDef,
 }

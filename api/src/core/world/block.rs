@@ -69,7 +69,7 @@ pub struct BlockDef {
 }
 
 /// Represents block stats used by the `core::world::block` module.
-#[derive(Deserialize, Clone, Default)]
+#[derive(Deserialize, Clone, Debug, Default)]
 #[allow(dead_code)]
 pub struct BlockStats {
     #[serde(default)]
@@ -194,6 +194,11 @@ impl BlockRegistry {
     #[inline]
     pub fn def(&self, id: BlockId) -> &BlockDef {
         &self.defs[id as usize]
+    }
+    /// Returns an optional block definition.
+    #[inline]
+    pub fn def_opt(&self, id: BlockId) -> Option<&BlockDef> {
+        self.defs.get(id as usize)
     }
     /// Runs the `name` routine for name in the `core::world::block` module.
     #[inline]
@@ -549,6 +554,72 @@ impl BlockRegistry {
         }
 
         Self { defs, name_to_id }
+    }
+
+    /// Ensures that one runtime-defined block exists and returns its id.
+    pub fn ensure_runtime_block(
+        &mut self,
+        asset_server: &AssetServer,
+        materials: &mut Assets<StandardMaterial>,
+        localized_name: &str,
+        name: &str,
+        stats: BlockStats,
+    ) -> BlockId {
+        let normalized_localized_name = normalize_runtime_block_localized_name(localized_name);
+        if let Some(existing) = self.id_opt(normalized_localized_name.as_str()) {
+            return existing;
+        }
+
+        let display_name =
+            normalize_runtime_block_name_key(name, normalized_localized_name.as_str());
+        let image: Handle<Image> = asset_server.load("textures/items/missing.png");
+        let (alpha_mode, base_color) = material_policy_from_stats(&stats);
+        let material = materials.add(StandardMaterial {
+            base_color_texture: Some(image.clone()),
+            base_color,
+            alpha_mode,
+            unlit: false,
+            metallic: 0.0,
+            perceptual_roughness: 1.0,
+            reflectance: 0.0,
+            ..Default::default()
+        });
+        let collider = if stats.solid {
+            BlockColliderDefinition {
+                kind: BlockColliderKind::FullBlock,
+                block_entities: true,
+                size_m: default_block_collider_size_m(),
+                offset_m: [0.0, 0.0, 0.0],
+            }
+        } else {
+            BlockColliderDefinition {
+                kind: BlockColliderKind::None,
+                block_entities: false,
+                size_m: default_block_collider_size_m(),
+                offset_m: [0.0, 0.0, 0.0],
+            }
+        };
+
+        let id = self.defs.len() as BlockId;
+        self.name_to_id
+            .insert(normalized_localized_name.clone(), id);
+        self.defs.push(BlockDef {
+            localized_name: normalized_localized_name,
+            name: display_name,
+            overridable: !stats.solid,
+            stats,
+            prop: None,
+            collider,
+            uv_top: Z,
+            uv_bottom: Z,
+            uv_north: Z,
+            uv_east: Z,
+            uv_south: Z,
+            uv_west: Z,
+            image,
+            material,
+        });
+        id
     }
 }
 
@@ -1214,6 +1285,46 @@ fn block_name_key_from_localized_name(localized_name: &str) -> String {
         key.pop();
     }
     key
+}
+
+#[inline]
+fn normalize_runtime_block_localized_name(raw: &str) -> String {
+    let mut localized_name = raw.trim().to_ascii_lowercase();
+    if let Some((_, suffix)) = localized_name.rsplit_once(':') {
+        localized_name = suffix.to_string();
+    }
+    let mut out = String::with_capacity(localized_name.len().max(16));
+    let mut last_sep = false;
+    for ch in localized_name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_sep = false;
+        } else if !last_sep {
+            out.push('_');
+            last_sep = true;
+        }
+    }
+    while out.ends_with('_') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "structure_block".to_string()
+    } else {
+        out
+    }
+}
+
+#[inline]
+fn normalize_runtime_block_name_key(raw_name: &str, fallback_localized_name: &str) -> String {
+    let trimmed = raw_name.trim();
+    if trimmed.starts_with("KEY_")
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+    {
+        return trimmed.to_string();
+    }
+    block_name_key_from_localized_name(fallback_localized_name)
 }
 
 /* ---------------- uv helpers ---------------- */
