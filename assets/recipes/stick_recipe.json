@@ -2,24 +2,32 @@
   "crafting": [
     {
       "type": "oplexa:hand_crafted",
-      "format": "shapeless",
+      "format": "shaped",
       "data": {
         "craft": {
           "0": {
-            "group": "logs",
-            "count": 2
+            "group": "planks",
+            "count": 1
+          },
+          "1": {
+            "group": "planks",
+            "count": 1
           }
         }
       }
     },
     {
       "type": "oplexa:work_table_crafting",
-      "format": "shapeless",
+      "format": "shaped",
       "data": {
         "craft": {
           "0": {
-            "group": "logs",
-            "count": 2
+            "group": "planks",
+            "count": 1
+          },
+          "1": {
+            "group": "planks",
+            "count": 1
           }
         }
       }

@@ -135,6 +135,21 @@ fn apply_button_layout(node: &mut Node, kind: UiButtonKind) {
             node.flex_grow = 1.0;
             node.flex_shrink = 1.0;
         }
+        UiButtonKind::RecipeTab => {
+            node.width = Val::Px(64.0);
+            node.min_width = Val::Px(64.0);
+            node.max_width = Val::Px(64.0);
+            node.height = Val::Px(64.0);
+            node.min_height = Val::Px(64.0);
+            node.max_height = Val::Px(64.0);
+            node.padding = UiRect::all(Val::Px(0.0));
+            node.border = UiRect::all(Val::Px(1.0));
+            node.justify_content = JustifyContent::Center;
+            node.align_items = AlignItems::Center;
+            node.align_self = AlignSelf::Auto;
+            node.flex_grow = 0.0;
+            node.flex_shrink = 0.0;
+        }
         UiButtonKind::Card => {
             node.width = Val::Percent(100.0);
             node.min_height = Val::Px(76.0);
@@ -306,28 +321,72 @@ fn style_pause_menu_button_texts(
 }
 
 /// Runs the `style_images` routine for style images in the `graphic::components::theme` module.
-fn style_images(mut images: Query<(&CssID, &mut Node), With<Img>>) {
-    for (_css_id, mut node) in &mut images {
-        node.width = Val::Px(32.0);
-        node.height = Val::Px(32.0);
+fn style_images(mut images: Query<(&CssID, &mut Node, Option<&mut Pickable>), With<Img>>) {
+    for (css_id, mut node, maybe_pickable) in &mut images {
+        let is_recipe_tab_icon = css_id.0.starts_with(RECIPE_PREVIEW_TAB_ICON_PREFIX);
+        let size = if is_recipe_tab_icon {
+            56.0
+        } else {
+            32.0
+        };
+        node.width = Val::Px(size);
+        node.height = Val::Px(size);
+        node.min_width = Val::Px(size);
+        node.min_height = Val::Px(size);
+        node.max_width = Val::Px(size);
+        node.max_height = Val::Px(size);
         node.justify_self = JustifySelf::Center;
         node.align_self = AlignSelf::Center;
+
+        if is_recipe_tab_icon && let Some(mut pickable) = maybe_pickable {
+            *pickable = Pickable::IGNORE;
+        }
     }
 }
 
 /// Runs the `style_button_icons` routine for style button icons in the `graphic::components::theme` module.
-fn style_button_icons(mut images: Query<(&Name, &mut Node), With<ImageNode>>) {
+fn style_button_icons(
+    mut commands: Commands,
+    mut icons: Query<(Entity, &Name, &ChildOf, Option<&mut Node>), With<ImageNode>>,
+    buttons: Query<&CssID, With<Button>>,
+) {
     /// Inventory and hotbar item icon edge length in pixels.
     const ITEM_ICON_SIZE_PX: f32 = 36.8;
+    /// Recipe tab icon edge length in pixels.
+    const RECIPE_TAB_ICON_SIZE_PX: f32 = 56.0;
 
-    for (name, mut node) in &mut images {
+    for (entity, name, parent, maybe_node) in &mut icons {
         if !name.as_str().starts_with("Button-Icon-") {
             continue;
         }
-        node.width = Val::Px(ITEM_ICON_SIZE_PX);
-        node.height = Val::Px(ITEM_ICON_SIZE_PX);
-        node.justify_self = JustifySelf::Center;
-        node.align_self = AlignSelf::Center;
+        let icon_size = if buttons
+            .get(parent.parent())
+            .is_ok_and(|css_id| css_id.0.starts_with(RECIPE_PREVIEW_TAB_PREFIX))
+        {
+            RECIPE_TAB_ICON_SIZE_PX
+        } else {
+            ITEM_ICON_SIZE_PX
+        };
+
+        let apply = |node: &mut Node| {
+            node.width = Val::Px(icon_size);
+            node.height = Val::Px(icon_size);
+            node.min_width = Val::Px(icon_size);
+            node.min_height = Val::Px(icon_size);
+            node.max_width = Val::Px(icon_size);
+            node.max_height = Val::Px(icon_size);
+            node.justify_self = JustifySelf::Center;
+            node.align_self = AlignSelf::Center;
+        };
+
+        if let Some(mut node) = maybe_node {
+            apply(&mut node);
+            continue;
+        } else {
+            let mut node = Node::default();
+            apply(&mut node);
+            commands.entity(entity).insert(node);
+        }
     }
 }
 

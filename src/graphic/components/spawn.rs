@@ -1770,6 +1770,7 @@ fn spawn_hardcoded_ui(
                         text: String::new(),
                         ..default()
                     },
+                    TextLayout::new_with_justify(Justify::Center),
                     CssID(INVENTORY_TOOLTIP_NAME_ID.to_string()),
                     UiTextTone::TooltipName,
                     Pickable::IGNORE,
@@ -1779,6 +1780,7 @@ fn spawn_hardcoded_ui(
                         text: String::new(),
                         ..default()
                     },
+                    TextLayout::new_with_justify(Justify::Center),
                     CssID(INVENTORY_TOOLTIP_KEY_ID.to_string()),
                     UiTextTone::TooltipKey,
                     Pickable::IGNORE,
@@ -1808,8 +1810,8 @@ fn spawn_hardcoded_ui(
                         Visibility::Inherited,
                         RecipePreviewDialogPanel,
                         Node {
-                            width: Val::Px(300.0),
-                            min_width: Val::Px(300.0),
+                            width: Val::Px(860.0),
+                            min_width: Val::Px(860.0),
                             min_height: Val::Px(400.0),
                             flex_direction: FlexDirection::Column,
                             row_gap: Val::Px(10.0),
@@ -1834,16 +1836,78 @@ fn spawn_hardcoded_ui(
                                 text: language.localize_name_key("KEY_UI_HAND_CRAFTED").to_string(),
                                 ..default()
                             },
+                            CssID(RECIPE_PREVIEW_MODE_ID.to_string()),
                             UiTextTone::Darker,
                         ));
                         panel.spawn((
-                            Visibility::Inherited,
                             Node {
                                 width: Val::Percent(100.0),
                                 align_items: AlignItems::Center,
                                 justify_content: JustifyContent::Center,
                                 column_gap: Val::Px(8.0),
-                                padding: UiRect::all(Val::Px(8.0)),
+                                ..default()
+                            },
+                            BackgroundColor::DEFAULT,
+                        ))
+                        .with_children(|tabs| {
+                            tabs.spawn((
+                                Button {
+                                    text: "<".to_string(),
+                                    ..default()
+                                },
+                                CssID(RECIPE_PREVIEW_TAB_PREV_ID.to_string()),
+                                UiButtonKind::RecipeTab,
+                                UiButtonTone::Normal,
+                            ));
+                            for i in 1..=RECIPE_PREVIEW_TABS_PER_PAGE {
+                                tabs.spawn((
+                                    Button {
+                                        text: String::new(),
+                                        ..default()
+                                    },
+                                    CssID(format!("{RECIPE_PREVIEW_TAB_PREFIX}{i:02}")),
+                                    UiButtonKind::RecipeTab,
+                                    UiButtonTone::Normal,
+                                ))
+                                .with_children(|tab| {
+                                    tab.spawn((
+                                        Img {
+                                            src: None,
+                                            ..default()
+                                        },
+                                        CssID(format!("{RECIPE_PREVIEW_TAB_ICON_PREFIX}{i:02}")),
+                                        Pickable::IGNORE,
+                                    ));
+                                });
+                            }
+                            tabs.spawn((
+                                Button {
+                                    text: ">".to_string(),
+                                    ..default()
+                                },
+                                CssID(RECIPE_PREVIEW_TAB_NEXT_ID.to_string()),
+                                UiButtonKind::RecipeTab,
+                                UiButtonTone::Normal,
+                            ));
+                        });
+                        panel.spawn((
+                            Paragraph {
+                                text: String::new(),
+                                ..default()
+                            },
+                            CssID(RECIPE_PREVIEW_TAB_TOOLTIP_ID.to_string()),
+                            UiTextTone::Darker,
+                            Visibility::Hidden,
+                        ));
+                        panel.spawn((
+                            Visibility::Inherited,
+                            Node {
+                                width: Val::Auto,
+                                align_items: AlignItems::Center,
+                                justify_content: JustifyContent::Center,
+                                align_self: AlignSelf::Center,
+                                column_gap: Val::Px(6.0),
+                                padding: UiRect::all(Val::Px(10.0)),
                                 border: UiRect::all(Val::Px(1.0)),
                                 ..default()
                             },
@@ -1851,60 +1915,91 @@ fn spawn_hardcoded_ui(
                             BorderColor::all(color_background_hover()),
                         ))
                         .with_children(|row| {
-                            for i in 1..=HAND_CRAFTED_INPUT_SLOTS {
-                                let idx = format!("{i:02}");
-                                row.spawn((
-                                    Button {
-                                        text: String::new(),
-                                        ..default()
-                                    },
-                                    Visibility::Inherited,
-                                    CssID(format!("{RECIPE_PREVIEW_INPUT_FRAME_PREFIX}{idx}")),
-                                    UiButtonKind::InventorySlot,
-                                    UiButtonTone::Normal,
-                                ))
-                                .with_children(|slot| {
-                                    slot.spawn((
-                                        Paragraph {
+                            row.spawn((
+                                Node {
+                                    display: Display::Grid,
+                                    grid_template_columns: RepeatedGridTrack::fr(4, 1.0),
+                                    grid_auto_rows: vec![GridTrack::px(56.0)],
+                                    row_gap: Val::Px(6.0),
+                                    column_gap: Val::Px(8.0),
+                                    ..default()
+                                },
+                                RecipePreviewInputGrid,
+                                BackgroundColor::DEFAULT,
+                            ))
+                            .with_children(|grid| {
+                                for i in 1..=RECIPE_PREVIEW_INPUT_SLOTS {
+                                    let idx = format!("{i:02}");
+                                    grid.spawn((
+                                        Button {
                                             text: String::new(),
                                             ..default()
                                         },
-                                        CssID(format!("{RECIPE_PREVIEW_INPUT_BADGE_PREFIX}{idx}")),
-                                        BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
-                                        Visibility::Hidden,
-                                        Pickable::IGNORE,
-                                    ));
-                                });
-                            }
+                                        Visibility::Inherited,
+                                        CssID(format!("{RECIPE_PREVIEW_INPUT_FRAME_PREFIX}{idx}")),
+                                        UiButtonKind::InventorySlot,
+                                        UiButtonTone::Normal,
+                                    ))
+                                    .with_children(|slot| {
+                                        slot.spawn((
+                                            Paragraph {
+                                                text: String::new(),
+                                                ..default()
+                                            },
+                                            CssID(format!("{RECIPE_PREVIEW_INPUT_BADGE_PREFIX}{idx}")),
+                                            BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                            Visibility::Hidden,
+                                            Pickable::IGNORE,
+                                        ));
+                                    });
+                                }
+                            });
 
                             row.spawn((
-                                Paragraph {
-                                    text: "->".to_string(),
-                                    ..default()
-                                },
-                                UiTextTone::Darker,
-                            ));
-                            row.spawn((
-                                Button {
-                                    text: String::new(),
-                                    ..default()
-                                },
-                                Visibility::Inherited,
-                                CssID(RECIPE_PREVIEW_RESULT_FRAME_ID.to_string()),
-                                UiButtonKind::InventoryResultSlot,
-                                UiButtonTone::Normal,
-                            ))
-                            .with_children(|slot| {
-                                slot.spawn((
-                                    Paragraph {
-                                        text: String::new(),
+                                Node {
+                                    width: Val::Px(74.0),
+                                    align_items: AlignItems::Center,
+                                    justify_content: JustifyContent::Center,
+                                    column_gap: Val::Px(8.0),
+                                    padding: UiRect {
+                                        right: Val::Px(10.0),
                                         ..default()
                                     },
-                                    CssID(RECIPE_PREVIEW_RESULT_BADGE_ID.to_string()),
-                                    BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
-                                    Visibility::Hidden,
-                                    Pickable::IGNORE,
+                                    ..default()
+                                },
+                                BackgroundColor::DEFAULT,
+                            ))
+                            .with_children(|result| {
+                                result.spawn((
+                                    Paragraph {
+                                        text: "->".to_string(),
+                                        ..default()
+                                    },
+                                    UiTextTone::Darker,
                                 ));
+                                result
+                                    .spawn((
+                                        Button {
+                                            text: String::new(),
+                                            ..default()
+                                        },
+                                        Visibility::Inherited,
+                                        CssID(RECIPE_PREVIEW_RESULT_FRAME_ID.to_string()),
+                                        UiButtonKind::InventoryResultSlot,
+                                        UiButtonTone::Normal,
+                                    ))
+                                    .with_children(|slot| {
+                                        slot.spawn((
+                                            Paragraph {
+                                                text: String::new(),
+                                                ..default()
+                                            },
+                                            CssID(RECIPE_PREVIEW_RESULT_BADGE_ID.to_string()),
+                                            BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                            Visibility::Hidden,
+                                            Pickable::IGNORE,
+                                        ));
+                                    });
                             });
                         });
                         panel.spawn((

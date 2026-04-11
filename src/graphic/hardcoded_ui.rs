@@ -139,11 +139,19 @@ const INVENTORY_TOOLTIP_KEY_ID: &str = "inventory-tooltip-key";
 const INVENTORY_CURSOR_BADGE_ID: &str = "inventory-cursor-badge";
 const INVENTORY_TRASH_BUTTON_ID: &str = "inventory-trash-button";
 const RECIPE_PREVIEW_TITLE_ID: &str = "recipe-preview-title";
+const RECIPE_PREVIEW_MODE_ID: &str = "recipe-preview-mode";
+const RECIPE_PREVIEW_TAB_TOOLTIP_ID: &str = "recipe-preview-tab-tooltip";
+const RECIPE_PREVIEW_TAB_PREV_ID: &str = "recipe-preview-tab-prev";
+const RECIPE_PREVIEW_TAB_NEXT_ID: &str = "recipe-preview-tab-next";
+const RECIPE_PREVIEW_TAB_PREFIX: &str = "recipe-preview-tab-";
+const RECIPE_PREVIEW_TAB_ICON_PREFIX: &str = "recipe-preview-tab-icon-";
 const RECIPE_PREVIEW_INPUT_FRAME_PREFIX: &str = "recipe-preview-input-frame-";
 const RECIPE_PREVIEW_INPUT_BADGE_PREFIX: &str = "recipe-preview-input-badge-";
 const RECIPE_PREVIEW_RESULT_FRAME_ID: &str = "recipe-preview-result-frame";
 const RECIPE_PREVIEW_RESULT_BADGE_ID: &str = "recipe-preview-result-badge";
 const RECIPE_PREVIEW_FILL_ID: &str = "recipe-preview-fill";
+const RECIPE_PREVIEW_INPUT_SLOTS: usize = WORK_TABLE_CRAFTING_INPUT_SLOTS;
+const RECIPE_PREVIEW_TABS_PER_PAGE: usize = 4;
 const STRUCTURE_BUILD_WORKBENCH_ID: &str = "structure-build-workbench";
 const STRUCTURE_BUILD_HINT_ID: &str = "structure-build-hint";
 const WORKBENCH_RECIPE_TITLE_ID: &str = "workbench-recipe-title";
@@ -308,6 +316,9 @@ struct RecipePreviewDialogRoot;
 /// Represents recipe preview dialog panel used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct RecipePreviewDialogPanel;
+/// Represents recipe preview input grid used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct RecipePreviewInputGrid;
 /// Represents creative panel grid root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct CreativePanelGridRoot;
@@ -320,6 +331,7 @@ struct DebugOverlayRoot;
 enum UiButtonKind {
     Action,
     ActionRow,
+    RecipeTab,
     Card,
     InventorySlot,
     InventoryResultSlot,
@@ -510,10 +522,32 @@ struct InventoryCursorItemState {
 }
 
 /// Represents recipe preview dialog state used by the `graphic::hardcoded_ui` module.
-#[derive(Resource, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecipePreviewCraftingType {
+    HandCrafted,
+    WorkTable,
+}
+
+/// Represents recipe preview dialog state used by the `graphic::hardcoded_ui` module.
+#[derive(Debug, Clone)]
+struct RecipePreviewVariant {
+    crafting_type: RecipePreviewCraftingType,
+    input_slot_count: usize,
+    input_slots: [InventorySlot; RECIPE_PREVIEW_INPUT_SLOTS],
+    input_slot_alternatives: [Vec<ItemId>; RECIPE_PREVIEW_INPUT_SLOTS],
+    result_slot: InventorySlot,
+}
+
+/// Represents recipe preview dialog state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Clone)]
 struct RecipePreviewDialogState {
     open: bool,
-    input_slots: [InventorySlot; HAND_CRAFTED_INPUT_SLOTS],
+    variants: Vec<RecipePreviewVariant>,
+    selected_variant_index: usize,
+    tab_page: usize,
+    crafting_type: Option<RecipePreviewCraftingType>,
+    input_slot_count: usize,
+    input_slots: [InventorySlot; RECIPE_PREVIEW_INPUT_SLOTS],
     result_slot: InventorySlot,
 }
 
@@ -522,7 +556,12 @@ impl Default for RecipePreviewDialogState {
     fn default() -> Self {
         Self {
             open: false,
-            input_slots: [InventorySlot::default(); HAND_CRAFTED_INPUT_SLOTS],
+            variants: Vec::new(),
+            selected_variant_index: 0,
+            tab_page: 0,
+            crafting_type: None,
+            input_slot_count: 0,
+            input_slots: [InventorySlot::default(); RECIPE_PREVIEW_INPUT_SLOTS],
             result_slot: InventorySlot::default(),
         }
     }

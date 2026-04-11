@@ -231,15 +231,49 @@ fn handle_inventory_drag_and_drop(
     }
 
     if mouse.just_pressed(MouseButton::Left) && recipe_preview.open {
-        if is_button_hovered(&button_states, RECIPE_PREVIEW_FILL_ID) {
-            fill_hand_crafted_from_recipe_preview(
-                &recipe_preview,
-                &mut inventory,
-                &mut hand_crafted,
-                &drop_deps.item_registry,
-            );
-            recipe_preview.open = false;
+        if is_button_hovered(&button_states, RECIPE_PREVIEW_TAB_PREV_ID)
+            && recipe_preview.tab_page > 0
+        {
+            recipe_preview.tab_page -= 1;
             return;
+        }
+        if is_button_hovered(&button_states, RECIPE_PREVIEW_TAB_NEXT_ID) {
+            let page_count = recipe_preview_tab_page_count(&recipe_preview);
+            if recipe_preview.tab_page + 1 < page_count {
+                recipe_preview.tab_page += 1;
+                return;
+            }
+        }
+        if let Some(tab_slot_index) = hovered_recipe_preview_tab_slot_index(&button_states) {
+            let variant_index =
+                recipe_preview.tab_page * RECIPE_PREVIEW_TABS_PER_PAGE + tab_slot_index;
+            if select_recipe_preview_variant(&mut recipe_preview, variant_index) {
+                return;
+            }
+        }
+
+        if is_button_hovered(&button_states, RECIPE_PREVIEW_FILL_ID) {
+            if workbench_menu.open {
+                fill_work_table_from_recipe_preview(
+                    &recipe_preview,
+                    &mut inventory,
+                    &mut work_table_crafting,
+                    &drop_deps.item_registry,
+                );
+                reset_workbench_craft_progress(&mut workbench_craft_progress);
+                recipe_preview.open = false;
+                return;
+            }
+            if recipe_preview.crafting_type == Some(RecipePreviewCraftingType::HandCrafted) {
+                fill_hand_crafted_from_recipe_preview(
+                    &recipe_preview,
+                    &mut inventory,
+                    &mut hand_crafted,
+                    &drop_deps.item_registry,
+                );
+                recipe_preview.open = false;
+                return;
+            }
         }
 
         if !is_cursor_inside_panel(&window_q, &recipe_preview_panel_q) {
@@ -554,6 +588,7 @@ struct InventoryUiSyncDeps<'w, 's> {
     item_registry: Res<'w, ItemRegistry>,
     block_registry: Res<'w, BlockRegistry>,
     language: Res<'w, ClientLanguageState>,
+    time: Res<'w, Time>,
     asset_server: Res<'w, AssetServer>,
     image_cache: ResMut<'w, ImageCache>,
     images: ResMut<'w, Assets<Image>>,
@@ -566,13 +601,44 @@ struct InventoryUiSyncDeps<'w, 's> {
     inventory_root_bg_q: Query<'w, 's, &'static mut BackgroundColor, With<PlayerInventoryRoot>>,
     inventory_root_zindex_q: Query<'w, 's, &'static mut ZIndex, With<PlayerInventoryRoot>>,
     recipe_preview_root: Query<'w, 's, &'static mut Visibility, With<RecipePreviewDialogRoot>>,
+    recipe_preview_panel_node_q: Query<
+        'w,
+        's,
+        &'static mut Node,
+        (
+            With<RecipePreviewDialogPanel>,
+            Without<RecipePreviewInputGrid>,
+            Without<Button>,
+        ),
+    >,
+    recipe_preview_input_grid_q: Query<
+        'w,
+        's,
+        &'static mut Node,
+        (
+            With<RecipePreviewInputGrid>,
+            Without<RecipePreviewDialogPanel>,
+            Without<Button>,
+        ),
+    >,
     paragraphs: Query<
         'w,
         's,
         (&'static CssID, &'static mut Paragraph, Option<&'static mut Visibility>),
         (Without<RecipePreviewDialogRoot>, Without<InventoryMainPanel>),
     >,
-    slot_buttons: Query<'w, 's, (&'static CssID, &'static mut Button)>,
+    slot_buttons: Query<
+        'w,
+        's,
+        (
+            &'static CssID,
+            &'static mut Button,
+            Option<&'static mut UiButtonTone>,
+            Option<&'static mut Node>,
+        ),
+        With<Button>,
+    >,
+    tab_images: Query<'w, 's, (&'static CssID, &'static mut Img), Without<Button>>,
 }
 
 /// Synchronizes player inventory ui for the `graphic::components::inventory` module.
@@ -590,6 +656,7 @@ fn sync_player_inventory_ui(
         item_registry,
         block_registry,
         language,
+        time,
         asset_server,
         mut image_cache,
         mut images,
@@ -597,8 +664,11 @@ fn sync_player_inventory_ui(
         mut inventory_root_bg_q,
         mut inventory_root_zindex_q,
         mut recipe_preview_root,
+        mut recipe_preview_panel_node_q,
+        mut recipe_preview_input_grid_q,
         mut paragraphs,
         mut slot_buttons,
+        mut tab_images,
     } = deps;
 
     if let Ok(mut panel_visibility) = inventory_main_panel_q.single_mut() {
@@ -641,6 +711,26 @@ fn sync_player_inventory_ui(
             Visibility::Hidden
         };
     }
+    if let Ok(mut panel_node) = recipe_preview_panel_node_q.single_mut() {
+        if recipe_preview.crafting_type == Some(RecipePreviewCraftingType::HandCrafted) {
+            panel_node.width = Val::Px(780.0);
+            panel_node.min_width = Val::Px(780.0);
+        } else {
+            panel_node.width = Val::Px(860.0);
+            panel_node.min_width = Val::Px(860.0);
+        }
+    }
+    if let Ok(mut grid_node) = recipe_preview_input_grid_q.single_mut() {
+        if recipe_preview.crafting_type == Some(RecipePreviewCraftingType::HandCrafted) {
+            grid_node.width = Val::Px(120.0);
+            grid_node.grid_template_columns = RepeatedGridTrack::fr(2, 1.0);
+            grid_node.grid_auto_rows = vec![GridTrack::px(56.0)];
+        } else {
+            grid_node.width = Val::Px(184.0);
+            grid_node.grid_template_columns = RepeatedGridTrack::fr(3, 1.0);
+            grid_node.grid_auto_rows = vec![GridTrack::px(56.0)];
+        }
+    }
 
     for (css_id, mut paragraph, mut maybe_visibility) in &mut paragraphs {
         if css_id.0 == PLAYER_INVENTORY_TOTAL_ID {
@@ -670,6 +760,28 @@ fn sync_player_inventory_ui(
             if paragraph.text != next_title {
                 paragraph.text = next_title;
             }
+            continue;
+        }
+        if css_id.0 == RECIPE_PREVIEW_MODE_ID {
+            let next_mode = match recipe_preview.crafting_type {
+                Some(RecipePreviewCraftingType::HandCrafted) => {
+                    language.localize_name_key("KEY_UI_HAND_CRAFTED")
+                }
+                Some(RecipePreviewCraftingType::WorkTable) => {
+                    language.localize_name_key("KEY_UI_WORKBENCH")
+                }
+                None => language.localize_name_key("KEY_UI_RECIPE"),
+            };
+            if paragraph.text != next_mode {
+                paragraph.text = next_mode;
+            }
+            continue;
+        }
+        if css_id.0 == RECIPE_PREVIEW_TAB_TOOLTIP_ID
+            && let Some(visibility) = maybe_visibility.as_mut()
+        {
+            paragraph.text.clear();
+            **visibility = Visibility::Hidden;
             continue;
         }
 
@@ -707,11 +819,12 @@ fn sync_player_inventory_ui(
             && let Some(slot) = recipe_preview.input_slots.get(slot_index.saturating_sub(1))
             && let Some(visibility) = maybe_visibility.as_mut()
         {
+            let hidden_by_layout = slot_index == 0 || slot_index > recipe_preview.input_slot_count;
             sync_badge(
                 &mut paragraph,
                 visibility,
                 slot.count,
-                slot.is_empty() || !recipe_preview.open,
+                slot.is_empty() || !recipe_preview.open || hidden_by_layout,
             );
             continue;
         }
@@ -728,7 +841,94 @@ fn sync_player_inventory_ui(
         }
     }
 
-    for (css_id, mut button) in &mut slot_buttons {
+    for (css_id, mut button, mut maybe_tone, mut maybe_node) in &mut slot_buttons {
+        if css_id.0 == RECIPE_PREVIEW_TAB_PREV_ID {
+            let has_prev = recipe_preview.open
+                && recipe_preview_tab_page_count(&recipe_preview) > 1
+                && recipe_preview.tab_page > 0;
+            button.text = "<".to_string();
+            button.icon_path = None;
+            if let Some(tone) = maybe_tone.as_mut() {
+                **tone = UiButtonTone::Normal;
+            }
+            if let Some(node) = maybe_node.as_mut() {
+                node.display = if has_prev {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
+            }
+            continue;
+        }
+        if css_id.0 == RECIPE_PREVIEW_TAB_NEXT_ID {
+            let page_count = recipe_preview_tab_page_count(&recipe_preview);
+            let has_next =
+                recipe_preview.open && page_count > 1 && recipe_preview.tab_page + 1 < page_count;
+            button.text = ">".to_string();
+            button.icon_path = None;
+            if let Some(tone) = maybe_tone.as_mut() {
+                **tone = UiButtonTone::Normal;
+            }
+            if let Some(node) = maybe_node.as_mut() {
+                node.display = if has_next {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
+            }
+            continue;
+        }
+        if let Some(tab_slot_index) = parse_recipe_preview_tab_slot_index(css_id.0.as_str()) {
+            let variant_index =
+                recipe_preview.tab_page * RECIPE_PREVIEW_TABS_PER_PAGE + tab_slot_index;
+            let variant = recipe_preview_variant_at(&recipe_preview, variant_index);
+            button.text.clear();
+            if variant.is_some() {
+                button.icon_path = None;
+                if let Some(tone) = maybe_tone.as_mut() {
+                    **tone = if variant_index == recipe_preview.selected_variant_index {
+                        UiButtonTone::Accent
+                    } else {
+                        UiButtonTone::Normal
+                    };
+                }
+                if let Some(node) = maybe_node.as_mut() {
+                    node.display = if recipe_preview.open {
+                        Display::Flex
+                    } else {
+                        Display::None
+                    };
+                }
+            } else {
+                button.icon_path = None;
+                if let Some(tone) = maybe_tone.as_mut() {
+                    **tone = UiButtonTone::Normal;
+                }
+                if let Some(node) = maybe_node.as_mut() {
+                    node.display = Display::None;
+                }
+            }
+            continue;
+        }
+        if css_id.0 == RECIPE_PREVIEW_FILL_ID {
+            let show_fill = recipe_preview.open
+                && (workbench_menu.open
+                    || recipe_preview.crafting_type == Some(RecipePreviewCraftingType::HandCrafted));
+            button.text = if show_fill {
+                "+".to_string()
+            } else {
+                String::new()
+            };
+            if let Some(node) = maybe_node.as_mut() {
+                node.display = if show_fill {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
+            }
+            continue;
+        }
+
         if let Some(slot_number) = css_id.0.strip_prefix(PLAYER_INVENTORY_FRAME_PREFIX)
             && let Ok(slot_index) = slot_number.parse::<usize>()
             && let Some(slot) = inventory.slots.get(slot_index.saturating_sub(1))
@@ -803,8 +1003,56 @@ fn sync_player_inventory_ui(
             if !button.text.is_empty() {
                 button.text.clear();
             }
-            let slot = recipe_preview.input_slots.get(slot_index).copied().unwrap_or_default();
-            let next_icon = if !recipe_preview.open || slot.is_empty() {
+            let mut slot = recipe_preview.input_slots.get(slot_index).copied().unwrap_or_default();
+            let slot_visible = recipe_preview.open && slot_index < recipe_preview.input_slot_count;
+            if slot_visible
+                && let Some(variant) = recipe_preview_variant_at(
+                    &recipe_preview,
+                    recipe_preview.selected_variant_index,
+                )
+                && let Some(alternatives) = variant.input_slot_alternatives.get(slot_index)
+                && !alternatives.is_empty()
+            {
+                let cycle_index = ((time.elapsed_secs_f64() / 2.0).floor() as usize) % alternatives.len();
+                slot.item_id = alternatives[cycle_index];
+            }
+            if let Some(node) = maybe_node.as_mut() {
+                node.display = if slot_visible {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
+                if recipe_preview.crafting_type == Some(RecipePreviewCraftingType::WorkTable) {
+                    let (column, row, centered_column) = match slot_index {
+                        0 => (1, 1, false),
+                        1 => (1, 2, false),
+                        2 => (1, 3, false),
+                        3 => (2, 1, true),
+                        4 => (2, 2, true),
+                        5 => (3, 1, false),
+                        6 => (3, 2, false),
+                        7 => (3, 3, false),
+                        _ => (1, 1, false),
+                    };
+                    node.grid_column = GridPlacement::start(column);
+                    node.grid_row = GridPlacement::start(row);
+                    node.margin = if centered_column {
+                        UiRect::top(Val::Px(11.0))
+                    } else {
+                        UiRect::default()
+                    };
+                } else {
+                    let (column, row) = match slot_index {
+                        0 => (1, 1),
+                        1 => (2, 1),
+                        _ => (1, 1),
+                    };
+                    node.grid_column = GridPlacement::start(column);
+                    node.grid_row = GridPlacement::start(row);
+                    node.margin = UiRect::default();
+                }
+            }
+            let next_icon = if !slot_visible || slot.is_empty() {
                 None
             } else {
                 resolve_item_icon_path(
@@ -841,6 +1089,23 @@ fn sync_player_inventory_ui(
             if button.icon_path != next_icon {
                 button.icon_path = next_icon;
             }
+        }
+    }
+
+    for (css_id, mut img) in &mut tab_images {
+        let Some(tab_slot_index) = parse_recipe_preview_tab_icon_slot_index(css_id.0.as_str()) else {
+            continue;
+        };
+        let variant_index = recipe_preview.tab_page * RECIPE_PREVIEW_TABS_PER_PAGE + tab_slot_index;
+        let next_src = recipe_preview_variant_at(&recipe_preview, variant_index).and_then(|variant| {
+            if recipe_preview.open {
+                Some(recipe_preview_tab_icon_path(variant.crafting_type).to_string())
+            } else {
+                None
+            }
+        });
+        if img.src != next_src {
+            img.src = next_src;
         }
     }
 }
@@ -907,26 +1172,49 @@ fn sync_inventory_tooltip_ui(
         resolved_hand_recipe.as_ref(),
         resolved_workbench_recipe.as_ref(),
     );
-    let Some(item_id) = hovered_item_id else {
-        *tooltip_visibility = Visibility::Hidden;
-        return;
+    let hovered_tab_label = if recipe_preview.open {
+        hovered_recipe_preview_tab_slot_index(&slot_states).and_then(|tab_slot_index| {
+            let variant_index = recipe_preview.tab_page * RECIPE_PREVIEW_TABS_PER_PAGE + tab_slot_index;
+            recipe_preview_variant_at(&recipe_preview, variant_index).map(|variant| {
+                recipe_preview_variant_tab_label(&recipe_preview, variant, variant_index, &language)
+            })
+        })
+    } else {
+        None
     };
-    let Some(item) = item_registry.def_opt(item_id) else {
-        *tooltip_visibility = Visibility::Hidden;
-        return;
-    };
+    let showing_tab_tooltip = hovered_tab_label.is_some() && hovered_item_id.is_none();
 
-    for (css_id, mut paragraph) in &mut tooltip_text {
-        if css_id.0 == INVENTORY_TOOLTIP_NAME_ID {
-            let localized = localize_item_name(language.as_ref(), item);
-            if paragraph.text != localized {
-                paragraph.text = localized;
+    if let Some(item_id) = hovered_item_id {
+        let Some(item) = item_registry.def_opt(item_id) else {
+            *tooltip_visibility = Visibility::Hidden;
+            return;
+        };
+
+        for (css_id, mut paragraph) in &mut tooltip_text {
+            if css_id.0 == INVENTORY_TOOLTIP_NAME_ID {
+                let localized = localize_item_name(language.as_ref(), item);
+                if paragraph.text != localized {
+                    paragraph.text = localized;
+                }
+            } else if css_id.0 == INVENTORY_TOOLTIP_KEY_ID
+                && paragraph.text != item.localized_name
+            {
+                paragraph.text = item.localized_name.clone();
             }
-        } else if css_id.0 == INVENTORY_TOOLTIP_KEY_ID
-            && paragraph.text != item.localized_name
-        {
-            paragraph.text = item.localized_name.clone();
         }
+    } else if let Some(tab_label) = hovered_tab_label {
+        for (css_id, mut paragraph) in &mut tooltip_text {
+            if css_id.0 == INVENTORY_TOOLTIP_NAME_ID {
+                if paragraph.text != tab_label {
+                    paragraph.text = tab_label.clone();
+                }
+            } else if css_id.0 == INVENTORY_TOOLTIP_KEY_ID && !paragraph.text.is_empty() {
+                paragraph.text.clear();
+            }
+        }
+    } else {
+        *tooltip_visibility = Visibility::Hidden;
+        return;
     }
 
     let offset = Vec2::new(14.0, 16.0);
@@ -935,6 +1223,11 @@ fn sync_inventory_tooltip_ui(
     tooltip_pos.y = tooltip_pos.y.clamp(0.0, (window.height() - 72.0).max(0.0));
     tooltip_node.left = Val::Px(tooltip_pos.x);
     tooltip_node.top = Val::Px(tooltip_pos.y);
+    tooltip_node.align_items = if showing_tab_tooltip {
+        AlignItems::Center
+    } else {
+        AlignItems::Start
+    };
 
     *tooltip_visibility = Visibility::Inherited;
 }
@@ -1524,7 +1817,83 @@ fn parse_recipe_preview_input_index(css_id: &str) -> Option<usize> {
         .strip_prefix(RECIPE_PREVIEW_INPUT_FRAME_PREFIX)
         .and_then(|slot_number| slot_number.parse::<usize>().ok())
         .and_then(|value| value.checked_sub(1))
-        .filter(|index| *index < HAND_CRAFTED_INPUT_SLOTS)
+        .filter(|index| *index < RECIPE_PREVIEW_INPUT_SLOTS)
+}
+
+fn parse_recipe_preview_tab_slot_index(css_id: &str) -> Option<usize> {
+    css_id
+        .strip_prefix(RECIPE_PREVIEW_TAB_PREFIX)
+        .and_then(|slot_number| slot_number.parse::<usize>().ok())
+        .and_then(|value| value.checked_sub(1))
+        .filter(|index| *index < RECIPE_PREVIEW_TABS_PER_PAGE)
+}
+
+fn parse_recipe_preview_tab_icon_slot_index(css_id: &str) -> Option<usize> {
+    css_id
+        .strip_prefix(RECIPE_PREVIEW_TAB_ICON_PREFIX)
+        .and_then(|slot_number| slot_number.parse::<usize>().ok())
+        .and_then(|value| value.checked_sub(1))
+        .filter(|index| *index < RECIPE_PREVIEW_TABS_PER_PAGE)
+}
+
+fn hovered_recipe_preview_tab_slot_index(
+    button_states: &Query<(&CssID, &UIWidgetState), With<Button>>,
+) -> Option<usize> {
+    for (css_id, state) in button_states.iter() {
+        if !state.hovered {
+            continue;
+        }
+        if let Some(tab_index) = parse_recipe_preview_tab_slot_index(css_id.0.as_str()) {
+            return Some(tab_index);
+        }
+    }
+    None
+}
+
+fn recipe_preview_tab_page_count(recipe_preview: &RecipePreviewDialogState) -> usize {
+    if recipe_preview.variants.is_empty() {
+        return 0;
+    }
+    recipe_preview
+        .variants
+        .len()
+        .div_ceil(RECIPE_PREVIEW_TABS_PER_PAGE)
+}
+
+fn recipe_preview_variant_tab_label(
+    recipe_preview: &RecipePreviewDialogState,
+    variant: &RecipePreviewVariant,
+    variant_index: usize,
+    language: &ClientLanguageState,
+) -> String {
+    let base = match variant.crafting_type {
+        RecipePreviewCraftingType::HandCrafted => language.localize_name_key("KEY_UI_HAND_CRAFTED"),
+        RecipePreviewCraftingType::WorkTable => language.localize_name_key("KEY_UI_WORKBENCH"),
+    };
+
+    let type_total = recipe_preview
+        .variants
+        .iter()
+        .filter(|entry| entry.crafting_type == variant.crafting_type)
+        .count();
+    if type_total <= 1 {
+        return base;
+    }
+
+    let ordinal = recipe_preview
+        .variants
+        .iter()
+        .take(variant_index + 1)
+        .filter(|entry| entry.crafting_type == variant.crafting_type)
+        .count();
+    format!("{base} {ordinal}")
+}
+
+fn recipe_preview_tab_icon_path(crafting_type: RecipePreviewCraftingType) -> &'static str {
+    match crafting_type {
+        RecipePreviewCraftingType::HandCrafted => "assets/textures/icons/hand_crafted_icon.png",
+        RecipePreviewCraftingType::WorkTable => "assets/textures/icons/workbench_icon.png",
+    }
 }
 
 /// Runs the `hovered_item_id` routine for hovered item id in the `graphic::components::inventory` module.
@@ -1610,6 +1979,7 @@ fn hovered_item_id(
 
         if recipe_preview.open
             && let Some(index) = parse_recipe_preview_input_index(css_id.0.as_str())
+            && index < recipe_preview.input_slot_count
             && let Some(slot) = recipe_preview.input_slots.get(index)
             && !slot.is_empty()
         {
@@ -1682,20 +2052,45 @@ fn flush_cursor_item_to_inventory(
     }
 }
 
-/// Runs the `fill_hand_crafted_from_recipe_preview` routine for fill hand crafted from recipe preview in the `graphic::components::inventory` module.
-fn fill_hand_crafted_from_recipe_preview(
+fn fill_work_table_from_recipe_preview(
     recipe_preview: &RecipePreviewDialogState,
     inventory: &mut PlayerInventory,
-    hand_crafted: &mut HandCraftedState,
+    work_table_crafting: &mut WorkTableCraftingState,
     item_registry: &ItemRegistry,
 ) {
-    for slot_index in 0..HAND_CRAFTED_INPUT_SLOTS {
-        let required = recipe_preview.input_slots[slot_index];
+    let selected_variant =
+        recipe_preview_variant_at(recipe_preview, recipe_preview.selected_variant_index);
+
+    for slot_index in 0..WORK_TABLE_CRAFTING_INPUT_SLOTS {
+        let mut required = recipe_preview
+            .input_slots
+            .get(slot_index)
+            .copied()
+            .unwrap_or_default();
         if required.is_empty() {
             continue;
         }
+        let alternatives = selected_variant
+            .and_then(|variant| variant.input_slot_alternatives.get(slot_index))
+            .cloned()
+            .unwrap_or_default();
 
-        let target = &mut hand_crafted.input_slots[slot_index];
+        let Some(target) = work_table_crafting.input_slots.get_mut(slot_index) else {
+            continue;
+        };
+        if !target.is_empty() && alternatives.contains(&target.item_id) {
+            required.item_id = target.item_id;
+        } else if !alternatives.is_empty() {
+            let mut chosen = required.item_id;
+            for alt in &alternatives {
+                if count_item_in_inventory(inventory, *alt) > 0 {
+                    chosen = *alt;
+                    break;
+                }
+            }
+            required.item_id = chosen;
+        }
+
         if target.is_empty() {
             let moved = take_items_from_inventory(inventory, required.item_id, required.count);
             if moved > 0 {
@@ -1722,6 +2117,86 @@ fn fill_hand_crafted_from_recipe_preview(
         let moved = take_items_from_inventory(inventory, required.item_id, missing);
         target.count = target.count.saturating_add(moved).min(stack_max);
     }
+}
+
+fn fill_hand_crafted_from_recipe_preview(
+    recipe_preview: &RecipePreviewDialogState,
+    inventory: &mut PlayerInventory,
+    hand_crafted: &mut HandCraftedState,
+    item_registry: &ItemRegistry,
+) {
+    let selected_variant =
+        recipe_preview_variant_at(recipe_preview, recipe_preview.selected_variant_index);
+
+    for slot_index in 0..HAND_CRAFTED_INPUT_SLOTS {
+        let mut required = recipe_preview
+            .input_slots
+            .get(slot_index)
+            .copied()
+            .unwrap_or_default();
+        if required.is_empty() {
+            continue;
+        }
+        let alternatives = selected_variant
+            .and_then(|variant| variant.input_slot_alternatives.get(slot_index))
+            .cloned()
+            .unwrap_or_default();
+
+        let Some(target) = hand_crafted.input_slots.get_mut(slot_index) else {
+            continue;
+        };
+        if !target.is_empty() && alternatives.contains(&target.item_id) {
+            required.item_id = target.item_id;
+        } else if !alternatives.is_empty() {
+            let mut chosen = required.item_id;
+            for alt in &alternatives {
+                if count_item_in_inventory(inventory, *alt) > 0 {
+                    chosen = *alt;
+                    break;
+                }
+            }
+            required.item_id = chosen;
+        }
+
+        if target.is_empty() {
+            let moved = take_items_from_inventory(inventory, required.item_id, required.count);
+            if moved > 0 {
+                target.item_id = required.item_id;
+                target.count = moved;
+            }
+            continue;
+        }
+
+        if target.item_id != required.item_id {
+            continue;
+        }
+
+        let stack_max = item_registry
+            .stack_limit(required.item_id)
+            .min(PLAYER_INVENTORY_STACK_MAX)
+            .max(1);
+        let desired_count = required.count.min(stack_max);
+        if target.count >= desired_count {
+            continue;
+        }
+
+        let missing = desired_count.saturating_sub(target.count);
+        let moved = take_items_from_inventory(inventory, required.item_id, missing);
+        target.count = target.count.saturating_add(moved).min(stack_max);
+    }
+}
+
+fn count_item_in_inventory(inventory: &PlayerInventory, item_id: ItemId) -> u16 {
+    if item_id == 0 {
+        return 0;
+    }
+    let mut count = 0u16;
+    for slot in &inventory.slots {
+        if slot.item_id == item_id {
+            count = count.saturating_add(slot.count);
+        }
+    }
+    count
 }
 
 /// Runs the `take_items_from_inventory` routine for take items from inventory in the `graphic::components::inventory` module.
