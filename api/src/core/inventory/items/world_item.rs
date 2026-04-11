@@ -1,12 +1,14 @@
 use crate::core::inventory::items::{ItemId, ItemRegistry};
 use crate::core::world::block::{BlockId, BlockRegistry, VOXEL_SIZE, build_block_cube_mesh};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
-use bevy::math::primitives::Rectangle;
-use bevy::mesh::VertexAttributeValues;
+use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
+use image::imageops::FilterType;
+use image::{RgbaImage, imageops};
+use std::path::Path;
 
 /// Visual size in world units for dropped item entities.
-pub const WORLD_ITEM_SIZE: f32 = 0.32;
+pub const WORLD_ITEM_SIZE: f32 = 0.55;
 /// Radius at which items can be collected by the player.
 pub const WORLD_ITEM_PICKUP_RADIUS: f32 = 1.35;
 /// Radius used by attraction behavior toward the player.
@@ -26,6 +28,9 @@ const PLAYER_DROP_THROW_DISTANCE: f32 = 2.0;
 const PLAYER_DROP_THROW_HEIGHT: f32 = 0.65;
 const PLAYER_DROP_THROW_SPEED: f32 = 2.5;
 const PLAYER_DROP_THROW_UP_SPEED: f32 = 1.5;
+const ITEM_DROP_EXTRUDE_THICKNESS_FACTOR: f32 = 0.14;
+const ITEM_DROP_ALPHA_THRESHOLD: u8 = 8;
+const ITEM_DROP_MAX_ICON_DIM: u32 = 32;
 
 /// World-space item entity state for local drops.
 #[derive(Component, Clone, Copy, Debug)]
@@ -34,6 +39,8 @@ pub struct WorldItemEntity {
     pub item_id: ItemId,
     /// Stack size represented by this entity.
     pub amount: u16,
+    /// True when this drop uses the block mesh visual.
+    pub block_visual: bool,
     /// Whether the item is currently resting on terrain.
     pub resting: bool,
     /// Earliest timestamp when pickup is allowed.
@@ -145,7 +152,7 @@ pub fn build_world_item_drop_visual(
     item_registry: &ItemRegistry,
     item_id: ItemId,
     size: f32,
-) -> Option<(Mesh, Handle<StandardMaterial>, Vec3)> {
+) -> Option<(Mesh, Handle<StandardMaterial>, Vec3, bool)> {
     if item_id == 0 {
         return None;
     }
@@ -163,12 +170,14 @@ pub fn build_world_item_drop_visual(
                 )
             })
             .unwrap_or(Vec3::ONE);
-        return Some((mesh, block_registry.material(block_id), visual_scale));
+        return Some((mesh, block_registry.material(block_id), visual_scale, true));
     }
 
-    let mesh = Mesh::from(Rectangle::new(size * 0.95, size * 0.95));
-    let material = item_registry.def_opt(item_id)?.material.clone();
-    Some((mesh, material, Vec3::ONE))
+    let item = item_registry.def_opt(item_id)?;
+    let mesh = build_extruded_item_drop_mesh_from_texture(item.texture_path.as_str(), size * 0.95)
+        .unwrap_or_else(|| build_crossed_item_drop_mesh(size * 0.95));
+    let material = item.material.clone();
+    Some((mesh, material, Vec3::ONE, false))
 }
 
 /// Resolves the block id that should be used for a dropped-item block mesh.
@@ -181,7 +190,10 @@ fn resolve_drop_block_id(
     item_id: ItemId,
 ) -> Option<BlockId> {
     if let Some(block_id) = item_registry.block_for_item(item_id) {
-        return Some(block_id);
+        if !block_registry.is_prop(block_id) {
+            return Some(block_id);
+        }
+        return None;
     }
 
     let item = item_registry.def_opt(item_id)?;
@@ -189,10 +201,13 @@ fn resolve_drop_block_id(
         return None;
     }
 
-    block_registry.id_opt(item.key.as_str()).or_else(|| {
-        guess_block_name_from_item_key(item.key.as_str())
-            .and_then(|name| block_registry.id_opt(name.as_str()))
-    })
+    block_registry
+        .id_opt(item.key.as_str())
+        .or_else(|| {
+            guess_block_name_from_item_key(item.key.as_str())
+                .and_then(|name| block_registry.id_opt(name.as_str()))
+        })
+        .and_then(|block_id| (!block_registry.is_prop(block_id)).then_some(block_id))
 }
 
 /// Spawns one dropped world item with custom initial motion.
@@ -209,7 +224,7 @@ pub fn spawn_world_item_with_motion(
     seed_loc: IVec3,
     now: f32,
 ) {
-    let Some((mesh, material, visual_scale)) =
+    let Some((mesh, material, visual_scale, block_visual)) =
         build_world_item_drop_visual(block_registry, item_registry, item_id, WORLD_ITEM_SIZE)
     else {
         return;
@@ -219,6 +234,7 @@ pub fn spawn_world_item_with_motion(
         WorldItemEntity {
             item_id,
             amount: amount.max(1),
+            block_visual,
             resting: false,
             pickup_ready_at: now + WORLD_ITEM_PICKUP_DELAY_SECS,
         },
@@ -319,6 +335,275 @@ fn center_mesh_vertices(mesh: &mut Mesh, half_extent: f32) {
         position[1] -= half_extent;
         position[2] -= half_extent;
     }
+}
+
+/// Builds a crossed-quad mesh for non-block dropped items.
+///
+/// This keeps item-icon alpha silhouettes while avoiding pure "paper-flat"
+/// look from side views.
+fn build_crossed_item_drop_mesh(plane_size: f32) -> Mesh {
+    let half = plane_size * 0.5;
+    let positions = vec![
+        // Quad A (XY plane, facing +Z)
+        [-half, -half, 0.0],
+        [half, -half, 0.0],
+        [half, half, 0.0],
+        [-half, half, 0.0],
+        // Quad B (ZY plane, facing +X)
+        [0.0, -half, -half],
+        [0.0, -half, half],
+        [0.0, half, half],
+        [0.0, half, -half],
+    ];
+    let normals = vec![
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+    ];
+    let uvs = vec![
+        [0.0, 1.0],
+        [1.0, 1.0],
+        [1.0, 0.0],
+        [0.0, 0.0],
+        [0.0, 1.0],
+        [1.0, 1.0],
+        [1.0, 0.0],
+        [0.0, 0.0],
+    ];
+    let indices = vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
+fn build_extruded_item_drop_mesh_from_texture(texture_path: &str, plane_size: f32) -> Option<Mesh> {
+    if texture_path.trim().is_empty()
+        || texture_path.starts_with("block-icon://")
+        || !texture_path.to_ascii_lowercase().ends_with(".png")
+    {
+        return None;
+    }
+
+    let rel_path = texture_path
+        .trim()
+        .strip_prefix("assets/")
+        .unwrap_or(texture_path.trim());
+    let fs_path = Path::new("assets").join(rel_path);
+    let mut image = image::open(fs_path).ok()?.to_rgba8();
+    if image.width() == 0 || image.height() == 0 {
+        return None;
+    }
+    if image.width() > ITEM_DROP_MAX_ICON_DIM || image.height() > ITEM_DROP_MAX_ICON_DIM {
+        image = imageops::resize(
+            &image,
+            ITEM_DROP_MAX_ICON_DIM,
+            ITEM_DROP_MAX_ICON_DIM,
+            FilterType::Nearest,
+        );
+    }
+
+    build_extruded_item_drop_mesh_from_rgba(image, plane_size)
+}
+
+fn build_extruded_item_drop_mesh_from_rgba(image: RgbaImage, plane_size: f32) -> Option<Mesh> {
+    let width = image.width();
+    let height = image.height();
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let px_w = plane_size / width as f32;
+    let px_h = plane_size / height as f32;
+    let half = plane_size * 0.5;
+    let half_thickness = (plane_size * ITEM_DROP_EXTRUDE_THICKNESS_FACTOR * 0.5).max(0.002);
+
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    let mut uvs: Vec<[f32; 2]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+
+    #[inline]
+    fn is_opaque(image: &RgbaImage, x: i32, y: i32) -> bool {
+        if x < 0 || y < 0 || x >= image.width() as i32 || y >= image.height() as i32 {
+            return false;
+        }
+        image.get_pixel(x as u32, y as u32)[3] >= ITEM_DROP_ALPHA_THRESHOLD
+    }
+
+    #[inline]
+    fn push_quad(
+        positions: &mut Vec<[f32; 3]>,
+        normals: &mut Vec<[f32; 3]>,
+        uvs: &mut Vec<[f32; 2]>,
+        indices: &mut Vec<u32>,
+        p0: [f32; 3],
+        p1: [f32; 3],
+        p2: [f32; 3],
+        p3: [f32; 3],
+        normal: [f32; 3],
+        uv0: [f32; 2],
+        uv1: [f32; 2],
+        uv2: [f32; 2],
+        uv3: [f32; 2],
+    ) {
+        let base = positions.len() as u32;
+        positions.extend_from_slice(&[p0, p1, p2, p3]);
+        normals.extend_from_slice(&[normal, normal, normal, normal]);
+        uvs.extend_from_slice(&[uv0, uv1, uv2, uv3]);
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    for y in 0..height {
+        for x in 0..width {
+            if image.get_pixel(x, y)[3] < ITEM_DROP_ALPHA_THRESHOLD {
+                continue;
+            }
+
+            let x0 = -half + x as f32 * px_w;
+            let x1 = x0 + px_w;
+            let y_top = half - y as f32 * px_h;
+            let y_bottom = y_top - px_h;
+            let z_front = half_thickness;
+            let z_back = -half_thickness;
+
+            let u0 = x as f32 / width as f32;
+            let u1 = (x + 1) as f32 / width as f32;
+            let v0 = y as f32 / height as f32;
+            let v1 = (y + 1) as f32 / height as f32;
+            let uc = (u0 + u1) * 0.5;
+            let vc = (v0 + v1) * 0.5;
+
+            // Front (+Z).
+            push_quad(
+                &mut positions,
+                &mut normals,
+                &mut uvs,
+                &mut indices,
+                [x0, y_bottom, z_front],
+                [x1, y_bottom, z_front],
+                [x1, y_top, z_front],
+                [x0, y_top, z_front],
+                [0.0, 0.0, 1.0],
+                [u0, v1],
+                [u1, v1],
+                [u1, v0],
+                [u0, v0],
+            );
+
+            // Back (-Z).
+            push_quad(
+                &mut positions,
+                &mut normals,
+                &mut uvs,
+                &mut indices,
+                [x1, y_bottom, z_back],
+                [x0, y_bottom, z_back],
+                [x0, y_top, z_back],
+                [x1, y_top, z_back],
+                [0.0, 0.0, -1.0],
+                [u0, v1],
+                [u1, v1],
+                [u1, v0],
+                [u0, v0],
+            );
+
+            // Left edge (-X).
+            if !is_opaque(&image, x as i32 - 1, y as i32) {
+                push_quad(
+                    &mut positions,
+                    &mut normals,
+                    &mut uvs,
+                    &mut indices,
+                    [x0, y_bottom, z_back],
+                    [x0, y_bottom, z_front],
+                    [x0, y_top, z_front],
+                    [x0, y_top, z_back],
+                    [-1.0, 0.0, 0.0],
+                    [uc, vc],
+                    [uc, vc],
+                    [uc, vc],
+                    [uc, vc],
+                );
+            }
+
+            // Right edge (+X).
+            if !is_opaque(&image, x as i32 + 1, y as i32) {
+                push_quad(
+                    &mut positions,
+                    &mut normals,
+                    &mut uvs,
+                    &mut indices,
+                    [x1, y_bottom, z_front],
+                    [x1, y_bottom, z_back],
+                    [x1, y_top, z_back],
+                    [x1, y_top, z_front],
+                    [1.0, 0.0, 0.0],
+                    [uc, vc],
+                    [uc, vc],
+                    [uc, vc],
+                    [uc, vc],
+                );
+            }
+
+            // Top edge (+Y).
+            if !is_opaque(&image, x as i32, y as i32 - 1) {
+                push_quad(
+                    &mut positions,
+                    &mut normals,
+                    &mut uvs,
+                    &mut indices,
+                    [x0, y_top, z_front],
+                    [x1, y_top, z_front],
+                    [x1, y_top, z_back],
+                    [x0, y_top, z_back],
+                    [0.0, 1.0, 0.0],
+                    [uc, vc],
+                    [uc, vc],
+                    [uc, vc],
+                    [uc, vc],
+                );
+            }
+
+            // Bottom edge (-Y).
+            if !is_opaque(&image, x as i32, y as i32 + 1) {
+                push_quad(
+                    &mut positions,
+                    &mut normals,
+                    &mut uvs,
+                    &mut indices,
+                    [x0, y_bottom, z_back],
+                    [x1, y_bottom, z_back],
+                    [x1, y_bottom, z_front],
+                    [x0, y_bottom, z_front],
+                    [0.0, -1.0, 0.0],
+                    [uc, vc],
+                    [uc, vc],
+                    [uc, vc],
+                    [uc, vc],
+                );
+            }
+        }
+    }
+
+    if positions.is_empty() {
+        return None;
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(indices));
+    Some(mesh)
 }
 
 /// Guesses a block registry key from an item key using common naming patterns.

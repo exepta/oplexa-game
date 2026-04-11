@@ -41,6 +41,10 @@ pub struct BlockHit {
 pub struct StructureHit {
     /// Hit structure root entity.
     pub entity: Entity,
+    /// World-space hit position from rapier collider raycast.
+    pub hit_world: Vec3,
+    /// World-space surface normal from rapier collider raycast.
+    pub hit_normal_world: Vec3,
     /// World-space center of the selection bounds.
     pub selection_center_world: Vec3,
     /// World-space size of the selection bounds.

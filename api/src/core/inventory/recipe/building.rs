@@ -2,6 +2,7 @@ use crate::core::inventory::items::{ItemId, ItemRegistry};
 use crate::core::world::block::BlockStats;
 use bevy::prelude::{Resource, UVec3, Vec3};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -10,12 +11,44 @@ const STRUCTURE_COLLIDER_MIN_SIZE_METERS: f32 = 0.01;
 const STRUCTURE_COLLIDER_MAX_SIZE_METERS: f32 = 128.0;
 const STRUCTURE_COLLIDER_MAX_OFFSET_METERS: f32 = 128.0;
 
+/// Material requirement source entry for one building recipe.
+#[derive(Clone, Debug)]
+pub enum BuildingMaterialRequirementSource {
+    Item {
+        item_id: ItemId,
+        item_localized_name: String,
+    },
+    Group {
+        group: String,
+    },
+}
+
 /// Material requirement entry for one building recipe.
 #[derive(Clone, Debug)]
 pub struct BuildingMaterialRequirement {
-    pub item_id: ItemId,
-    pub item_localized_name: String,
+    pub source: BuildingMaterialRequirementSource,
     pub count: u16,
+}
+
+impl BuildingMaterialRequirement {
+    #[inline]
+    pub fn item(item_id: ItemId, item_localized_name: String, count: u16) -> Self {
+        Self {
+            source: BuildingMaterialRequirementSource::Item {
+                item_id,
+                item_localized_name,
+            },
+            count,
+        }
+    }
+
+    #[inline]
+    pub fn group(group: String, count: u16) -> Self {
+        Self {
+            source: BuildingMaterialRequirementSource::Group { group },
+            count,
+        }
+    }
 }
 
 /// Runtime definition of one structure building recipe.
@@ -80,6 +113,27 @@ pub struct BuildingStructureModelMeta {
     pub stats: BlockStats,
     pub colliders: BuildingStructureColliderSource,
     pub block_registration: Option<BuildingStructureBlockRegistration>,
+    pub textures: Vec<BuildingStructureTextureBinding>,
+}
+
+/// Texture source selector for one named model part.
+#[derive(Clone, Debug)]
+pub enum BuildingStructureTextureSource {
+    /// Uses material from one item group (optionally one atlas tile).
+    Group {
+        group: String,
+        tile: Option<[u32; 2]>,
+    },
+    /// Uses one direct texture path loaded through the asset server.
+    DirectPath { asset_path: String },
+}
+
+/// Runtime texture binding loaded from `data.meta.json`.
+#[derive(Clone, Debug)]
+pub struct BuildingStructureTextureBinding {
+    pub mesh_name_contains: String,
+    pub source: BuildingStructureTextureSource,
+    pub uv_repeat: Option<[f32; 2]>,
 }
 
 /// Runtime collider definition attached to one placed structure model.
@@ -141,6 +195,23 @@ struct BuildingModelMetaJson {
     localized_name: String,
     #[serde(default)]
     name: String,
+    #[serde(default)]
+    textures: HashMap<String, BuildingModelTextureBindingJson>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(untagged)]
+enum BuildingModelTextureBindingJson {
+    Source(String),
+    Detailed(BuildingModelTextureBindingObjectJson),
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+struct BuildingModelTextureBindingObjectJson {
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    uv_repeat: Option<[f32; 2]>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -164,6 +235,8 @@ enum BuildingModelCollidersJson {
 struct BuildingRequirementJson {
     #[serde(default)]
     item: String,
+    #[serde(default)]
+    group: String,
     #[serde(default = "default_required_count")]
     count: u16,
 }
@@ -218,18 +291,26 @@ pub fn load_building_structure_recipe_registry(
         let mut has_invalid_requirement = false;
         for requirement in recipe_json.requirements {
             let item_name = requirement.item.trim();
-            if item_name.is_empty() {
+            let group_name = normalize_recipe_group(requirement.group.as_str());
+            let count = requirement.count.max(1);
+            if !item_name.is_empty() {
+                let Some(item_id) = item_registry.id_opt(item_name) else {
+                    has_invalid_requirement = true;
+                    break;
+                };
+                requirements.push(BuildingMaterialRequirement::item(
+                    item_id,
+                    item_name.to_string(),
+                    count,
+                ));
                 continue;
             }
-            let Some(item_id) = item_registry.id_opt(item_name) else {
-                has_invalid_requirement = true;
-                break;
-            };
-            requirements.push(BuildingMaterialRequirement {
-                item_id,
-                item_localized_name: item_name.to_string(),
-                count: requirement.count.max(1),
-            });
+            if !group_name.is_empty() {
+                requirements.push(BuildingMaterialRequirement::group(group_name, count));
+                continue;
+            }
+            has_invalid_requirement = true;
+            break;
         }
         if has_invalid_requirement {
             continue;
@@ -404,11 +485,130 @@ fn load_structure_model_meta(path: &str) -> Option<BuildingStructureModelMeta> {
         stats: parsed.stats,
         colliders,
         block_registration,
+        textures: parse_model_texture_bindings(parsed.textures),
     })
+}
+
+fn parse_model_texture_bindings(
+    raw: HashMap<String, BuildingModelTextureBindingJson>,
+) -> Vec<BuildingStructureTextureBinding> {
+    let mut bindings = Vec::new();
+    for (matcher_raw, source_config_raw) in raw {
+        let matcher = matcher_raw.trim().to_ascii_lowercase();
+        if matcher.is_empty() {
+            continue;
+        }
+        let (source_raw, uv_repeat_raw) = match source_config_raw {
+            BuildingModelTextureBindingJson::Source(source) => (source, None),
+            BuildingModelTextureBindingJson::Detailed(source) => (source.source, source.uv_repeat),
+        };
+        let Some(source) = parse_texture_source(source_raw.as_str()) else {
+            continue;
+        };
+        bindings.push(BuildingStructureTextureBinding {
+            mesh_name_contains: matcher,
+            source,
+            uv_repeat: normalize_uv_repeat(uv_repeat_raw),
+        });
+    }
+    // Prefer more specific matchers first when keys overlap.
+    bindings.sort_by(|a, b| {
+        b.mesh_name_contains
+            .len()
+            .cmp(&a.mesh_name_contains.len())
+            .then_with(|| a.mesh_name_contains.cmp(&b.mesh_name_contains))
+    });
+    bindings
+}
+
+fn normalize_uv_repeat(raw: Option<[f32; 2]>) -> Option<[f32; 2]> {
+    let [u, v] = raw?;
+    let u = if u.is_finite() { u } else { 1.0 };
+    let v = if v.is_finite() { v } else { 1.0 };
+    Some([u.clamp(0.01, 64.0), v.clamp(0.01, 64.0)])
+}
+
+fn parse_texture_source(raw: &str) -> Option<BuildingStructureTextureSource> {
+    let cleaned = raw.trim().trim_end_matches(',').trim();
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    if cleaned.contains('[') || cleaned.contains(']') {
+        let (group, tile) = parse_group_with_optional_tile(cleaned)?;
+        return Some(BuildingStructureTextureSource::Group { group, tile });
+    }
+
+    if looks_like_asset_path(cleaned) {
+        let asset_path = normalize_asset_relative_path(cleaned);
+        if asset_path.is_empty() {
+            return None;
+        }
+        return Some(BuildingStructureTextureSource::DirectPath { asset_path });
+    }
+
+    let group = normalize_recipe_group(cleaned);
+    if group.is_empty() {
+        return None;
+    }
+    Some(BuildingStructureTextureSource::Group { group, tile: None })
+}
+
+fn parse_group_with_optional_tile(raw: &str) -> Option<(String, Option<[u32; 2]>)> {
+    let Some(open_bracket) = raw.find('[') else {
+        return None;
+    };
+
+    let Some(close_bracket) = raw.rfind(']') else {
+        return None;
+    };
+    if close_bracket <= open_bracket {
+        return None;
+    }
+
+    let group_raw = raw[..open_bracket].trim();
+    let group = normalize_recipe_group(group_raw);
+    if group.is_empty() {
+        return None;
+    }
+
+    let tile_raw = &raw[(open_bracket + 1)..close_bracket];
+    let mut nums = tile_raw
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let col = nums.next()?.parse::<u32>().ok()?;
+    let row = nums.next()?.parse::<u32>().ok()?;
+    if nums.next().is_some() {
+        return None;
+    }
+    Some((group, Some([col, row])))
+}
+
+#[inline]
+fn looks_like_asset_path(raw: &str) -> bool {
+    raw.contains('/') || raw.contains('\\') || raw.contains('.')
+}
+
+#[inline]
+fn normalize_asset_relative_path(raw: &str) -> String {
+    let mut value = raw.trim().replace('\\', "/");
+    if let Some(stripped) = value.strip_prefix("assets/") {
+        value = stripped.to_string();
+    }
+    if let Some(stripped) = value.strip_prefix("./") {
+        value = stripped.to_string();
+    }
+    value
 }
 
 #[inline]
 fn normalize_recipe_name(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase().replace(' ', "_")
+}
+
+#[inline]
+fn normalize_recipe_group(raw: &str) -> String {
     raw.trim().to_ascii_lowercase().replace(' ', "_")
 }
 

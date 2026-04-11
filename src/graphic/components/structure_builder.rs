@@ -61,7 +61,7 @@ fn handle_structure_build_menu_input(
         return;
     };
 
-    let can_build = structure_recipe_can_build(&inventory, recipe);
+    let can_build = structure_recipe_can_build(&inventory, recipe, &item_registry);
 
     for (css_id, mut state) in &mut widgets {
         if !state.checked {
@@ -135,6 +135,7 @@ fn rotate_structure_preview_with_scroll(
 fn sync_structure_build_menu_ui(
     structure_menu: Res<StructureBuildMenuState>,
     inventory: Res<PlayerInventory>,
+    item_registry: Res<ItemRegistry>,
     structure_recipe_registry: Option<Res<BuildingStructureRecipeRegistry>>,
     language: Res<ClientLanguageState>,
     mut root_q: Query<&mut Visibility, With<StructureBuildRoot>>,
@@ -161,7 +162,8 @@ fn sync_structure_build_menu_ui(
     let recipe = structure_recipe_registry
         .as_ref()
         .and_then(|registry| registry.recipe_by_name(WORKBENCH_STRUCTURE_RECIPE_NAME));
-    let can_build = recipe.is_some_and(|recipe| structure_recipe_can_build(&inventory, recipe));
+    let can_build =
+        recipe.is_some_and(|recipe| structure_recipe_can_build(&inventory, recipe, &item_registry));
 
     for (css_id, mut button, mut state, mut background, mut border) in &mut button_q {
         if css_id.0 != STRUCTURE_BUILD_WORKBENCH_ID {
@@ -225,16 +227,44 @@ fn close_structure_build_menu_ui(
     }
 }
 
-fn structure_recipe_can_build(inventory: &PlayerInventory, recipe: &BuildingStructureRecipe) -> bool {
-    recipe.requirements.iter().all(|requirement| {
-        inventory_item_total(inventory, requirement.item_id) >= requirement.count as u32
-    })
+fn structure_recipe_can_build(
+    inventory: &PlayerInventory,
+    recipe: &BuildingStructureRecipe,
+    item_registry: &ItemRegistry,
+) -> bool {
+    recipe
+        .requirements
+        .iter()
+        .all(|requirement| match &requirement.source {
+            BuildingMaterialRequirementSource::Item { item_id, .. } => {
+                inventory_item_total_by_item(inventory, *item_id) >= requirement.count as u32
+            }
+            BuildingMaterialRequirementSource::Group { group } => {
+                inventory_item_total_by_group(inventory, item_registry, group.as_str())
+                    >= requirement.count as u32
+            }
+        })
 }
 
-fn inventory_item_total(inventory: &PlayerInventory, item_id: ItemId) -> u32 {
+fn inventory_item_total_by_item(inventory: &PlayerInventory, item_id: ItemId) -> u32 {
     let mut total = 0u32;
     for slot in &inventory.slots {
         if slot.is_empty() || slot.item_id != item_id {
+            continue;
+        }
+        total = total.saturating_add(slot.count as u32);
+    }
+    total
+}
+
+fn inventory_item_total_by_group(
+    inventory: &PlayerInventory,
+    item_registry: &ItemRegistry,
+    group: &str,
+) -> u32 {
+    let mut total = 0u32;
+    for slot in &inventory.slots {
+        if slot.is_empty() || !item_registry.has_group(slot.item_id, group) {
             continue;
         }
         total = total.saturating_add(slot.count as u32);

@@ -21,9 +21,10 @@ use crate::core::inventory::items::{
     player_drop_spawn_motion, player_drop_world_location, spawn_player_dropped_item_stack,
 };
 use crate::core::inventory::recipe::{
-    ActiveStructurePlacementState, ActiveStructureRecipeState, BuildingStructureRecipe,
-    BuildingStructureRecipeRegistry, HAND_CRAFTED_INPUT_SLOTS, HandCraftedState, RecipeRegistry,
-    RecipeTypeRegistry, ResolvedRecipe, WORK_TABLE_CRAFTING_INPUT_SLOTS, WorkTableCraftingState,
+    ActiveStructurePlacementState, ActiveStructureRecipeState, BuildingMaterialRequirementSource,
+    BuildingStructureRecipe, BuildingStructureRecipeRegistry, HAND_CRAFTED_INPUT_SLOTS,
+    HandCraftedState, RecipeRegistry, RecipeTypeRegistry, ResolvedRecipe,
+    WORK_TABLE_CRAFTING_INPUT_SLOTS, WorkTableCraftingState,
 };
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
 use crate::core::states::states::{

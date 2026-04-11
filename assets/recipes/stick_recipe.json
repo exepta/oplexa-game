@@ -6,12 +6,8 @@
       "data": {
         "craft": {
           "0": {
-            "item": "oplexa:oak_log_block",
-            "count": 1
-          },
-          "1": {
-            "item": "oplexa:oak_log_block",
-            "count": 1
+            "group": "logs",
+            "count": 2
           }
         }
       }
@@ -22,12 +18,8 @@
       "data": {
         "craft": {
           "0": {
-            "item": "oplexa:oak_log_block",
-            "count": 1
-          },
-          "1": {
-            "item": "oplexa:oak_log_block",
-            "count": 1
+            "group": "logs",
+            "count": 2
           }
         }
       }

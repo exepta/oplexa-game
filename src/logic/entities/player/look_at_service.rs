@@ -288,7 +288,7 @@ fn update_selection(
         let structure_filter = |entity: Entity| -> bool {
             is_structure_collider_entity(entity, &q_structure_meta, &q_parents)
         };
-        if let Some((hit_entity, toi)) = ctx.cast_ray(
+        if let Some((hit_entity, intersection)) = ctx.cast_ray_and_get_normal(
             tf.translation(),
             tf.forward().into(),
             max_dist_blocks * VOXEL_SIZE,
@@ -297,16 +297,21 @@ fn update_selection(
                 .exclude_sensors()
                 .predicate(&structure_filter),
         ) {
+            let direction: Vec3 = tf.forward().into();
+            let hit_world = tf.translation() + direction * intersection.time_of_impact;
+            let hit_normal_world: Vec3 = intersection.normal;
             let mut current = hit_entity;
             loop {
                 if let Ok(meta) = q_structure_meta.get(current) {
                     structure_hit = Some((
                         StructureHit {
                             entity: current,
+                            hit_world,
+                            hit_normal_world,
                             selection_center_world: meta.selection_center_world,
                             selection_size_world: meta.selection_size_world,
                         },
-                        toi,
+                        intersection.time_of_impact,
                     ));
                     break;
                 }

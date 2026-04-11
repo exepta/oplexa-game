@@ -5,7 +5,7 @@
   "model": "work_table",
   "requirements": [
     {
-      "item": "oplexa:oak_log_block",
+      "group": "logs",
       "count": 2
     }
   ]

@@ -12,5 +12,12 @@
     "opaque": false,
     "solid": true
   },
+  "textures": {
+    "Leg": "logs[0, 1]",
+    "Top": "planks",
+    "Bottom": "planks",
+    "Wand": "textures/blocks/border/border.png",
+    "Wand_mount": "textures/blocks/stone/stone.png"
+  },
   "colliders": "mesh"
 }

@@ -203,6 +203,16 @@ fn match_shapeless_work_table_inputs(
         }
     }
 
+    // Shapeless still requires that no unrelated occupied slot exists.
+    // Extra amount in one used stack is allowed (minimum-count semantics),
+    // but additional occupied slots that were not consumed are not.
+    for slot_index in 0..WORK_TABLE_CRAFTING_INPUT_SLOTS {
+        let slot = input_slots.get(slot_index)?;
+        if !slot.is_empty() && consumed_counts[slot_index] == 0 {
+            return None;
+        }
+    }
+
     let mut required_inputs = Vec::new();
     for slot_index in 0..WORK_TABLE_CRAFTING_INPUT_SLOTS {
         let consumed = consumed_counts[slot_index];

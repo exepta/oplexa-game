@@ -60,6 +60,23 @@ pub struct StructureRegionEntry {
     pub recipe_name: String,
     pub place_origin: [i32; 3],
     pub rotation_quarters: u8,
+    #[serde(default)]
+    pub style_item: String,
+    #[serde(default)]
+    pub drop_items: Vec<StructureRegionDropItem>,
+}
+
+/// Persisted concrete material stack consumed for one structure placement.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StructureRegionDropItem {
+    pub item: String,
+    #[serde(default = "default_structure_drop_count")]
+    pub count: u16,
+}
+
+#[inline]
+fn default_structure_drop_count() -> u16 {
+    1
 }
 
 impl RegionFile {

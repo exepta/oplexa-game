@@ -10,9 +10,10 @@ pub const CRAFTING_SHAPED_RECIPE_KIND: &str = "shaped";
 pub const CRAFTING_SHAPELESS_RECIPE_KIND: &str = "shapeless";
 
 pub use building::{
-    BUILDING_SHAPED_RECIPE_KIND, BuildingMaterialRequirement, BuildingModelAnchor,
-    BuildingModelRegisterAs, BuildingStructureBlockRegistration, BuildingStructureColliderSource,
-    BuildingStructureRecipe, BuildingStructureRecipeRegistry,
+    BUILDING_SHAPED_RECIPE_KIND, BuildingMaterialRequirement, BuildingMaterialRequirementSource,
+    BuildingModelAnchor, BuildingModelRegisterAs, BuildingStructureBlockRegistration,
+    BuildingStructureColliderSource, BuildingStructureRecipe, BuildingStructureRecipeRegistry,
+    BuildingStructureTextureBinding, BuildingStructureTextureSource,
     load_building_structure_recipe_registry,
 };
 pub use hand_crafted::{HAND_CRAFTED_INPUT_SLOTS, HAND_CRAFTED_TYPE_LOCALIZED};
