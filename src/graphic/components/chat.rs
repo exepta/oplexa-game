@@ -52,13 +52,14 @@ fn update_chat_ui_state(
     let open_chat_key = convert(global_config.input.open_chat.as_str()).unwrap_or(KeyCode::KeyC);
     let close_key = convert(global_config.input.ui_close_back.as_str()).unwrap_or(KeyCode::Escape);
 
-    if ui_interaction.menu_open || ui_interaction.inventory_open {
+    if ui_interaction.menu_open || ui_interaction.inventory_open || ui_interaction.structure_menu_open {
         chat_ui.open = false;
     }
 
     if !chat_ui.open
         && !ui_interaction.menu_open
         && !ui_interaction.inventory_open
+        && !ui_interaction.structure_menu_open
         && keyboard.just_pressed(open_chat_key)
     {
         chat_ui.open = true;

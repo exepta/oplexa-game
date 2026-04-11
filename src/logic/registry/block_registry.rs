@@ -1,5 +1,7 @@
 use crate::core::inventory::items::ItemRegistry;
-use crate::core::inventory::recipe::{RecipeTypeRegistry, load_recipe_registry};
+use crate::core::inventory::recipe::{
+    RecipeTypeRegistry, load_building_structure_recipe_registry, load_recipe_registry,
+};
 use crate::core::states::states::{AppState, BeforeUiState};
 use crate::core::world::block::BlockRegistry;
 use bevy::prelude::*;
@@ -21,8 +23,9 @@ fn start_block_registry(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut next: ResMut<NextState<AppState>>,
 ) {
-    let block_registry = BlockRegistry::load_all(&asset_server, &mut materials, "assets/blocks");
-    let item_registry = ItemRegistry::load_all(
+    let mut block_registry =
+        BlockRegistry::load_all(&asset_server, &mut materials, "assets/blocks");
+    let mut item_registry = ItemRegistry::load_all(
         &asset_server,
         &mut materials,
         "assets/items",
@@ -31,6 +34,24 @@ fn start_block_registry(
     let recipe_type_registry = RecipeTypeRegistry::with_defaults();
     let recipe_registry =
         load_recipe_registry("assets/recipes", &item_registry, &recipe_type_registry);
+    let mut structure_recipe_registry =
+        load_building_structure_recipe_registry("assets/recipes/structures", &item_registry);
+    for recipe in &mut structure_recipe_registry.recipes {
+        let Some(registration) = recipe.model_meta.block_registration.as_mut() else {
+            continue;
+        };
+        let block_id = block_registry.ensure_runtime_block(
+            &asset_server,
+            &mut materials,
+            registration.localized_name.as_str(),
+            registration.name.as_str(),
+            recipe.model_meta.stats.clone(),
+        );
+        let item_id =
+            item_registry.ensure_runtime_block_item(&asset_server, &block_registry, block_id);
+        registration.block_id = Some(block_id);
+        registration.item_id = item_id;
+    }
 
     info!(
         "Loaded {} block(s) from assets/blocks",
@@ -45,5 +66,6 @@ fn start_block_registry(
     commands.insert_resource(item_registry);
     commands.insert_resource(recipe_type_registry);
     commands.insert_resource(recipe_registry);
+    commands.insert_resource(structure_recipe_registry);
     next.set(AppState::Screen(BeforeUiState::Menu));
 }

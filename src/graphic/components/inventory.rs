@@ -97,7 +97,7 @@ fn toggle_player_inventory_ui(
         return;
     }
 
-    if ui_interaction.menu_open || ui_interaction.chat_open {
+    if ui_interaction.menu_open || ui_interaction.chat_open || ui_interaction.structure_menu_open {
         return;
     }
 

@@ -16,3 +16,16 @@ impl Default for HandCraftedState {
         }
     }
 }
+
+/// Selected structure recipe that is currently armed for placement.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct ActiveStructureRecipeState {
+    pub selected_recipe_name: Option<String>,
+}
+
+/// Runtime placement state for active structure previews.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct ActiveStructurePlacementState {
+    /// Rotation in 90° quarter steps around +Y.
+    pub rotation_quarters: i32,
+}

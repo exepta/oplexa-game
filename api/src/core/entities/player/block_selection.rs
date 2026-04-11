@@ -9,6 +9,8 @@ use bevy::prelude::*;
 pub struct SelectionState {
     /// Last block intersection, if any.
     pub hit: Option<BlockHit>,
+    /// Last structure/model intersection, if any.
+    pub structure_hit: Option<StructureHit>,
 }
 
 /// Result of a voxel/block recast.
@@ -32,4 +34,15 @@ pub struct BlockHit {
     pub hit_local: Vec3,
     /// Neighbor cell where a new block would be placed when clicking this face.
     pub place_pos: IVec3,
+}
+
+/// Result of a structure/model hit selection raycast.
+#[derive(Clone, Copy, Debug)]
+pub struct StructureHit {
+    /// Hit structure root entity.
+    pub entity: Entity,
+    /// World-space center of the selection bounds.
+    pub selection_center_world: Vec3,
+    /// World-space size of the selection bounds.
+    pub selection_size_world: Vec3,
 }

@@ -12,9 +12,11 @@ fn sync_ingame_ui_interaction_state(
     mut ui_interaction: ResMut<UiInteractionState>,
     mut pause_menu: ResMut<PauseMenuState>,
     mut inventory_ui: ResMut<PlayerInventoryUiState>,
+    mut structure_menu: ResMut<StructureBuildMenuState>,
     mut roots: ParamSet<(
         Query<&mut Visibility, With<PauseMenuRoot>>,
         Query<&mut Visibility, With<PlayerInventoryRoot>>,
+        Query<&mut Visibility, With<StructureBuildRoot>>,
     )>,
     mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
@@ -28,14 +30,22 @@ fn sync_ingame_ui_interaction_state(
         .single_mut()
         .map(|visibility| is_ui_open_visibility(*visibility))
         .unwrap_or(false);
+    let structure_visible = roots
+        .p2()
+        .single_mut()
+        .map(|visibility| is_ui_open_visibility(*visibility))
+        .unwrap_or(false);
 
     let resolved_pause_open = pause_menu.open || pause_visible;
     let resolved_inventory_open = inventory_ui.open || inventory_visible;
+    let resolved_structure_open = structure_menu.open || structure_visible;
 
     pause_menu.open = resolved_pause_open;
     inventory_ui.open = resolved_inventory_open;
+    structure_menu.open = resolved_structure_open;
     ui_interaction.menu_open = resolved_pause_open;
     ui_interaction.inventory_open = resolved_inventory_open;
+    ui_interaction.structure_menu_open = resolved_structure_open;
 
     if let Ok(mut visibility) = roots.p0().single_mut() {
         *visibility = if resolved_pause_open {
@@ -46,6 +56,13 @@ fn sync_ingame_ui_interaction_state(
     }
     if let Ok(mut visibility) = roots.p1().single_mut() {
         *visibility = if resolved_inventory_open {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+    if let Ok(mut visibility) = roots.p2().single_mut() {
+        *visibility = if resolved_structure_open {
             Visibility::Inherited
         } else {
             Visibility::Hidden

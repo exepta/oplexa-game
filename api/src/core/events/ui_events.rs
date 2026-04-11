@@ -49,3 +49,7 @@ impl DropItemRequest {
         }
     }
 }
+
+/// Represents request to open structure build menu (hammer).
+#[derive(Message, Clone, Copy, Debug, Default)]
+pub struct OpenStructureBuildMenuRequest;

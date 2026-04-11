@@ -1,8 +1,10 @@
 KEY_FLOWER_ROSE = Rose
 KEY_FLOWER_TULIP_PINK = Pink Tulip
+KEY_HAMMER = Hammer
 KEY_STICK = Stick
 KEY_STONE_PICKAXE = Stone Pickaxe
 KEY_STONE_SHOVEL = Stone Shovel
 KEY_TAL_GRASS = Tall Grass
 KEY_WOOD_PICKAXE = Wooden Pickaxe
 KEY_WOOD_SHOVEL = Wooden Shovel
+KEY_WORKBENCH_BLOCK = Workbench

@@ -28,6 +28,7 @@ features = [
     "bevy_gltf",
     "bevy_pbr",
     "bevy_animation",
+    "reflect_auto_register",
     "tonemapping_luts",
     "bevy_color",
     "bevy_ui",

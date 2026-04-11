@@ -10,6 +10,7 @@ use crate::core::entities::player::inventory::{
 use crate::core::entities::player::{FpsController, GameMode, GameModeState, Player};
 use crate::core::events::ui_events::{
     ConnectToServerRequest, CraftHandCraftedRequest, DisconnectFromServerRequest, DropItemRequest,
+    OpenStructureBuildMenuRequest,
 };
 use crate::core::inventory::creative_panel::{
     CREATIVE_PANEL_COLUMNS, CREATIVE_PANEL_PAGE_SIZE, CreativePanelState,
@@ -19,7 +20,9 @@ use crate::core::inventory::items::{
     player_drop_spawn_motion, player_drop_world_location, spawn_player_dropped_item_stack,
 };
 use crate::core::inventory::recipe::{
-    HAND_CRAFTED_INPUT_SLOTS, HandCraftedState, RecipeRegistry, RecipeTypeRegistry, ResolvedRecipe,
+    ActiveStructurePlacementState, ActiveStructureRecipeState, BuildingStructureRecipe,
+    BuildingStructureRecipeRegistry, HAND_CRAFTED_INPUT_SLOTS, HandCraftedState, RecipeRegistry,
+    RecipeTypeRegistry, ResolvedRecipe,
 };
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
 use crate::core::states::states::{
@@ -139,6 +142,8 @@ const RECIPE_PREVIEW_INPUT_BADGE_PREFIX: &str = "recipe-preview-input-badge-";
 const RECIPE_PREVIEW_RESULT_FRAME_ID: &str = "recipe-preview-result-frame";
 const RECIPE_PREVIEW_RESULT_BADGE_ID: &str = "recipe-preview-result-badge";
 const RECIPE_PREVIEW_FILL_ID: &str = "recipe-preview-fill";
+const STRUCTURE_BUILD_WORKBENCH_ID: &str = "structure-build-workbench";
+const STRUCTURE_BUILD_HINT_ID: &str = "structure-build-hint";
 const CREATIVE_PANEL_TOTAL_ID: &str = "creative-panel-total";
 const CREATIVE_PANEL_PAGE_ID: &str = "creative-panel-page";
 const CREATIVE_PANEL_PREV_ID: &str = "creative-panel-prev";
@@ -244,6 +249,9 @@ struct HotbarSelectionTooltipText;
 /// Represents player inventory root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct PlayerInventoryRoot;
+/// Represents structure build root used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct StructureBuildRoot;
 /// Represents inventory main panel used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct InventoryMainPanel;
@@ -412,6 +420,12 @@ struct PauseMenuState {
 /// Represents player inventory ui state used by the `graphic::hardcoded_ui` module.
 #[derive(Resource, Debug, Default)]
 struct PlayerInventoryUiState {
+    open: bool,
+}
+
+/// Represents structure build menu state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+struct StructureBuildMenuState {
     open: bool,
 }
 
@@ -668,6 +682,7 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<WorldUnloadUiState>()
             .init_resource::<PauseMenuState>()
             .init_resource::<PlayerInventoryUiState>()
+            .init_resource::<StructureBuildMenuState>()
             .init_resource::<InventoryCursorItemState>()
             .init_resource::<RecipePreviewDialogState>()
             .init_resource::<CreativePanelUiState>()
@@ -885,6 +900,9 @@ impl Plugin for HardcodedUiPlugin {
             .add_systems(
                 Update,
                 (
+                    handle_open_structure_build_menu_request.in_set(InGameInventoryUiSet::Input),
+                    handle_structure_build_menu_input.in_set(InGameInventoryUiSet::Input),
+                    rotate_structure_preview_with_scroll.in_set(InGameInventoryUiSet::Input),
                     toggle_player_inventory_ui.in_set(InGameInventoryUiSet::Input),
                     sync_creative_panel_state_from_registry.in_set(InGameInventoryUiSet::Input),
                     handle_creative_panel_navigation.in_set(InGameInventoryUiSet::Input),
@@ -900,6 +918,7 @@ impl Plugin for HardcodedUiPlugin {
             .add_systems(
                 Update,
                 (
+                    sync_structure_build_menu_ui.in_set(InGameInventoryUiSet::Sync),
                     sync_player_inventory_ui.in_set(InGameInventoryUiSet::Sync),
                     sync_creative_panel_ui.in_set(InGameInventoryUiSet::Sync),
                     sync_inventory_cursor_item_ui.in_set(InGameInventoryUiSet::Sync),
@@ -919,6 +938,7 @@ impl Plugin for HardcodedUiPlugin {
                 (
                     close_chat_ui_on_exit,
                     close_player_inventory_ui,
+                    close_structure_build_menu_ui,
                     persist_inventory_on_world_exit,
                     clear_inventory_after_world_exit,
                 )
@@ -954,6 +974,7 @@ include!("components/chat.rs");
 include!("components/pause_menu.rs");
 include!("components/inventory.rs");
 include!("components/inventory_creative.rs");
+include!("components/structure_builder.rs");
 include!("components/inventory_persistence.rs");
 include!("components/ui_interaction_sync.rs");
 include!("components/debug_overlay.rs");

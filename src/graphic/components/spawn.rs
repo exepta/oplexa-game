@@ -881,6 +881,69 @@ fn spawn_hardcoded_ui(
         })
         .id();
 
+    let _structure_build_root = commands
+        .spawn((
+            Name::new("UI Structure Build Root"),
+            StructureBuildRoot,
+            Visibility::Hidden,
+            full_screen_center_node(),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.40)),
+            ZIndex(52),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Node {
+                    width: Val::Px(420.0),
+                    min_height: Val::Px(190.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(10.0),
+                    padding: UiRect::all(Val::Px(14.0)),
+                    border: UiRect::all(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(color_background().into()),
+                BorderColor::all(color_accent()),
+            ))
+            .with_children(|panel| {
+                panel.spawn((
+                    Paragraph {
+                        text: language.localize_name_key("KEY_UI_BUILD_STRUCTURES").to_string(),
+                        ..default()
+                    },
+                    UiTextTone::Heading,
+                ));
+                panel.spawn((
+                    Paragraph {
+                        text: language
+                            .localize_name_key("KEY_UI_BUILD_SELECT_STRUCTURE")
+                            .to_string(),
+                        ..default()
+                    },
+                    UiTextTone::Darker,
+                ));
+                panel.spawn((
+                    Button {
+                        text: language.localize_name_key("KEY_UI_WORKBENCH").to_string(),
+                        ..default()
+                    },
+                    CssID(STRUCTURE_BUILD_WORKBENCH_ID.to_string()),
+                    UiButtonKind::ActionRow,
+                    UiButtonTone::Accent,
+                ));
+                panel.spawn((
+                    Paragraph {
+                        text: language
+                            .localize_name_key("KEY_UI_BUILD_HINT_MISSING_MATERIAL")
+                            .to_string(),
+                        ..default()
+                    },
+                    CssID(STRUCTURE_BUILD_HINT_ID.to_string()),
+                    UiTextTone::Darker,
+                ));
+            });
+        })
+        .id();
+
     let _inventory_root = commands
         .spawn((
             Name::new("UI Inventory Root"),

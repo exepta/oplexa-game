@@ -1,0 +1,24 @@
+{
+  "type": "crafting_shaped",
+  "crafting": [
+    {
+      "type": "oplexa:hand_crafted",
+      "data": {
+        "craft": {
+          "0": {
+            "item": "oplexa:stick",
+            "count": 1
+          },
+          "1": {
+            "item": "oplexa:cobble_stone_block",
+            "count": 1
+          }
+        }
+      }
+    }
+  ],
+  "result": {
+    "item": "oplexa:hammer",
+    "count": 1
+  }
+}

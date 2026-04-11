@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+use lz4_flex::{compress_prepend_size, decompress_size_prepended};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::*;
@@ -13,6 +15,7 @@ pub const GBW_MAGIC: [u8; 4] = *b"GBW1";
 const SLOT_MAGIC: u32 = 0x5653_4C54;
 pub const TAG_BLK1: u32 = 0x314B_4C42;
 pub const TAG_WAT1: u32 = 0x3154_4157;
+pub const TAG_STR1: u32 = 0x3152_5453;
 
 static WORLD_SAVE_IO_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
@@ -49,6 +52,14 @@ pub struct RegionFile {
     pub hdr: Vec<Slot>,
     /// Absolute or relative filesystem path to the region file.
     pub path: PathBuf,
+}
+
+/// Persisted structure entry stored in one region slot under `TAG_STR1`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StructureRegionEntry {
+    pub recipe_name: String,
+    pub place_origin: [i32; 3],
+    pub rotation_quarters: u8,
 }
 
 impl RegionFile {
@@ -476,4 +487,20 @@ pub fn container_upsert(existing: Option<&[u8]>, tag: u32, payload: &[u8]) -> Ve
 #[inline]
 pub fn slot_is_container(buf: &[u8]) -> bool {
     buf.len() >= 8 && u32::from_le_bytes(buf[0..4].try_into().unwrap()) == SLOT_MAGIC
+}
+
+/// Encodes one chunk-local structure list.
+pub fn encode_structure_entries(entries: &[StructureRegionEntry]) -> Vec<u8> {
+    let encoded = serde_json::to_vec(entries).unwrap_or_default();
+    compress_prepend_size(&encoded)
+}
+
+/// Decodes one chunk-local structure list.
+pub fn decode_structure_entries(buf: &[u8]) -> std::io::Result<Vec<StructureRegionEntry>> {
+    if buf.is_empty() {
+        return Ok(Vec::new());
+    }
+    let decoded = decompress_size_prepended(buf).unwrap_or_else(|_| buf.to_vec());
+    serde_json::from_slice::<Vec<StructureRegionEntry>>(&decoded)
+        .map_err(|error| Error::new(ErrorKind::InvalidData, error.to_string()))
 }

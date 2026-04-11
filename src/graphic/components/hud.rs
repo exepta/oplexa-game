@@ -16,9 +16,20 @@ fn hide_hud_hotbar_ui(mut root: Query<&mut Visibility, With<HudRoot>>) {
 fn cycle_hotbar_with_scroll(
     mut wheel_reader: MessageReader<MouseWheel>,
     ui_interaction: Res<UiInteractionState>,
+    inventory: Res<PlayerInventory>,
+    item_registry: Res<ItemRegistry>,
+    active_structure_recipe: Res<ActiveStructureRecipeState>,
     mut hotbar_state: ResMut<HotbarSelectionState>,
 ) {
     if ui_interaction.chat_open {
+        for _ in wheel_reader.read() {}
+        return;
+    }
+
+    if active_structure_recipe.selected_recipe_name.is_some()
+        && is_hammer_selected_for_hotbar(&inventory, &hotbar_state, &item_registry)
+    {
+        for _ in wheel_reader.read() {}
         return;
     }
 
@@ -54,6 +65,23 @@ fn cycle_hotbar_with_scroll(
             hotbar_state.selected_index = (hotbar_state.selected_index + 1) % HOTBAR_SLOTS;
         }
     }
+}
+
+fn is_hammer_selected_for_hotbar(
+    inventory: &PlayerInventory,
+    hotbar_state: &HotbarSelectionState,
+    item_registry: &ItemRegistry,
+) -> bool {
+    let Some(slot) = inventory.slots.get(hotbar_state.selected_index) else {
+        return false;
+    };
+    if slot.is_empty() {
+        return false;
+    }
+    let Some(item) = item_registry.def_opt(slot.item_id) else {
+        return false;
+    };
+    item.localized_name == "oplexa:hammer" || item.key == "hammer"
 }
 
 /// Runs the `select_hotbar_with_number_keys` routine for select hotbar with number keys in the `graphic::components::hud` module.
