@@ -19,6 +19,7 @@ use crate::core::entities::EntitiesModule;
 use crate::core::events::EventModule;
 use crate::core::inventory::recipe::{
     ActiveStructurePlacementState, ActiveStructureRecipeState, HandCraftedState,
+    WorkTableCraftingState,
 };
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::ui::{HotbarSelectionState, UiInteractionState};
@@ -46,6 +47,7 @@ impl Plugin for CoreModule {
         app.init_resource::<BiomeRegistry>();
         app.init_resource::<TreeRegistry>();
         app.init_resource::<HandCraftedState>();
+        app.init_resource::<WorkTableCraftingState>();
         app.init_resource::<ActiveStructureRecipeState>();
         app.init_resource::<ActiveStructurePlacementState>();
         app.add_plugins((EventModule, EntitiesModule));

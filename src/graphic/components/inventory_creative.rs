@@ -149,6 +149,7 @@ fn sync_creative_panel_ui(
     mut images: ResMut<Assets<Image>>,
     mut paragraphs: Query<(&CssID, &mut Paragraph)>,
     mut buttons: Query<(&CssID, &mut Button, &mut UiButtonTone), With<Button>>,
+    mut button_visibility: Query<(&CssID, &mut Visibility), With<Button>>,
 ) {
     for (css_id, mut paragraph) in &mut paragraphs {
         if css_id.0 == CREATIVE_PANEL_TOTAL_ID {
@@ -198,6 +199,17 @@ fn sync_creative_panel_ui(
         });
         if button.icon_path != next_icon {
             button.icon_path = next_icon;
+        }
+    }
+
+    let show_trash = matches!(game_mode.0, GameMode::Creative);
+    for (css_id, mut visibility) in &mut button_visibility {
+        if css_id.0 == INVENTORY_TRASH_BUTTON_ID || css_id.0 == WORKBENCH_TRASH_BUTTON_ID {
+            *visibility = if show_trash {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
         }
     }
 

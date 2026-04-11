@@ -6,7 +6,7 @@ use crate::core::events::block::BlockEventsModule;
 use crate::core::events::chunk_events::*;
 use crate::core::events::ui_events::{
     ChatSubmitRequest, ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest,
-    OpenStructureBuildMenuRequest,
+    OpenStructureBuildMenuRequest, OpenWorkbenchMenuRequest,
 };
 use bevy::prelude::*;
 
@@ -24,6 +24,7 @@ impl Plugin for EventModule {
             .add_message::<DisconnectFromServerRequest>()
             .add_message::<ChatSubmitRequest>()
             .add_message::<DropItemRequest>()
-            .add_message::<OpenStructureBuildMenuRequest>();
+            .add_message::<OpenStructureBuildMenuRequest>()
+            .add_message::<OpenWorkbenchMenuRequest>();
     }
 }

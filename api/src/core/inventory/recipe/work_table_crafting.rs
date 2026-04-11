@@ -1,5 +1,5 @@
 use crate::core::entities::player::inventory::InventorySlot;
-use crate::core::inventory::items::ItemRegistry;
+use crate::core::inventory::items::{ItemId, ItemRegistry};
 use crate::core::inventory::recipe::registry::{RecipeTypeHandler, RecipeTypeRegistry};
 use crate::core::inventory::recipe::types::{NamespacedKey, RecipeInputRequirement};
 use crate::core::inventory::recipe::{CRAFTING_SHAPED_RECIPE_KIND, CRAFTING_SHAPELESS_RECIPE_KIND};
@@ -7,19 +7,26 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub const HAND_CRAFTED_TYPE_LOCALIZED: &str = "oplexa:hand_crafted";
-pub const HAND_CRAFTED_INPUT_SLOTS: usize = 2;
+pub const WORK_TABLE_CRAFTING_TYPE_LOCALIZED: &str = "oplexa:work_table_crafting";
+pub const WORK_TABLE_CRAFTING_INPUT_SLOTS: usize = 8;
 
-/// Represents hand crafted data json used by the `core::inventory::recipe::hand_crafted` module.
+/// Represents work table shaped recipe data used by the `core::inventory::recipe::work_table_crafting` module.
 #[derive(Deserialize)]
-struct HandCraftedDataJson {
+struct WorkTableShapedDataJson {
     #[serde(default)]
-    craft: HashMap<String, HandCraftedEntryJson>,
+    craft: HashMap<String, WorkTableEntryJson>,
 }
 
-/// Represents hand crafted entry json used by the `core::inventory::recipe::hand_crafted` module.
+/// Represents work table shapeless recipe data used by the `core::inventory::recipe::work_table_crafting` module.
 #[derive(Deserialize)]
-struct HandCraftedEntryJson {
+struct WorkTableShapelessDataJson {
+    #[serde(default)]
+    ingredients: Vec<WorkTableEntryJson>,
+}
+
+/// Represents work table recipe entry used by the `core::inventory::recipe::work_table_crafting` module.
+#[derive(Deserialize, Clone)]
+struct WorkTableEntryJson {
     #[serde(default)]
     item: String,
     #[serde(default)]
@@ -28,56 +35,64 @@ struct HandCraftedEntryJson {
     count: u16,
 }
 
-/// Registers hand crafted recipe type for the `core::inventory::recipe::hand_crafted` module.
-pub fn register_hand_crafted_recipe_type(recipe_type_registry: &mut RecipeTypeRegistry) {
-    let Some(recipe_type) = NamespacedKey::parse(HAND_CRAFTED_TYPE_LOCALIZED) else {
+/// Registers work table recipe type for the `core::inventory::recipe::work_table_crafting` module.
+pub fn register_work_table_recipe_type(recipe_type_registry: &mut RecipeTypeRegistry) {
+    let Some(recipe_type) = NamespacedKey::parse(WORK_TABLE_CRAFTING_TYPE_LOCALIZED) else {
         return;
     };
+
     recipe_type_registry.register_handler(
         recipe_type,
         RecipeTypeHandler {
-            matcher: match_hand_crafted_inputs,
+            matcher: match_work_table_inputs,
         },
     );
 }
 
-/// Runs the `match_hand_crafted_inputs` routine for match hand crafted inputs in the `core::inventory::recipe::hand_crafted` module.
-fn match_hand_crafted_inputs(
+/// Matches work table crafting inputs for shaped or shapeless recipes.
+fn match_work_table_inputs(
     recipe_format: &str,
     data: &Value,
     input_slots: &[InventorySlot],
     item_registry: &ItemRegistry,
 ) -> Option<Vec<RecipeInputRequirement>> {
-    if input_slots.len() < HAND_CRAFTED_INPUT_SLOTS {
+    if input_slots.len() < WORK_TABLE_CRAFTING_INPUT_SLOTS {
         return None;
     }
 
-    let parsed: HandCraftedDataJson = serde_json::from_value(data.clone()).ok()?;
-    if parsed.craft.is_empty() {
-        return None;
+    if recipe_format
+        .trim()
+        .eq_ignore_ascii_case(CRAFTING_SHAPED_RECIPE_KIND)
+    {
+        return match_shaped_work_table_inputs(data, input_slots, item_registry);
     }
 
     if recipe_format
         .trim()
         .eq_ignore_ascii_case(CRAFTING_SHAPELESS_RECIPE_KIND)
     {
-        return match_shapeless_hand_crafted_inputs(&parsed.craft, input_slots, item_registry);
+        return match_shapeless_work_table_inputs(data, input_slots, item_registry);
     }
 
-    if !recipe_format.trim().is_empty()
-        && !recipe_format
-            .trim()
-            .eq_ignore_ascii_case(CRAFTING_SHAPED_RECIPE_KIND)
-    {
+    None
+}
+
+fn match_shaped_work_table_inputs(
+    data: &Value,
+    input_slots: &[InventorySlot],
+    item_registry: &ItemRegistry,
+) -> Option<Vec<RecipeInputRequirement>> {
+    let parsed: WorkTableShapedDataJson = serde_json::from_value(data.clone()).ok()?;
+    if parsed.craft.is_empty() {
         return None;
     }
 
-    let mut required_slots = [false; HAND_CRAFTED_INPUT_SLOTS];
+    let mut required_slots = [false; WORK_TABLE_CRAFTING_INPUT_SLOTS];
     let mut required_inputs = Vec::with_capacity(parsed.craft.len());
 
-    for (slot_raw, required_entry) in &parsed.craft {
+    for (slot_raw, required_entry) in parsed.craft {
         let slot_index = slot_raw.parse::<usize>().ok()?;
-        if slot_index >= HAND_CRAFTED_INPUT_SLOTS {
+        if slot_index >= WORK_TABLE_CRAFTING_INPUT_SLOTS {
             return None;
         }
 
@@ -86,8 +101,9 @@ fn match_hand_crafted_inputs(
         if current_slot.count < required_count {
             return None;
         }
+
         let required_item_id =
-            resolve_required_item_id(required_entry, current_slot, item_registry)?;
+            resolve_required_item_id(&required_entry, current_slot, item_registry)?;
 
         required_slots[slot_index] = true;
         required_inputs.push(RecipeInputRequirement {
@@ -99,7 +115,7 @@ fn match_hand_crafted_inputs(
 
     for (slot_index, slot) in input_slots
         .iter()
-        .take(HAND_CRAFTED_INPUT_SLOTS)
+        .take(WORK_TABLE_CRAFTING_INPUT_SLOTS)
         .enumerate()
     {
         if !required_slots[slot_index] && !slot.is_empty() {
@@ -111,22 +127,41 @@ fn match_hand_crafted_inputs(
     Some(required_inputs)
 }
 
-fn match_shapeless_hand_crafted_inputs(
-    craft: &HashMap<String, HandCraftedEntryJson>,
+fn match_shapeless_work_table_inputs(
+    data: &Value,
     input_slots: &[InventorySlot],
     item_registry: &ItemRegistry,
 ) -> Option<Vec<RecipeInputRequirement>> {
-    let mut remaining_counts = [0u16; HAND_CRAFTED_INPUT_SLOTS];
-    let mut slot_item_ids = [0u16; HAND_CRAFTED_INPUT_SLOTS];
-    let mut consumed_counts = [0u16; HAND_CRAFTED_INPUT_SLOTS];
+    let parsed = serde_json::from_value::<WorkTableShapelessDataJson>(data.clone()).ok();
+    let ingredients = if let Some(parsed) = parsed {
+        if !parsed.ingredients.is_empty() {
+            parsed.ingredients
+        } else {
+            let fallback: WorkTableShapedDataJson = serde_json::from_value(data.clone()).ok()?;
+            if fallback.craft.is_empty() {
+                return None;
+            }
+            fallback.craft.into_values().collect()
+        }
+    } else {
+        let fallback: WorkTableShapedDataJson = serde_json::from_value(data.clone()).ok()?;
+        if fallback.craft.is_empty() {
+            return None;
+        }
+        fallback.craft.into_values().collect()
+    };
 
-    for slot_index in 0..HAND_CRAFTED_INPUT_SLOTS {
+    let mut remaining_counts = [0u16; WORK_TABLE_CRAFTING_INPUT_SLOTS];
+    let mut slot_item_ids = [0u16; WORK_TABLE_CRAFTING_INPUT_SLOTS];
+    let mut consumed_counts = [0u16; WORK_TABLE_CRAFTING_INPUT_SLOTS];
+
+    for slot_index in 0..WORK_TABLE_CRAFTING_INPUT_SLOTS {
         let slot = input_slots.get(slot_index)?;
         remaining_counts[slot_index] = slot.count;
         slot_item_ids[slot_index] = slot.item_id;
     }
 
-    for ingredient in craft.values() {
+    for ingredient in ingredients {
         let mut required_left = ingredient.count.max(1);
         let explicit_item_id = if ingredient.item.trim().is_empty() {
             None
@@ -138,7 +173,7 @@ fn match_shapeless_hand_crafted_inputs(
             return None;
         }
 
-        for slot_index in 0..HAND_CRAFTED_INPUT_SLOTS {
+        for slot_index in 0..WORK_TABLE_CRAFTING_INPUT_SLOTS {
             if required_left == 0 {
                 break;
             }
@@ -169,7 +204,7 @@ fn match_shapeless_hand_crafted_inputs(
     }
 
     let mut required_inputs = Vec::new();
-    for slot_index in 0..HAND_CRAFTED_INPUT_SLOTS {
+    for slot_index in 0..WORK_TABLE_CRAFTING_INPUT_SLOTS {
         let consumed = consumed_counts[slot_index];
         if consumed == 0 {
             continue;
@@ -186,10 +221,10 @@ fn match_shapeless_hand_crafted_inputs(
 }
 
 fn resolve_required_item_id(
-    entry: &HandCraftedEntryJson,
+    entry: &WorkTableEntryJson,
     current_slot: &InventorySlot,
     item_registry: &ItemRegistry,
-) -> Option<u16> {
+) -> Option<ItemId> {
     if !entry.item.trim().is_empty() {
         let required_item_id = item_registry.id_opt(entry.item.as_str())?;
         if current_slot.item_id != required_item_id {
@@ -208,7 +243,6 @@ fn resolve_required_item_id(
     Some(current_slot.item_id)
 }
 
-/// Runs the `default_required_count` routine for default required count in the `core::inventory::recipe::hand_crafted` module.
 #[inline]
 fn default_required_count() -> u16 {
     1

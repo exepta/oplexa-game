@@ -1,0 +1,33 @@
+{
+  "build_time": 5,
+  "crafting": [
+    {
+      "type": "oplexa:work_table_crafting",
+      "format": "shaped",
+      "data": {
+        "craft": {
+          "0": {
+            "group": "planks",
+            "count": 1
+          },
+          "3": {
+            "item": "oplexa:string",
+            "count": 1
+          },
+          "4": {
+            "item": "oplexa:stick",
+            "count": 2
+          },
+          "5": {
+            "group": "planks",
+            "count": 1
+          }
+        }
+      }
+    }
+  ],
+  "result": {
+    "item": "oplexa:wood_pickaxe",
+    "count": 1
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "localized_name": "oplexa:wood_axe",
+  "name": "Wood Axe",
+  "max_stack_size": 1,
+  "category": "tool",
+  "block_item": false,
+  "placeable": false,
+  "tags": ["tool", "axe", "wood"],
+  "rarity": "common",
+  "render": {
+    "type": "flat",
+    "texture": "textures/items/wood_axe.png"
+  },
+  "tool": {
+    "type": "axe",
+    "level": 1
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

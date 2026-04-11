@@ -422,8 +422,12 @@ fn style_slot_count_badges(
         if !css_id.0.starts_with(HUD_SLOT_BADGE_PREFIX)
             && !css_id.0.starts_with(PLAYER_INVENTORY_BADGE_PREFIX)
             && !css_id.0.starts_with(HAND_CRAFTED_BADGE_PREFIX)
+            && !css_id.0.starts_with(WORKBENCH_CRAFT_BADGE_PREFIX)
+            && !css_id.0.starts_with(WORKBENCH_TOOL_BADGE_PREFIX)
+            && !css_id.0.starts_with(WORKBENCH_PLAYER_INVENTORY_BADGE_PREFIX)
             && !css_id.0.starts_with(RECIPE_PREVIEW_INPUT_BADGE_PREFIX)
             && css_id.0 != HAND_CRAFTED_RESULT_BADGE_ID
+            && css_id.0 != WORKBENCH_RESULT_BADGE_ID
             && css_id.0 != RECIPE_PREVIEW_RESULT_BADGE_ID
             && css_id.0 != INVENTORY_CURSOR_BADGE_ID
         {
@@ -717,11 +721,18 @@ fn style_scroll_div_contents(
 
 /// Runs the `style_progress_bars` routine for style progress bars in the `graphic::components::theme` module.
 fn style_progress_bars(
-    mut bars: Query<(&mut Node, &mut BackgroundColor, &Children), With<ProgressBar>>,
+    mut bars: Query<
+        (&mut Node, &mut BackgroundColor, &Children, Option<&CssID>),
+        With<ProgressBar>,
+    >,
     mut tracks: Query<&mut BackgroundColor, (With<BindToID>, Without<ProgressBar>)>,
 ) {
-    for (mut node, mut bg, children) in &mut bars {
-        node.width = Val::Percent(100.0);
+    for (mut node, mut bg, children, css_id) in &mut bars {
+        if css_id.is_some_and(|id| id.0 == WORKBENCH_RESULT_PROGRESS_ID) {
+            node.width = Val::Px(312.0);
+        } else {
+            node.width = Val::Percent(100.0);
+        }
         node.height = Val::Px(20.0);
         node.border = UiRect::all(Val::Px(1.0));
         bg.0 = color_background_hover();

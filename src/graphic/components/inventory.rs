@@ -1,4 +1,4 @@
-use api::handlers::recipe::resolve_hand_crafted_recipe;
+use api::handlers::recipe::{resolve_hand_crafted_recipe, resolve_work_table_recipe};
 use bevy::ecs::{query::QueryFilter, system::SystemParam};
 
 /// Defines the possible inventory ui slot target variants in the `graphic::components::inventory` module.
@@ -6,7 +6,10 @@ use bevy::ecs::{query::QueryFilter, system::SystemParam};
 enum InventoryUiSlotTarget {
     Player(usize),
     HandCrafted(usize),
+    WorkTable(usize),
+    WorkbenchTool(usize),
     HandCraftedResult,
+    WorkbenchResult,
 }
 
 /// Represents inventory drop deps used by the `graphic::components::inventory` module.
@@ -23,6 +26,7 @@ struct InventoryDropDeps<'w, 's> {
 struct InventoryDragDropDeps<'w, 's> {
     global_config: Res<'w, GlobalConfig>,
     inventory_ui: Res<'w, PlayerInventoryUiState>,
+    workbench_menu: Res<'w, WorkbenchRecipeMenuState>,
     recipe_preview: ResMut<'w, RecipePreviewDialogState>,
     game_mode: Res<'w, GameModeState>,
     multiplayer_connection: Option<Res<'w, MultiplayerConnectionState>>,
@@ -30,8 +34,11 @@ struct InventoryDragDropDeps<'w, 's> {
     recipe_registry: Option<Res<'w, RecipeRegistry>>,
     recipe_type_registry: Option<Res<'w, RecipeTypeRegistry>>,
     cursor_item: ResMut<'w, InventoryCursorItemState>,
+    workbench_craft_progress: ResMut<'w, WorkbenchCraftProgressState>,
+    workbench_tools: ResMut<'w, WorkbenchToolSlotsState>,
     inventory: ResMut<'w, PlayerInventory>,
     hand_crafted: ResMut<'w, HandCraftedState>,
+    work_table_crafting: ResMut<'w, WorkTableCraftingState>,
     slot_frames: Query<'w, 's, (&'static CssID, &'static UIWidgetState, &'static mut BorderColor)>,
     button_states: Query<'w, 's, (&'static CssID, &'static UIWidgetState), With<Button>>,
     window_q: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
@@ -47,11 +54,18 @@ struct InventoryDragDropDeps<'w, 's> {
         (&'static ComputedNode, &'static UiGlobalTransform),
         With<InventoryDropZonePanel>,
     >,
+    workbench_panel_q: Query<
+        'w,
+        's,
+        (&'static ComputedNode, &'static UiGlobalTransform),
+        With<WorkbenchRecipeMainPanel>,
+    >,
     recipe_preview_panel_q:
         Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<RecipePreviewDialogPanel>>,
     player_q: Query<'w, 's, &'static Transform, With<Player>>,
     drop_requests: MessageWriter<'w, DropItemRequest>,
     craft_requests: MessageWriter<'w, CraftHandCraftedRequest>,
+    work_table_craft_requests: MessageWriter<'w, CraftWorkTableRequest>,
 }
 
 /// Runs the `toggle_player_inventory_ui` routine for toggle player inventory ui in the `graphic::components::inventory` module.
@@ -97,7 +111,11 @@ fn toggle_player_inventory_ui(
         return;
     }
 
-    if ui_interaction.menu_open || ui_interaction.chat_open || ui_interaction.structure_menu_open {
+    if ui_interaction.menu_open
+        || ui_interaction.chat_open
+        || ui_interaction.structure_menu_open
+        || ui_interaction.workbench_menu_open
+    {
         return;
     }
 
@@ -169,6 +187,7 @@ fn handle_inventory_drag_and_drop(
     let InventoryDragDropDeps {
         global_config,
         inventory_ui,
+        workbench_menu,
         mut recipe_preview,
         game_mode,
         multiplayer_connection,
@@ -176,27 +195,34 @@ fn handle_inventory_drag_and_drop(
         recipe_registry,
         recipe_type_registry,
         mut cursor_item,
+        mut workbench_craft_progress,
+        mut workbench_tools,
         mut inventory,
         mut hand_crafted,
+        mut work_table_crafting,
         mut slot_frames,
         button_states,
         window_q,
         inventory_panel_q,
         inventory_drop_zone_q,
+        workbench_panel_q,
         recipe_preview_panel_q,
         player_q,
         mut drop_requests,
         mut craft_requests,
+        mut work_table_craft_requests,
     } = deps;
 
-    let hovered_slot = sync_inventory_slot_hover_border(&mut slot_frames, inventory_ui.open);
+    let ui_open = inventory_ui.open || workbench_menu.open;
+    let hovered_slot = sync_inventory_slot_hover_border(&mut slot_frames, ui_open);
 
-    if !inventory_ui.open {
+    if !ui_open {
         return;
     }
 
     if mouse.just_pressed(MouseButton::Left)
-        && is_button_hovered(&button_states, INVENTORY_TRASH_BUTTON_ID)
+        && (is_button_hovered(&button_states, INVENTORY_TRASH_BUTTON_ID)
+            || is_button_hovered(&button_states, WORKBENCH_TRASH_BUTTON_ID))
     {
         if !cursor_item.slot.is_empty() {
             cursor_item.slot = InventorySlot::default();
@@ -228,9 +254,12 @@ fn handle_inventory_drag_and_drop(
         let Some(recipe_registry) = recipe_registry.as_ref() else {
             return;
         };
-        let resolved_recipe = recipe_type_registry.as_ref().and_then(|types| {
-            resolve_hand_crafted_recipe(
-                &hand_crafted,
+        let resolved_hand_recipe = recipe_type_registry.as_ref().and_then(|types| {
+            resolve_hand_crafted_recipe(&hand_crafted, recipe_registry, types, &drop_deps.item_registry)
+        });
+        let resolved_workbench_recipe = recipe_type_registry.as_ref().and_then(|types| {
+            resolve_work_table_recipe(
+                &work_table_crafting,
                 recipe_registry,
                 types,
                 &drop_deps.item_registry,
@@ -240,9 +269,12 @@ fn handle_inventory_drag_and_drop(
             &button_states,
             &inventory,
             &hand_crafted,
+            &work_table_crafting,
+            &workbench_tools,
             &creative_panel,
             &recipe_preview,
-            resolved_recipe.as_ref(),
+            resolved_hand_recipe.as_ref(),
+            resolved_workbench_recipe.as_ref(),
         ) else {
             return;
         };
@@ -259,11 +291,21 @@ fn handle_inventory_drag_and_drop(
     if shift_pressed && mouse.just_pressed(MouseButton::Left) && cursor_item.slot.is_empty() {
         match hovered_slot {
             Some(InventoryUiSlotTarget::Player(slot_index)) => {
-                let _ = transfer_player_slot_to_hand_crafted(
-                    slot_index,
-                    &mut inventory,
-                    &mut hand_crafted,
-                );
+                if workbench_menu.open {
+                    if transfer_player_slot_to_work_table(
+                        slot_index,
+                        &mut inventory,
+                        &mut work_table_crafting,
+                    ) {
+                        reset_workbench_craft_progress(&mut workbench_craft_progress);
+                    }
+                } else {
+                    let _ = transfer_player_slot_to_hand_crafted(
+                        slot_index,
+                        &mut inventory,
+                        &mut hand_crafted,
+                    );
+                }
                 return;
             }
             Some(InventoryUiSlotTarget::HandCrafted(slot_index)) => {
@@ -275,28 +317,72 @@ fn handle_inventory_drag_and_drop(
                 );
                 return;
             }
+            Some(InventoryUiSlotTarget::WorkTable(slot_index)) => {
+                if transfer_work_table_slot_to_inventory(
+                    slot_index,
+                    &mut work_table_crafting,
+                    &mut inventory,
+                    &drop_deps.item_registry,
+                ) {
+                    reset_workbench_craft_progress(&mut workbench_craft_progress);
+                }
+                return;
+            }
             _ => {}
         }
     }
 
     if mouse.just_pressed(MouseButton::Left)
-        && hovered_slot == Some(InventoryUiSlotTarget::HandCraftedResult)
         && !matches!(game_mode.0, GameMode::Spectator)
     {
-        craft_requests.write(CraftHandCraftedRequest);
-        return;
+        if hovered_slot == Some(InventoryUiSlotTarget::HandCraftedResult) {
+            craft_requests.write(CraftHandCraftedRequest);
+            return;
+        }
+        if hovered_slot == Some(InventoryUiSlotTarget::WorkbenchResult) {
+            let Some(recipe_registry) = recipe_registry.as_ref() else {
+                return;
+            };
+            let Some(recipe_type_registry) = recipe_type_registry.as_ref() else {
+                return;
+            };
+            let Some(resolved_recipe) = resolve_work_table_recipe(
+                &work_table_crafting,
+                recipe_registry,
+                recipe_type_registry,
+                &drop_deps.item_registry,
+            ) else {
+                return;
+            };
+
+            if resolved_recipe.build_time_secs <= f32::EPSILON {
+                work_table_craft_requests.write(CraftWorkTableRequest);
+                reset_workbench_craft_progress(&mut workbench_craft_progress);
+            } else {
+                workbench_craft_progress.active = true;
+                workbench_craft_progress.elapsed_secs = 0.0;
+                workbench_craft_progress.duration_secs = resolved_recipe.build_time_secs;
+                workbench_craft_progress.recipe_source_path = resolved_recipe.source_path;
+            }
+            return;
+        }
     }
 
     if mouse.just_pressed(MouseButton::Middle)
         && let Some(slot_target) = hovered_slot
     {
-        let _ = take_half_from_target_to_cursor(
+        let moved = take_half_from_target_to_cursor(
             slot_target,
             &mut cursor_item,
             &mut inventory,
             &mut hand_crafted,
+            &mut work_table_crafting,
+            &mut workbench_tools,
             &drop_deps.item_registry,
         );
+        if moved && matches!(slot_target, InventoryUiSlotTarget::WorkTable(_)) {
+            reset_workbench_craft_progress(&mut workbench_craft_progress);
+        }
         return;
     }
 
@@ -304,13 +390,18 @@ fn handle_inventory_drag_and_drop(
         && let Some(slot_target) = hovered_slot
     {
         if !cursor_item.slot.is_empty() {
-            let _ = place_one_from_cursor_on_target(
+            let placed = place_one_from_cursor_on_target(
                 slot_target,
                 &mut cursor_item,
                 &mut inventory,
                 &mut hand_crafted,
+                &mut work_table_crafting,
+                &mut workbench_tools,
                 &drop_deps.item_registry,
             );
+            if placed && matches!(slot_target, InventoryUiSlotTarget::WorkTable(_)) {
+                reset_workbench_craft_progress(&mut workbench_craft_progress);
+            }
         }
         return;
     }
@@ -319,20 +410,30 @@ fn handle_inventory_drag_and_drop(
         && let Some(slot_target) = hovered_slot
     {
         if cursor_item.slot.is_empty() {
-            let _ = take_all_from_target_to_cursor(
+            let moved = take_all_from_target_to_cursor(
                 slot_target,
                 &mut cursor_item,
                 &mut inventory,
                 &mut hand_crafted,
+                &mut work_table_crafting,
+                &mut workbench_tools,
             );
+            if moved && matches!(slot_target, InventoryUiSlotTarget::WorkTable(_)) {
+                reset_workbench_craft_progress(&mut workbench_craft_progress);
+            }
         } else {
-            let _ = place_all_from_cursor_on_target(
+            let placed = place_all_from_cursor_on_target(
                 slot_target,
                 &mut cursor_item,
                 &mut inventory,
                 &mut hand_crafted,
+                &mut work_table_crafting,
+                &mut workbench_tools,
                 &drop_deps.item_registry,
             );
+            if placed && matches!(slot_target, InventoryUiSlotTarget::WorkTable(_)) {
+                reset_workbench_craft_progress(&mut workbench_craft_progress);
+            }
         }
         return;
     }
@@ -343,6 +444,11 @@ fn handle_inventory_drag_and_drop(
     {
         let clicked_inside_inventory = is_cursor_inside_panel(&window_q, &inventory_panel_q);
         let clicked_inside_drop_zone = is_cursor_inside_panel(&window_q, &inventory_drop_zone_q);
+        let clicked_inside_workbench = is_cursor_inside_panel(&window_q, &workbench_panel_q);
+
+        if clicked_inside_workbench {
+            return;
+        }
         if clicked_inside_inventory && !clicked_inside_drop_zone {
             return;
         }
@@ -438,27 +544,90 @@ fn handle_inventory_drag_and_drop(
     }
 }
 
+#[derive(SystemParam)]
+struct InventoryUiSyncDeps<'w, 's> {
+    inventory: Res<'w, PlayerInventory>,
+    hand_crafted: Res<'w, HandCraftedState>,
+    recipe_preview: Res<'w, RecipePreviewDialogState>,
+    recipe_registry: Option<Res<'w, RecipeRegistry>>,
+    recipe_type_registry: Option<Res<'w, RecipeTypeRegistry>>,
+    item_registry: Res<'w, ItemRegistry>,
+    block_registry: Res<'w, BlockRegistry>,
+    language: Res<'w, ClientLanguageState>,
+    asset_server: Res<'w, AssetServer>,
+    image_cache: ResMut<'w, ImageCache>,
+    images: ResMut<'w, Assets<Image>>,
+    inventory_main_panel_q: Query<
+        'w,
+        's,
+        &'static mut Visibility,
+        (With<InventoryMainPanel>, Without<RecipePreviewDialogRoot>),
+    >,
+    inventory_root_bg_q: Query<'w, 's, &'static mut BackgroundColor, With<PlayerInventoryRoot>>,
+    inventory_root_zindex_q: Query<'w, 's, &'static mut ZIndex, With<PlayerInventoryRoot>>,
+    recipe_preview_root: Query<'w, 's, &'static mut Visibility, With<RecipePreviewDialogRoot>>,
+    paragraphs: Query<
+        'w,
+        's,
+        (&'static CssID, &'static mut Paragraph, Option<&'static mut Visibility>),
+        (Without<RecipePreviewDialogRoot>, Without<InventoryMainPanel>),
+    >,
+    slot_buttons: Query<'w, 's, (&'static CssID, &'static mut Button)>,
+}
+
 /// Synchronizes player inventory ui for the `graphic::components::inventory` module.
 fn sync_player_inventory_ui(
     inventory_ui: Res<PlayerInventoryUiState>,
-    inventory: Res<PlayerInventory>,
-    hand_crafted: Res<HandCraftedState>,
-    recipe_preview: Res<RecipePreviewDialogState>,
-    recipe_registry: Option<Res<RecipeRegistry>>,
-    recipe_type_registry: Option<Res<RecipeTypeRegistry>>,
-    item_registry: Res<ItemRegistry>,
-    block_registry: Res<BlockRegistry>,
-    language: Res<ClientLanguageState>,
-    asset_server: Res<AssetServer>,
-    mut image_cache: ResMut<ImageCache>,
-    mut images: ResMut<Assets<Image>>,
-    mut recipe_preview_root: Query<&mut Visibility, With<RecipePreviewDialogRoot>>,
-    mut paragraphs: Query<
-        (&CssID, &mut Paragraph, Option<&mut Visibility>),
-        Without<RecipePreviewDialogRoot>,
-    >,
-    mut slot_buttons: Query<(&CssID, &mut Button)>,
+    workbench_menu: Res<WorkbenchRecipeMenuState>,
+    deps: InventoryUiSyncDeps,
 ) {
+    let InventoryUiSyncDeps {
+        inventory,
+        hand_crafted,
+        recipe_preview,
+        recipe_registry,
+        recipe_type_registry,
+        item_registry,
+        block_registry,
+        language,
+        asset_server,
+        mut image_cache,
+        mut images,
+        mut inventory_main_panel_q,
+        mut inventory_root_bg_q,
+        mut inventory_root_zindex_q,
+        mut recipe_preview_root,
+        mut paragraphs,
+        mut slot_buttons,
+    } = deps;
+
+    if let Ok(mut panel_visibility) = inventory_main_panel_q.single_mut() {
+        *panel_visibility = if inventory_ui.open {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    if let Ok(mut bg) = inventory_root_bg_q.single_mut() {
+        bg.0 = if inventory_ui.open {
+            Color::srgba(0.0, 0.0, 0.0, 0.45)
+        } else {
+            Color::NONE
+        };
+    }
+
+    if let Ok(mut zindex) = inventory_root_zindex_q.single_mut() {
+        *zindex = if inventory_ui.open {
+            ZIndex(51)
+        } else if workbench_menu.open {
+            // Keep cursor/tooltip/recipe-preview above workbench overlay while the inventory panel is hidden.
+            ZIndex(60)
+        } else {
+            ZIndex(51)
+        };
+    }
+
     let resolved_recipe = recipe_registry.as_ref().and_then(|recipes| {
         recipe_type_registry
             .as_ref()
@@ -466,7 +635,7 @@ fn sync_player_inventory_ui(
     });
 
     if let Ok(mut visibility) = recipe_preview_root.single_mut() {
-        *visibility = if inventory_ui.open && recipe_preview.open {
+        *visibility = if (inventory_ui.open || workbench_menu.open) && recipe_preview.open {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -680,9 +849,12 @@ fn sync_player_inventory_ui(
 #[allow(clippy::too_many_arguments)]
 fn sync_inventory_tooltip_ui(
     inventory_ui: Res<PlayerInventoryUiState>,
+    workbench_menu: Res<WorkbenchRecipeMenuState>,
     window_q: Query<&Window, With<PrimaryWindow>>,
     inventory: Res<PlayerInventory>,
     hand_crafted: Res<HandCraftedState>,
+    work_table_crafting: Res<WorkTableCraftingState>,
+    workbench_tools: Res<WorkbenchToolSlotsState>,
     creative_panel: Res<CreativePanelState>,
     recipe_preview: Res<RecipePreviewDialogState>,
     recipe_registry: Option<Res<RecipeRegistry>>,
@@ -697,7 +869,7 @@ fn sync_inventory_tooltip_ui(
         return;
     };
 
-    if !inventory_ui.open {
+    if !inventory_ui.open && !workbench_menu.open {
         *tooltip_visibility = Visibility::Hidden;
         return;
     }
@@ -711,19 +883,29 @@ fn sync_inventory_tooltip_ui(
         return;
     };
 
-    let resolved_recipe = recipe_registry.as_ref().and_then(|recipes| {
+    let resolved_hand_recipe = recipe_registry.as_ref().and_then(|recipes| {
         recipe_type_registry
             .as_ref()
             .and_then(|types| resolve_hand_crafted_recipe(&hand_crafted, recipes, types, &item_registry))
+    });
+    let resolved_workbench_recipe = recipe_registry.as_ref().and_then(|recipes| {
+        recipe_type_registry
+            .as_ref()
+            .and_then(|types| {
+                resolve_work_table_recipe(&work_table_crafting, recipes, types, &item_registry)
+            })
     });
 
     let hovered_item_id = hovered_item_id(
         &slot_states,
         &inventory,
         &hand_crafted,
+        &work_table_crafting,
+        &workbench_tools,
         &creative_panel,
         &recipe_preview,
-        resolved_recipe.as_ref(),
+        resolved_hand_recipe.as_ref(),
+        resolved_workbench_recipe.as_ref(),
     );
     let Some(item_id) = hovered_item_id else {
         *tooltip_visibility = Visibility::Hidden;
@@ -761,6 +943,7 @@ fn sync_inventory_tooltip_ui(
 #[allow(clippy::too_many_arguments)]
 fn sync_inventory_cursor_item_ui(
     inventory_ui: Res<PlayerInventoryUiState>,
+    workbench_menu: Res<WorkbenchRecipeMenuState>,
     window_q: Query<&Window, With<PrimaryWindow>>,
     cursor_item: Res<InventoryCursorItemState>,
     item_registry: Res<ItemRegistry>,
@@ -782,7 +965,7 @@ fn sync_inventory_cursor_item_ui(
         return;
     };
 
-    if !inventory_ui.open || cursor_item.slot.is_empty() {
+    if (!inventory_ui.open && !workbench_menu.open) || cursor_item.slot.is_empty() {
         *root_visibility = Visibility::Hidden;
         for (mut paragraph, mut badge_visibility) in &mut cursor_badges {
             if !paragraph.text.is_empty() {
@@ -824,11 +1007,11 @@ fn sync_inventory_cursor_item_ui(
         icon_node.image = next_icon_handle;
     }
 
-    let slot_half = 28.0;
+    let cursor_offset = Vec2::new(8.0, 2.0);
     let max_x = (window.width() - 56.0).max(0.0);
     let max_y = (window.height() - 56.0).max(0.0);
-    root_node.left = Val::Px((cursor_pos.x - slot_half).clamp(0.0, max_x));
-    root_node.top = Val::Px((cursor_pos.y - slot_half).clamp(0.0, max_y));
+    root_node.left = Val::Px((cursor_pos.x + cursor_offset.x).clamp(0.0, max_x));
+    root_node.top = Val::Px((cursor_pos.y + cursor_offset.y).clamp(0.0, max_y));
 
     let count_text = cursor_item.slot.count.to_string();
     for (mut paragraph, mut badge_visibility) in &mut cursor_badges {
@@ -872,6 +1055,14 @@ fn sync_inventory_slot_hover_border(
 
         let slot_target = if css_id.0 == HAND_CRAFTED_RESULT_FRAME_ID {
             Some(InventoryUiSlotTarget::HandCraftedResult)
+        } else if css_id.0 == WORKBENCH_RESULT_FRAME_ID {
+            Some(InventoryUiSlotTarget::WorkbenchResult)
+        } else if let Some(slot_index) = parse_workbench_player_inventory_slot_index(css_id.0.as_str()) {
+            Some(InventoryUiSlotTarget::Player(slot_index))
+        } else if let Some(slot_index) = parse_workbench_craft_slot_index(css_id.0.as_str()) {
+            Some(InventoryUiSlotTarget::WorkTable(slot_index))
+        } else if let Some(slot_index) = parse_workbench_tool_slot_index(css_id.0.as_str()) {
+            Some(InventoryUiSlotTarget::WorkbenchTool(slot_index))
         } else if let Some(slot_number) = css_id.0.strip_prefix(PLAYER_INVENTORY_FRAME_PREFIX) {
             slot_number
                 .parse::<usize>()
@@ -942,6 +1133,33 @@ fn transfer_player_slot_to_hand_crafted(
     true
 }
 
+/// Runs the `transfer_player_slot_to_work_table` routine for transfer player slot to work table in the `graphic::components::inventory` module.
+fn transfer_player_slot_to_work_table(
+    slot_index: usize,
+    inventory: &mut PlayerInventory,
+    work_table: &mut WorkTableCraftingState,
+) -> bool {
+    if slot_index >= PLAYER_INVENTORY_SLOTS {
+        return false;
+    }
+    let source_slot = inventory.slots[slot_index];
+    if source_slot.is_empty() {
+        return false;
+    }
+
+    let Some(free_index) = work_table
+        .input_slots
+        .iter()
+        .position(InventorySlot::is_empty)
+    else {
+        return false;
+    };
+
+    work_table.input_slots[free_index] = source_slot;
+    inventory.slots[slot_index] = InventorySlot::default();
+    true
+}
+
 /// Runs the `transfer_hand_crafted_slot_to_inventory` routine for transfer hand crafted slot to inventory in the `graphic::components::inventory` module.
 fn transfer_hand_crafted_slot_to_inventory(
     slot_index: usize,
@@ -969,12 +1187,41 @@ fn transfer_hand_crafted_slot_to_inventory(
     true
 }
 
+/// Runs the `transfer_work_table_slot_to_inventory` routine for transfer work table slot to inventory in the `graphic::components::inventory` module.
+fn transfer_work_table_slot_to_inventory(
+    slot_index: usize,
+    work_table: &mut WorkTableCraftingState,
+    inventory: &mut PlayerInventory,
+    item_registry: &ItemRegistry,
+) -> bool {
+    if slot_index >= WORK_TABLE_CRAFTING_INPUT_SLOTS {
+        return false;
+    }
+    let source_slot = work_table.input_slots[slot_index];
+    if source_slot.is_empty() {
+        return false;
+    }
+
+    let leftover = inventory.add_item(source_slot.item_id, source_slot.count, item_registry);
+    if leftover == source_slot.count {
+        return false;
+    }
+    if leftover == 0 {
+        work_table.input_slots[slot_index] = InventorySlot::default();
+    } else {
+        work_table.input_slots[slot_index].count = leftover;
+    }
+    true
+}
+
 /// Runs the `take_all_from_target_to_cursor` routine for take all from target to cursor in the `graphic::components::inventory` module.
 fn take_all_from_target_to_cursor(
     slot_target: InventoryUiSlotTarget,
     cursor_item: &mut InventoryCursorItemState,
     inventory: &mut PlayerInventory,
     hand_crafted: &mut HandCraftedState,
+    work_table: &mut WorkTableCraftingState,
+    workbench_tools: &mut WorkbenchToolSlotsState,
 ) -> bool {
     if !cursor_item.slot.is_empty() {
         return false;
@@ -987,6 +1234,12 @@ fn take_all_from_target_to_cursor(
         InventoryUiSlotTarget::HandCrafted(index) if index < HAND_CRAFTED_INPUT_SLOTS => {
             take_all_from_slot_to_cursor(&mut hand_crafted.input_slots[index], &mut cursor_item.slot)
         }
+        InventoryUiSlotTarget::WorkTable(index) if index < WORK_TABLE_CRAFTING_INPUT_SLOTS => {
+            take_all_from_slot_to_cursor(&mut work_table.input_slots[index], &mut cursor_item.slot)
+        }
+        InventoryUiSlotTarget::WorkbenchTool(index) if index < workbench_tools.slots.len() => {
+            take_all_from_slot_to_cursor(&mut workbench_tools.slots[index], &mut cursor_item.slot)
+        }
         _ => false,
     }
 }
@@ -997,6 +1250,8 @@ fn take_half_from_target_to_cursor(
     cursor_item: &mut InventoryCursorItemState,
     inventory: &mut PlayerInventory,
     hand_crafted: &mut HandCraftedState,
+    work_table: &mut WorkTableCraftingState,
+    workbench_tools: &mut WorkbenchToolSlotsState,
     item_registry: &ItemRegistry,
 ) -> bool {
     match slot_target {
@@ -1014,6 +1269,20 @@ fn take_half_from_target_to_cursor(
                 item_registry,
             )
         }
+        InventoryUiSlotTarget::WorkTable(index) if index < WORK_TABLE_CRAFTING_INPUT_SLOTS => {
+            take_half_from_slot_to_cursor(
+                &mut work_table.input_slots[index],
+                &mut cursor_item.slot,
+                item_registry,
+            )
+        }
+        InventoryUiSlotTarget::WorkbenchTool(index) if index < workbench_tools.slots.len() => {
+            take_half_from_slot_to_cursor(
+                &mut workbench_tools.slots[index],
+                &mut cursor_item.slot,
+                item_registry,
+            )
+        }
         _ => false,
     }
 }
@@ -1024,6 +1293,8 @@ fn place_one_from_cursor_on_target(
     cursor_item: &mut InventoryCursorItemState,
     inventory: &mut PlayerInventory,
     hand_crafted: &mut HandCraftedState,
+    work_table: &mut WorkTableCraftingState,
+    workbench_tools: &mut WorkbenchToolSlotsState,
     item_registry: &ItemRegistry,
 ) -> bool {
     match slot_target {
@@ -1039,6 +1310,20 @@ fn place_one_from_cursor_on_target(
                 item_registry,
             )
         }
+        InventoryUiSlotTarget::WorkTable(index) if index < WORK_TABLE_CRAFTING_INPUT_SLOTS => {
+            place_one_from_cursor(
+                &mut work_table.input_slots[index],
+                &mut cursor_item.slot,
+                item_registry,
+            )
+        }
+        InventoryUiSlotTarget::WorkbenchTool(index) if index < workbench_tools.slots.len() => {
+            place_one_from_cursor(
+                &mut workbench_tools.slots[index],
+                &mut cursor_item.slot,
+                item_registry,
+            )
+        }
         _ => false,
     }
 }
@@ -1049,6 +1334,8 @@ fn place_all_from_cursor_on_target(
     cursor_item: &mut InventoryCursorItemState,
     inventory: &mut PlayerInventory,
     hand_crafted: &mut HandCraftedState,
+    work_table: &mut WorkTableCraftingState,
+    workbench_tools: &mut WorkbenchToolSlotsState,
     item_registry: &ItemRegistry,
 ) -> bool {
     match slot_target {
@@ -1060,6 +1347,20 @@ fn place_all_from_cursor_on_target(
         InventoryUiSlotTarget::HandCrafted(index) if index < HAND_CRAFTED_INPUT_SLOTS => {
             place_all_from_cursor(
                 &mut hand_crafted.input_slots[index],
+                &mut cursor_item.slot,
+                item_registry,
+            )
+        }
+        InventoryUiSlotTarget::WorkTable(index) if index < WORK_TABLE_CRAFTING_INPUT_SLOTS => {
+            place_all_from_cursor(
+                &mut work_table.input_slots[index],
+                &mut cursor_item.slot,
+                item_registry,
+            )
+        }
+        InventoryUiSlotTarget::WorkbenchTool(index) if index < workbench_tools.slots.len() => {
+            place_all_from_cursor(
+                &mut workbench_tools.slots[index],
                 &mut cursor_item.slot,
                 item_registry,
             )
@@ -1231,9 +1532,12 @@ fn hovered_item_id(
     slot_states: &Query<(&CssID, &UIWidgetState), With<Button>>,
     inventory: &PlayerInventory,
     hand_crafted: &HandCraftedState,
+    work_table_crafting: &WorkTableCraftingState,
+    workbench_tools: &WorkbenchToolSlotsState,
     creative_panel: &CreativePanelState,
     recipe_preview: &RecipePreviewDialogState,
-    resolved_recipe: Option<&ResolvedRecipe>,
+    resolved_hand_recipe: Option<&ResolvedRecipe>,
+    resolved_workbench_recipe: Option<&ResolvedRecipe>,
 ) -> Option<ItemId> {
     for (css_id, state) in slot_states.iter() {
         if !state.hovered {
@@ -1248,6 +1552,13 @@ fn hovered_item_id(
             return Some(slot.item_id);
         }
 
+        if let Some(slot_index) = parse_workbench_player_inventory_slot_index(css_id.0.as_str())
+            && let Some(slot) = inventory.slots.get(slot_index)
+            && !slot.is_empty()
+        {
+            return Some(slot.item_id);
+        }
+
         if let Some(slot_number) = css_id.0.strip_prefix(HAND_CRAFTED_FRAME_PREFIX)
             && let Ok(slot_index) = slot_number.parse::<usize>()
             && let Some(slot) = hand_crafted.input_slots.get(slot_index.saturating_sub(1))
@@ -1256,8 +1567,28 @@ fn hovered_item_id(
             return Some(slot.item_id);
         }
 
+        if let Some(slot_index) = parse_workbench_craft_slot_index(css_id.0.as_str())
+            && let Some(slot) = work_table_crafting.input_slots.get(slot_index)
+            && !slot.is_empty()
+        {
+            return Some(slot.item_id);
+        }
+
+        if let Some(slot_index) = parse_workbench_tool_slot_index(css_id.0.as_str())
+            && let Some(slot) = workbench_tools.slots.get(slot_index)
+            && !slot.is_empty()
+        {
+            return Some(slot.item_id);
+        }
+
         if css_id.0 == HAND_CRAFTED_RESULT_FRAME_ID
-            && let Some(recipe) = resolved_recipe
+            && let Some(recipe) = resolved_hand_recipe
+        {
+            return Some(recipe.result.item_id);
+        }
+
+        if css_id.0 == WORKBENCH_RESULT_FRAME_ID
+            && let Some(recipe) = resolved_workbench_recipe
         {
             return Some(recipe.result.item_id);
         }
@@ -1266,6 +1597,12 @@ fn hovered_item_id(
             && let Ok(slot_index) = slot_number.parse::<usize>()
             && let Some(index) = slot_index.checked_sub(1)
             && index < CREATIVE_PANEL_PAGE_SIZE
+            && let Some(item_id) = creative_panel.item_at_page_slot(index)
+        {
+            return Some(item_id);
+        }
+
+        if let Some(index) = parse_workbench_item_slot_index(css_id.0.as_str())
             && let Some(item_id) = creative_panel.item_at_page_slot(index)
         {
             return Some(item_id);

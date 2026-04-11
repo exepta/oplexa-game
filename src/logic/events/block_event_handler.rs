@@ -5,7 +5,7 @@ use crate::core::events::block::block_player_events::{
     BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
-use crate::core::events::ui_events::OpenStructureBuildMenuRequest;
+use crate::core::events::ui_events::{OpenStructureBuildMenuRequest, OpenWorkbenchMenuRequest};
 use crate::core::inventory::items::{
     ItemRegistry, block_requirement_for_id, can_drop_from_block, mining_speed_multiplier,
     spawn_world_item_for_block_break, spawn_world_item_with_motion,
@@ -115,6 +115,7 @@ struct StructurePlacementDeps<'w, 's> {
     active_structure_recipe: ResMut<'w, ActiveStructureRecipeState>,
     active_structure_placement: ResMut<'w, ActiveStructurePlacementState>,
     open_structure_menu_requests: MessageWriter<'w, OpenStructureBuildMenuRequest>,
+    open_workbench_menu_requests: MessageWriter<'w, OpenWorkbenchMenuRequest>,
 }
 
 #[derive(SystemParam)]
@@ -583,6 +584,7 @@ fn remove_unsupported_props_above(
 fn block_place_handler(
     structure_deps: StructurePlacementDeps,
     buttons: Res<ButtonInput<MouseButton>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     sel: Res<SelectionState>,
     selected: Res<SelectedBlock>,
     registry: Res<BlockRegistry>,
@@ -603,6 +605,7 @@ fn block_place_handler(
         mut active_structure_recipe,
         mut active_structure_placement,
         mut open_structure_menu_requests,
+        mut open_workbench_menu_requests,
     } = structure_deps;
     let PlacementWorldDeps {
         mut inventory,
@@ -627,6 +630,19 @@ fn block_place_handler(
         return;
     }
     if !buttons.just_pressed(MouseButton::Right) {
+        return;
+    }
+
+    let shift_held = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    if let Some(structure_hit) = sel.structure_hit
+        && let Ok(meta) = q_structures.get(structure_hit.entity)
+        && structure_has_workbench_ui(meta)
+        && !shift_held
+    {
+        // Block interaction UI has priority over hammer right-click interaction.
+        active_structure_recipe.selected_recipe_name = None;
+        active_structure_placement.rotation_quarters = 0;
+        open_workbench_menu_requests.write(OpenWorkbenchMenuRequest);
         return;
     }
 
@@ -698,11 +714,6 @@ fn block_place_handler(
 
     let id = selected.id;
     if id == 0 {
-        if let Some(structure_hit) = sel.structure_hit
-            && q_structures.get(structure_hit.entity).is_ok()
-        {
-            info!("Not Implemented yet!");
-        }
         return;
     }
     let creative_mode = matches!(game_mode.0, GameMode::Creative);
@@ -1460,7 +1471,10 @@ fn is_structure_support_cell(
         || (stacked != 0 && !registry.is_overridable(stacked))
 }
 
-fn world_cell_intersects_structure(world_pos: IVec3, q_structures: &Query<&PlacedStructureMetadata>) -> bool {
+fn world_cell_intersects_structure(
+    world_pos: IVec3,
+    q_structures: &Query<&PlacedStructureMetadata>,
+) -> bool {
     let cell_min = world_pos.as_vec3() * VOXEL_SIZE;
     let cell_max = cell_min + Vec3::splat(VOXEL_SIZE);
     const EPS: f32 = 0.0001;
@@ -1476,6 +1490,18 @@ fn world_cell_intersects_structure(world_pos: IVec3, q_structures: &Query<&Place
             && cell_max.y > structure_min.y + EPS
             && cell_min.z < structure_max.z - EPS
             && cell_max.z > structure_min.z + EPS
+    })
+}
+
+#[inline]
+fn structure_has_workbench_ui(meta: &PlacedStructureMetadata) -> bool {
+    if meta.recipe_name.eq_ignore_ascii_case("work_table") {
+        return true;
+    }
+    meta.registration.as_ref().is_some_and(|registration| {
+        registration
+            .localized_name
+            .eq_ignore_ascii_case("workbench_block")
     })
 }
 
@@ -1529,12 +1555,7 @@ fn build_structure_surface_hit(
     })
 }
 
-fn ray_hit_aabb_with_normal(
-    origin: Vec3,
-    dir: Vec3,
-    min: Vec3,
-    max: Vec3,
-) -> Option<(f32, Vec3)> {
+fn ray_hit_aabb_with_normal(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<(f32, Vec3)> {
     const EPS: f32 = 1e-6;
     let axes = [
         (origin.x, dir.x, min.x, max.x, Vec3::X),

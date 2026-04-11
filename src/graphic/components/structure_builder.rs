@@ -95,6 +95,7 @@ fn rotate_structure_preview_with_scroll(
         || ui_interaction.inventory_open
         || ui_interaction.chat_open
         || ui_interaction.structure_menu_open
+        || ui_interaction.workbench_menu_open
     {
         for _ in wheel_reader.read() {}
         return;

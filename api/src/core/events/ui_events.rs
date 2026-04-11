@@ -21,6 +21,10 @@ pub struct ChatSubmitRequest {
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct CraftHandCraftedRequest;
 
+/// Represents craft work table request used by the `core::events::ui_events` module.
+#[derive(Message, Clone, Copy, Debug, Default)]
+pub struct CraftWorkTableRequest;
+
 /// Represents drop item request used by the `core::events::ui_events` module.
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct DropItemRequest {
@@ -53,3 +57,7 @@ impl DropItemRequest {
 /// Represents request to open structure build menu (hammer).
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct OpenStructureBuildMenuRequest;
+
+/// Represents request to open workbench recipe menu.
+#[derive(Message, Clone, Copy, Debug, Default)]
+pub struct OpenWorkbenchMenuRequest;

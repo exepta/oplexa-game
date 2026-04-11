@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 #[derive(Deserialize)]
 struct RecipeJson {
     #[serde(default, rename = "type")]
-    recipe_kind: String,
+    legacy_recipe_kind: String,
+    #[serde(default = "default_build_time_secs", rename = "build_time")]
+    build_time_secs: f32,
     #[serde(default)]
     crafting: Vec<RecipeCraftingEntryJson>,
     #[serde(default)]
@@ -26,6 +28,8 @@ struct RecipeJson {
 struct RecipeCraftingEntryJson {
     #[serde(rename = "type")]
     recipe_type: String,
+    #[serde(default)]
+    format: String,
     #[serde(default)]
     data: Value,
 }
@@ -77,7 +81,7 @@ pub fn load_recipe_registry(
             continue;
         };
         if recipe_json
-            .recipe_kind
+            .legacy_recipe_kind
             .trim()
             .eq_ignore_ascii_case(BUILDING_SHAPED_RECIPE_KIND)
         {
@@ -99,8 +103,13 @@ pub fn load_recipe_registry(
                     source_path, recipe_type
                 );
             }
+            let format = normalize_crafting_format(
+                raw_entry.format.as_str(),
+                recipe_json.legacy_recipe_kind.as_str(),
+            );
             crafting.push(RecipeCraftingEntry {
                 recipe_type,
+                format,
                 data: raw_entry.data,
             });
         }
@@ -159,7 +168,7 @@ pub fn load_recipe_registry(
 
         recipes.push(RecipeDefinition {
             source_path,
-            recipe_kind: recipe_json.recipe_kind,
+            build_time_secs: recipe_json.build_time_secs.max(0.0),
             crafting,
             result,
         });
@@ -201,6 +210,32 @@ fn default_result_count() -> u16 {
 }
 
 #[inline]
+fn default_build_time_secs() -> f32 {
+    0.0
+}
+
+#[inline]
 fn normalize_recipe_group(raw: &str) -> String {
     raw.trim().to_ascii_lowercase()
+}
+
+#[inline]
+fn normalize_crafting_format(raw_format: &str, legacy_kind: &str) -> String {
+    let normalized = raw_format.trim().to_ascii_lowercase();
+    if !normalized.is_empty() {
+        if normalized == "crafting_shapeless" {
+            return "shapeless".to_string();
+        }
+        if normalized == "crafting_shaped" {
+            return "shaped".to_string();
+        }
+        return normalized;
+    }
+    if legacy_kind
+        .trim()
+        .eq_ignore_ascii_case("crafting_shapeless")
+    {
+        return "shapeless".to_string();
+    }
+    "shaped".to_string()
 }

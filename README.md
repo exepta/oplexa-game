@@ -106,10 +106,11 @@ For plugin-style commands in future, add an executor registry (function map) and
 
 ```json
 {
-  "type": "crafting_shaped",
+  "build_time": 5,
   "crafting": [
     {
       "type": "oplexa:hand_crafted",
+      "format": "shaped",
       "data": {
         "craft": {
           "0": { "item": "oplexa:oak_log_block", "count": 1 },
@@ -127,8 +128,9 @@ For plugin-style commands in future, add an executor registry (function map) and
 
 Field notes:
 
-- `type`: free-form recipe kind label (informational).
+- `build_time`: optional craft duration in seconds (defaults to `0` = instant).
 - `crafting[].type`: namespaced recipe matcher key (`provider:key`), for example `oplexa:hand_crafted`.
+- `crafting[].format`: `shaped` or `shapeless`.
 - `crafting[].data`: matcher-specific payload.
 - `result.item`: must exist in item registry.
 - `result.count`: optional, defaults to `1`.
@@ -143,9 +145,24 @@ Current constraints:
 
 - input slots are indexed as strings (`"0"`, `"1"`)
 - only first two hand-craft slots are considered
-- slots not listed in `craft` must be empty
+- `format: "shaped"`: slots not listed in `craft` must be empty
+- `format: "shapeless"`: slot indices in `craft` are ignored, only required items/counts matter
 
 If `crafting[].type` is unknown, recipe is loaded but stays inactive until a handler is registered.
+
+### 2.4 Work table matcher specifics (`oplexa:work_table_crafting`)
+
+Defined in:
+
+- `api/src/core/inventory/recipe/work_table_crafting.rs`
+
+Current constraints:
+
+- input slots are indexed as strings (`"0"`..`"7"`)
+- exactly 8 work table slots are considered
+- `format: "shaped"`: uses `data.craft` with explicit slot indices
+- `format: "shapeless"`: supports `data.ingredients` or `data.craft` (indices ignored)
+- shapeless recipes still require exact ingredients (no extra items in slots)
 
 ## 3. Create custom recipe systems
 
@@ -165,6 +182,7 @@ Required matcher signature:
 
 ```rust
 fn(
+    recipe_kind: &str,
     data: &serde_json::Value,
     input_slots: &[InventorySlot],
     item_registry: &ItemRegistry
@@ -200,10 +218,10 @@ Example:
 
 ```json
 {
-  "type": "anvil_upgrade",
   "crafting": [
     {
       "type": "myplugin:anvil",
+      "format": "shaped",
       "data": {
         "base": "oplexa:wood_pickaxe",
         "material": "oplexa:stone_block"
@@ -219,7 +237,10 @@ Example:
 
 ### 3.4 Add/extend execution system
 
-Current runtime crafting flow is hand-crafted only:
+Current runtime crafting flow includes:
+
+- hand-crafted (`oplexa:hand_crafted`)
+- work-table crafting (`oplexa:work_table_crafting`)
 
 - `api/src/handlers/recipe/mod.rs`
 - plugin registration in `src/logic/events/mod.rs`

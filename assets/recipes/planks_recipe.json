@@ -1,8 +1,20 @@
 {
-  "type": "crafting_shaped",
   "crafting": [
     {
       "type": "oplexa:hand_crafted",
+      "format": "shapeless",
+      "data": {
+        "craft": {
+          "0": {
+            "group": "logs",
+            "count": 1
+          }
+        }
+      }
+    },
+    {
+      "type": "oplexa:work_table_crafting",
+      "format": "shapeless",
       "data": {
         "craft": {
           "0": {

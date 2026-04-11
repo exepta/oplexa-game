@@ -1,0 +1,21 @@
+{
+  "localized_name": "oplexa:stone_axe",
+  "name": "Stone Axe",
+  "max_stack_size": 1,
+  "category": "tool",
+  "block_item": false,
+  "placeable": false,
+  "tags": ["tool", "axe", "stone"],
+  "rarity": "common",
+  "render": {
+    "type": "flat",
+    "texture": "textures/items/stone_axe.png"
+  },
+  "tool": {
+    "type": "axe",
+    "level": 2
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}
