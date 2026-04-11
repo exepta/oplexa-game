@@ -61,6 +61,8 @@ pub struct StructureRegionEntry {
     pub place_origin: [i32; 3],
     pub rotation_quarters: u8,
     #[serde(default)]
+    pub rotation_steps: Option<u8>,
+    #[serde(default)]
     pub style_item: String,
     #[serde(default)]
     pub drop_items: Vec<StructureRegionDropItem>,

@@ -41,6 +41,9 @@ pub struct ActiveStructureRecipeState {
 /// Runtime placement state for active structure previews.
 #[derive(Resource, Clone, Debug, Default)]
 pub struct ActiveStructurePlacementState {
-    /// Rotation in 90° quarter steps around +Y.
+    /// Rotation around +Y.
+    ///
+    /// Stored as 45° units for save/runtime compatibility, but current gameplay
+    /// snaps to right angles (90° steps).
     pub rotation_quarters: i32,
 }

@@ -71,6 +71,7 @@ pub(crate) struct PlacedStructureMetadata {
     pub stats: BlockStats,
     pub place_origin: IVec3,
     pub rotation_quarters: u8,
+    pub rotation_steps: u8,
     pub origin_chunk: IVec2,
     pub drop_requirements: Vec<BuildingMaterialRequirement>,
     pub registration: Option<BuildingStructureBlockRegistration>,
@@ -84,6 +85,7 @@ struct PlacedStructureKey {
     recipe_name: String,
     place_origin: IVec3,
     rotation_quarters: u8,
+    rotation_steps: u8,
 }
 
 #[derive(Resource, Default)]
@@ -561,7 +563,12 @@ fn remove_structure_from_runtime(
     entries.retain(|entry| {
         !(entry.recipe_name == key.recipe_name
             && entry.place_origin == [key.place_origin.x, key.place_origin.y, key.place_origin.z]
-            && normalize_rotation_quarters(entry.rotation_quarters as i32) == key.rotation_quarters)
+            && normalize_rotation_quarters(entry.rotation_quarters as i32) == key.rotation_quarters
+            && normalize_rotation_steps(
+                entry
+                    .rotation_steps
+                    .map_or((entry.rotation_quarters as i32) * 2, i32::from),
+            ) == key.rotation_steps)
     });
 
     if !uses_local_save_data {
@@ -699,8 +706,9 @@ fn block_place_handler(
             let Some(hit) = sel.hit else {
                 return;
             };
-            let rotation_quarters =
-                normalize_rotation_quarters(active_structure_placement.rotation_quarters);
+            let rotation_steps =
+                normalize_rotation_steps(active_structure_placement.rotation_quarters) & !1;
+            let rotation_quarters = rotation_steps_to_placement_quarters(rotation_steps);
             let place_origin = resolve_structure_place_origin(hit, &chunk_map, &registry);
             if !can_place_structure_recipe_at(
                 place_origin,
@@ -729,6 +737,7 @@ fn block_place_handler(
                 recipe,
                 place_origin,
                 rotation_quarters,
+                rotation_steps,
                 consumed_requirements.drop_requirements.clone(),
                 style_source_item_id,
             );
@@ -746,6 +755,7 @@ fn block_place_handler(
                 recipe,
                 place_origin,
                 rotation_quarters,
+                rotation_steps,
                 style_source_item_id,
                 consumed_requirements.drop_requirements.as_slice(),
                 &item_registry,
@@ -1353,13 +1363,23 @@ fn sync_structures_for_loaded_chunks(
                 entry.place_origin[1],
                 entry.place_origin[2],
             );
-            let rotation_quarters = normalize_rotation_quarters(entry.rotation_quarters as i32);
+            let rotation_steps = normalize_rotation_steps(
+                entry
+                    .rotation_steps
+                    .map_or((entry.rotation_quarters as i32) * 2, i32::from),
+            );
+            let rotation_quarters = rotation_steps_to_placement_quarters(rotation_steps);
             let Some(recipe) = structure_recipe_registry.recipe_by_name(entry.recipe_name.as_str())
             else {
                 continue;
             };
-            let key =
-                placed_structure_key(coord, recipe.name.clone(), place_origin, rotation_quarters);
+            let key = placed_structure_key(
+                coord,
+                recipe.name.clone(),
+                place_origin,
+                rotation_quarters,
+                rotation_steps,
+            );
             if runtime.spawned_entities.contains_key(&key) {
                 continue;
             }
@@ -1377,6 +1397,7 @@ fn sync_structures_for_loaded_chunks(
                 recipe,
                 place_origin,
                 rotation_quarters,
+                rotation_steps,
                 drop_requirements,
                 style_source_item_id,
             );
@@ -1416,6 +1437,7 @@ fn register_structure_in_runtime(
     recipe: &BuildingStructureRecipe,
     place_origin: IVec3,
     rotation_quarters: u8,
+    rotation_steps: u8,
     style_source_item_id: Option<ItemId>,
     drop_requirements: &[BuildingMaterialRequirement],
     item_registry: &ItemRegistry,
@@ -1430,6 +1452,7 @@ fn register_structure_in_runtime(
         recipe.name.clone(),
         place_origin,
         rotation_quarters,
+        rotation_steps,
     );
     runtime
         .spawned_entities
@@ -1446,6 +1469,11 @@ fn register_structure_in_runtime(
         entry.recipe_name == recipe.name
             && entry.place_origin == [place_origin.x, place_origin.y, place_origin.z]
             && normalize_rotation_quarters(entry.rotation_quarters as i32) == rotation_quarters
+            && normalize_rotation_steps(
+                entry
+                    .rotation_steps
+                    .map_or((entry.rotation_quarters as i32) * 2, i32::from),
+            ) == rotation_steps
     }) {
         existing_entry.style_item = style_item;
         existing_entry.drop_items = drop_items;
@@ -1454,6 +1482,7 @@ fn register_structure_in_runtime(
             recipe_name: recipe.name.clone(),
             place_origin: [place_origin.x, place_origin.y, place_origin.z],
             rotation_quarters,
+            rotation_steps: Some(rotation_steps),
             style_item,
             drop_items,
         });
@@ -1473,12 +1502,14 @@ fn placed_structure_key(
     recipe_name: String,
     place_origin: IVec3,
     rotation_quarters: u8,
+    rotation_steps: u8,
 ) -> PlacedStructureKey {
     PlacedStructureKey {
         origin_chunk,
         recipe_name,
         place_origin,
         rotation_quarters,
+        rotation_steps,
     }
 }
 
@@ -1676,14 +1707,18 @@ fn spawn_structure_model_entity(
     recipe: &BuildingStructureRecipe,
     place_origin: IVec3,
     rotation_quarters: u8,
+    rotation_steps: u8,
     drop_requirements: Vec<BuildingMaterialRequirement>,
     style_source_item_id: Option<ItemId>,
 ) -> Entity {
     let model_rotation_quarters = normalize_rotation_quarters(
         rotation_quarters as i32 + recipe.model_meta.model_rotation_quarters as i32,
     );
+    let model_rotation_steps = normalize_rotation_steps(
+        rotation_steps as i32 + (recipe.model_meta.model_rotation_quarters as i32 * 2),
+    );
     let model_rotation =
-        Quat::from_rotation_y(-(model_rotation_quarters as f32) * std::f32::consts::FRAC_PI_2);
+        Quat::from_rotation_y(-(model_rotation_steps as f32) * std::f32::consts::FRAC_PI_4);
     let placement_size_world = rotated_structure_space(recipe.space, rotation_quarters).as_vec3();
     let selection_center_world = Vec3::new(
         (place_origin.x as f32 + placement_size_world.x * 0.5) * VOXEL_SIZE,
@@ -1708,6 +1743,7 @@ fn spawn_structure_model_entity(
                 stats: recipe.model_meta.stats.clone(),
                 place_origin,
                 rotation_quarters,
+                rotation_steps,
                 origin_chunk,
                 drop_requirements,
                 registration: recipe.model_meta.block_registration.clone(),
@@ -2386,6 +2422,16 @@ fn rotated_model_corner_offset(space: UVec3, rotation_quarters: u8) -> Vec3 {
 #[inline]
 fn normalize_rotation_quarters(raw: i32) -> u8 {
     raw.rem_euclid(4) as u8
+}
+
+#[inline]
+fn normalize_rotation_steps(raw: i32) -> u8 {
+    raw.rem_euclid(8) as u8
+}
+
+#[inline]
+fn rotation_steps_to_placement_quarters(rotation_steps: u8) -> u8 {
+    normalize_rotation_quarters((rotation_steps as i32) / 2)
 }
 
 #[inline]

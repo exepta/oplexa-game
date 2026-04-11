@@ -30,6 +30,7 @@ fn handle_structure_build_menu_input(
     hotbar_state: Res<HotbarSelectionState>,
     item_registry: Res<ItemRegistry>,
     structure_recipe_registry: Option<Res<BuildingStructureRecipeRegistry>>,
+    q_player_controls: Query<&FpsController, With<Player>>,
     mut structure_menu: ResMut<StructureBuildMenuState>,
     mut active_structure_recipe: ResMut<ActiveStructureRecipeState>,
     mut active_structure_placement: ResMut<ActiveStructurePlacementState>,
@@ -76,13 +77,22 @@ fn handle_structure_build_menu_input(
             return;
         }
         active_structure_recipe.selected_recipe_name = Some(recipe.name.clone());
-        active_structure_placement.rotation_quarters = 0;
+        let player_yaw = q_player_controls
+            .iter()
+            .next()
+            .map(|ctrl| ctrl.yaw)
+            .unwrap_or(0.0);
+        // Make the table face the player by default (wall side away from player).
+        active_structure_placement.rotation_quarters =
+            default_structure_rotation_steps_for_player(recipe, player_yaw);
         structure_menu.open = false;
         return;
     }
 }
 
 fn rotate_structure_preview_with_scroll(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    global_config: Res<GlobalConfig>,
     mut wheel_reader: MessageReader<MouseWheel>,
     ui_interaction: Res<UiInteractionState>,
     inventory: Res<PlayerInventory>,
@@ -110,7 +120,15 @@ fn rotate_structure_preview_with_scroll(
         return;
     }
 
-    let mut total_raw = 0.0_f32;
+    let rotate_key =
+        convert(global_config.input.structure_rotate_preview.as_str()).unwrap_or(KeyCode::KeyR);
+
+    let mut total_steps = 0i32;
+    if keyboard.just_pressed(rotate_key) {
+        total_steps += 2;
+    }
+
+    let mut total_raw = 0.0f32;
     for wheel in wheel_reader.read() {
         let raw = match wheel.unit {
             MouseScrollUnit::Line => wheel.y,
@@ -121,15 +139,17 @@ fn rotate_structure_preview_with_scroll(
         }
         total_raw += raw;
     }
-    if total_raw.abs() < f32::EPSILON {
+    if total_raw.abs() >= f32::EPSILON {
+        // One gesture == one 90° step independent from wheel delta magnitude.
+        total_steps += if total_raw > 0.0 { 2 } else { -2 };
+    }
+    if total_steps == 0 {
         return;
     }
-    // Normalize wheel input so one scroll gesture rotates by one quarter-turn,
-    // independent from per-device line/pixel delta magnitudes.
-    let total_steps = if total_raw > 0.0 { 1 } else { -1 };
 
-    active_structure_placement.rotation_quarters =
-        (active_structure_placement.rotation_quarters + total_steps).rem_euclid(4);
+    // Snap legacy odd 45° values to nearest right angle before applying new rotation input.
+    let current_steps = active_structure_placement.rotation_quarters.rem_euclid(8) & !1;
+    active_structure_placement.rotation_quarters = (current_steps + total_steps).rem_euclid(8);
 }
 
 fn sync_structure_build_menu_ui(
@@ -287,4 +307,27 @@ fn is_hammer_selected(
         return false;
     };
     item.localized_name == "oplexa:hammer" || item.key == "hammer"
+}
+
+fn default_structure_rotation_steps_for_player(
+    recipe: &BuildingStructureRecipe,
+    player_yaw: f32,
+) -> i32 {
+    // Desired model-facing direction: toward player (wall side away from player).
+    let look = Quat::from_rotation_y(player_yaw) * Vec3::NEG_Z;
+    let facing = -look;
+    let desired_quarters = if facing.x.abs() >= facing.z.abs() {
+        if facing.x >= 0.0 {
+            1
+        } else {
+            3
+        }
+    } else if facing.z >= 0.0 {
+        2
+    } else {
+        0
+    };
+    let desired_steps = desired_quarters * 2;
+    let model_steps = (recipe.model_meta.model_rotation_quarters as i32 * 2).rem_euclid(8);
+    (desired_steps - model_steps).rem_euclid(8)
 }

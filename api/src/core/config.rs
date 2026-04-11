@@ -362,6 +362,10 @@ pub struct InputConfig {
     #[serde(default = "default_inventory_recipe_open_key")]
     pub inventory_recipe_open: String,
 
+    /// Key to rotate active structure placement preview (hammer mode).
+    #[serde(default = "default_structure_rotate_preview_key")]
+    pub structure_rotate_preview: String,
+
     /// Key or button mapping to select hotbar slot 1.
     #[serde(default = "default_hotbar_slot_1_key")]
     pub hotbar_slot_1: String,
@@ -421,6 +425,7 @@ impl Default for InputConfig {
             ui_close_back: String::from("Escape"),
             open_chat: default_open_chat_key(),
             inventory_recipe_open: default_inventory_recipe_open_key(),
+            structure_rotate_preview: default_structure_rotate_preview_key(),
             hotbar_slot_1: default_hotbar_slot_1_key(),
             hotbar_slot_2: default_hotbar_slot_2_key(),
             hotbar_slot_3: default_hotbar_slot_3_key(),
@@ -448,6 +453,11 @@ fn default_open_chat_key() -> String {
 
 /// Runs the `default_inventory_recipe_open_key` routine for default inventory recipe open key in the `core::config` module.
 fn default_inventory_recipe_open_key() -> String {
+    String::from("R")
+}
+
+/// Runs the `default_structure_rotate_preview_key` routine for default structure rotate preview key in the `core::config` module.
+fn default_structure_rotate_preview_key() -> String {
     String::from("R")
 }
 

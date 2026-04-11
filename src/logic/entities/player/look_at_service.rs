@@ -5,7 +5,8 @@ use crate::core::entities::player::inventory::{InventorySlot, PlayerInventory};
 use crate::core::entities::player::{FpsController, GameMode, GameModeState, Player};
 use crate::core::inventory::items::ItemRegistry;
 use crate::core::inventory::recipe::{
-    ActiveStructurePlacementState, ActiveStructureRecipeState, BuildingStructureRecipeRegistry,
+    ActiveStructurePlacementState, ActiveStructureRecipeState, BuildingModelAnchor,
+    BuildingStructureRecipe, BuildingStructureRecipeRegistry,
 };
 use crate::core::states::states::{AppState, InGameStates};
 use crate::core::ui::{HOTBAR_SLOTS, HotbarSelectionState, UiInteractionState};
@@ -48,7 +49,15 @@ struct PlacementPreviewState {
 #[derive(Component, Default)]
 struct StructurePlacementPreviewState {
     can_place: bool,
+    recipe_name: Option<String>,
+    scene_entity: Option<Entity>,
 }
+
+#[derive(Component)]
+struct StructurePlacementPreviewSceneRoot;
+
+#[derive(Component)]
+struct StructurePreviewOwnedMaterial;
 
 impl Plugin for LookAtService {
     /// Builds this component for the `logic::entities::player::look_at_service` module.
@@ -122,29 +131,16 @@ fn spawn_placement_preview(
 /// Spawns structure placement preview for the `logic::entities::player::look_at_service` module.
 fn spawn_structure_placement_preview(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     q_existing: Query<Entity, With<StructurePlacementPreviewRoot>>,
 ) {
     if !q_existing.is_empty() {
         return;
     }
 
-    let mesh = meshes.add(Mesh::from(Cuboid::new(1.0, 1.0, 1.0)));
-    let material = materials.add(StandardMaterial {
-        base_color: Color::srgba(0.30, 0.85, 0.40, 0.26),
-        alpha_mode: AlphaMode::Blend,
-        unlit: true,
-        cull_mode: None,
-        ..default()
-    });
-
     commands.spawn((
         StructurePlacementPreviewRoot,
         StructurePlacementPreviewState::default(),
         Name::new("StructurePlacementPreview"),
-        Mesh3d(mesh),
-        MeshMaterial3d(material),
         Transform::default(),
         GlobalTransform::default(),
         Visibility::Hidden,
@@ -512,21 +508,29 @@ fn sync_structure_placement_preview(
     item_registry: Res<ItemRegistry>,
     registry: Res<BlockRegistry>,
     chunk_map: Res<ChunkMap>,
+    asset_server: Res<AssetServer>,
     structure_recipe_registry: Option<Res<BuildingStructureRecipeRegistry>>,
     active_structure_recipe: Res<ActiveStructureRecipeState>,
     active_structure_placement: Res<ActiveStructurePlacementState>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    q_children: Query<&Children>,
+    mut q_scene_materials: Query<(
+        Entity,
+        &mut MeshMaterial3d<StandardMaterial>,
+        Option<&StructurePreviewOwnedMaterial>,
+    )>,
+    mut commands: Commands,
     mut q_preview: Query<
         (
+            Entity,
             &mut Transform,
             &mut Visibility,
             &mut StructurePlacementPreviewState,
-            &MeshMaterial3d<StandardMaterial>,
         ),
         With<StructurePlacementPreviewRoot>,
     >,
 ) {
-    let Ok((mut tf, mut vis, mut preview_state, preview_mat)) = q_preview.single_mut() else {
+    let Ok((preview_entity, mut tf, mut vis, mut preview_state)) = q_preview.single_mut() else {
         return;
     };
 
@@ -556,8 +560,36 @@ fn sync_structure_placement_preview(
         return;
     };
 
-    let rotation_quarters =
-        normalize_rotation_quarters(active_structure_placement.rotation_quarters);
+    if preview_state.recipe_name.as_deref() != Some(recipe.name.as_str()) {
+        if let Some(scene_entity) = preview_state.scene_entity.take() {
+            commands.entity(scene_entity).despawn();
+        }
+        let scene_handle = asset_server.load(recipe.model_asset_path.clone());
+        let scene_entity = commands
+            .spawn((
+                Name::new("StructurePlacementPreviewScene"),
+                StructurePlacementPreviewSceneRoot,
+                SceneRoot(scene_handle),
+                Transform::default(),
+                GlobalTransform::default(),
+                Visibility::Inherited,
+                InheritedVisibility::default(),
+                ViewVisibility::default(),
+                RenderLayers::layer(0),
+                NotShadowCaster,
+                NotShadowReceiver,
+                Pickable::IGNORE,
+            ))
+            .id();
+        commands.entity(preview_entity).add_child(scene_entity);
+        preview_state.scene_entity = Some(scene_entity);
+        preview_state.recipe_name = Some(recipe.name.clone());
+    }
+
+    // Keep placement preview constrained to right angles.
+    let rotation_steps =
+        normalize_rotation_steps(active_structure_placement.rotation_quarters) & !1;
+    let rotation_quarters = rotation_steps_to_placement_quarters(rotation_steps);
     let place_origin = resolve_structure_place_origin(hit, &chunk_map, &registry);
     let can_place = can_place_structure_recipe_at(
         place_origin,
@@ -567,32 +599,20 @@ fn sync_structure_placement_preview(
         &registry,
     );
 
-    let s = VOXEL_SIZE;
-    let size = rotated_structure_space(recipe.space, rotation_quarters).as_vec3();
-    const PREVIEW_GROWTH: f32 = 0.02;
-    tf.translation = Vec3::new(
-        (place_origin.x as f32 + size.x * 0.5) * s,
-        (place_origin.y as f32 + size.y * 0.5) * s,
-        (place_origin.z as f32 + size.z * 0.5) * s,
-    );
-    tf.scale = (size + Vec3::splat(PREVIEW_GROWTH)).max(Vec3::splat(0.02));
-    tf.rotation = Quat::IDENTITY;
+    *tf = structure_preview_model_transform(recipe, place_origin, rotation_steps);
 
-    if preview_state.can_place != can_place {
-        if let Some(mat) = materials.get_mut(&preview_mat.0) {
-            mat.base_color = if can_place {
-                Color::srgba(0.30, 0.85, 0.40, 0.26)
-            } else {
-                Color::srgba(0.90, 0.22, 0.22, 0.30)
-            };
-            mat.alpha_mode = AlphaMode::Blend;
-            mat.unlit = true;
-            mat.cull_mode = None;
-            mat.base_color_texture = None;
-        }
-        preview_state.can_place = can_place;
+    if let Some(scene_root) = preview_state.scene_entity {
+        apply_structure_preview_scene_materials(
+            scene_root,
+            can_place,
+            &q_children,
+            &mut q_scene_materials,
+            &mut materials,
+            &mut commands,
+        );
     }
 
+    preview_state.can_place = can_place;
     *vis = Visibility::Visible;
 }
 
@@ -796,6 +816,60 @@ fn can_place_structure_recipe_at(
     true
 }
 
+fn apply_structure_preview_scene_materials(
+    scene_root: Entity,
+    can_place: bool,
+    q_children: &Query<&Children>,
+    q_scene_materials: &mut Query<(
+        Entity,
+        &mut MeshMaterial3d<StandardMaterial>,
+        Option<&StructurePreviewOwnedMaterial>,
+    )>,
+    materials: &mut Assets<StandardMaterial>,
+    commands: &mut Commands,
+) {
+    let mut stack = vec![scene_root];
+    while let Some(entity) = stack.pop() {
+        commands.entity(entity).insert(Pickable::IGNORE);
+
+        if let Ok(children) = q_children.get(entity) {
+            for child in children.iter() {
+                stack.push(child);
+            }
+        }
+
+        let Ok((mesh_entity, mut mesh_material, maybe_owned_material)) =
+            q_scene_materials.get_mut(entity)
+        else {
+            continue;
+        };
+
+        if maybe_owned_material.is_none() {
+            let mut preview_material = materials.get(&mesh_material.0).cloned().unwrap_or_default();
+            preview_material.alpha_mode = AlphaMode::Blend;
+            preview_material.cull_mode = None;
+            preview_material.unlit = false;
+            preview_material.base_color = Color::srgba(1.0, 1.0, 1.0, 0.5);
+
+            mesh_material.0 = materials.add(preview_material);
+            commands
+                .entity(mesh_entity)
+                .insert(StructurePreviewOwnedMaterial);
+        }
+
+        if let Some(material) = materials.get_mut(&mesh_material.0) {
+            material.alpha_mode = AlphaMode::Blend;
+            material.cull_mode = None;
+            material.unlit = false;
+            material.base_color = if can_place {
+                Color::srgba(1.0, 1.0, 1.0, 0.5)
+            } else {
+                Color::srgba(1.0, 0.45, 0.45, 0.5)
+            };
+        }
+    }
+}
+
 fn is_structure_cell_placeable(
     world_pos: IVec3,
     chunk_map: &ChunkMap,
@@ -843,9 +917,83 @@ fn is_structure_support_cell(
         || (stacked != 0 && !registry.is_overridable(stacked))
 }
 
+fn structure_preview_model_transform(
+    recipe: &BuildingStructureRecipe,
+    place_origin: IVec3,
+    rotation_steps: u8,
+) -> Transform {
+    let placement_quarters = rotation_steps_to_placement_quarters(rotation_steps);
+    let model_rotation_quarters =
+        normalize_rotation_quarters(recipe.model_meta.model_rotation_quarters as i32);
+    let model_rotation_steps =
+        normalize_rotation_steps(rotation_steps as i32 + (model_rotation_quarters as i32 * 2));
+    let rotation =
+        Quat::from_rotation_y(-(model_rotation_steps as f32) * std::f32::consts::FRAC_PI_4);
+    let translation = structure_model_translation(
+        recipe,
+        place_origin,
+        placement_quarters,
+        model_rotation_quarters,
+    ) + (rotation * recipe.model_meta.model_offset) * VOXEL_SIZE
+        + Vec3::Y * (0.1 * VOXEL_SIZE);
+
+    Transform {
+        translation,
+        rotation,
+        scale: Vec3::ONE,
+    }
+}
+
+fn structure_model_translation(
+    recipe: &BuildingStructureRecipe,
+    place_origin: IVec3,
+    placement_rotation_quarters: u8,
+    model_rotation_quarters: u8,
+) -> Vec3 {
+    match recipe.model_meta.model_anchor {
+        BuildingModelAnchor::Center => {
+            let recipe_space =
+                rotated_structure_space(recipe.space, placement_rotation_quarters).as_vec3();
+            Vec3::new(
+                (place_origin.x as f32 + recipe_space.x * 0.5) * VOXEL_SIZE,
+                (place_origin.y as f32 + recipe_space.y * 0.5) * VOXEL_SIZE,
+                (place_origin.z as f32 + recipe_space.z * 0.5) * VOXEL_SIZE,
+            )
+        }
+        BuildingModelAnchor::MinCorner => {
+            let offset = rotated_model_corner_offset(recipe.space, model_rotation_quarters);
+            Vec3::new(
+                (place_origin.x as f32 + offset.x) * VOXEL_SIZE,
+                (place_origin.y as f32) * VOXEL_SIZE,
+                (place_origin.z as f32 + offset.z) * VOXEL_SIZE,
+            )
+        }
+    }
+}
+
+#[inline]
+fn rotated_model_corner_offset(space: UVec3, rotation_quarters: u8) -> Vec3 {
+    match rotation_quarters % 4 {
+        0 => Vec3::ZERO,
+        1 => Vec3::new(space.z as f32, 0.0, 0.0),
+        2 => Vec3::new(space.x as f32, 0.0, space.z as f32),
+        _ => Vec3::new(0.0, 0.0, space.x as f32),
+    }
+}
+
 #[inline]
 fn normalize_rotation_quarters(raw: i32) -> u8 {
     raw.rem_euclid(4) as u8
+}
+
+#[inline]
+fn normalize_rotation_steps(raw: i32) -> u8 {
+    raw.rem_euclid(8) as u8
+}
+
+#[inline]
+fn rotation_steps_to_placement_quarters(rotation_steps: u8) -> u8 {
+    normalize_rotation_quarters((rotation_steps as i32) / 2)
 }
 
 #[inline]
