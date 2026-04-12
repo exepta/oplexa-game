@@ -131,7 +131,7 @@ fn drop_selected_hotbar_item(
     hotbar_state: Res<HotbarSelectionState>,
     multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
     mut inventory: ResMut<PlayerInventory>,
-    player_q: Query<&Transform, With<Player>>,
+    player_q: Query<(&Transform, Option<&FpsController>), With<Player>>,
     mut drop_requests: MessageWriter<DropItemRequest>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -161,9 +161,10 @@ fn drop_selected_hotbar_item(
         return;
     }
 
-    let Ok(player_tf) = player_q.single() else {
+    let Ok((player_tf, player_ctrl)) = player_q.single() else {
         return;
     };
+    let player_forward = player_drop_forward_vector(player_tf, player_ctrl);
 
     let dropped_item_id = slot.item_id;
     if slot.count <= 1 {
@@ -177,9 +178,8 @@ fn drop_selected_hotbar_item(
         .is_some_and(|state| state.connected)
     {
         let (spawn_center, initial_velocity) =
-            player_drop_spawn_motion(player_tf.translation, player_tf.forward().as_vec3());
-        let world_loc =
-            player_drop_world_location(player_tf.translation, player_tf.forward().as_vec3());
+            player_drop_spawn_motion(player_tf.translation, player_forward);
+        let world_loc = player_drop_world_location(player_tf.translation, player_forward);
         drop_requests.write(DropItemRequest::new(
             dropped_item_id,
             1,
@@ -196,10 +196,22 @@ fn drop_selected_hotbar_item(
             dropped_item_id,
             1,
             player_tf.translation,
-            player_tf.forward().as_vec3(),
+            player_forward,
             time.elapsed_secs(),
         );
     }
+}
+
+#[inline]
+fn player_drop_forward_vector(player_tf: &Transform, player_ctrl: Option<&FpsController>) -> Vec3 {
+    if let Some(ctrl) = player_ctrl {
+        let look_forward =
+            Quat::from_rotation_y(ctrl.yaw) * Quat::from_rotation_x(ctrl.pitch) * Vec3::NEG_Z;
+        if look_forward.length_squared() > 0.000_001 {
+            return look_forward.normalize();
+        }
+    }
+    player_tf.forward().as_vec3()
 }
 
 /// Synchronizes hotbar selected block for the `graphic::components::hud` module.
@@ -332,6 +344,261 @@ fn sync_hud_hotbar_ui(
             if !text.text.is_empty() {
                 text.text.clear();
             }
+            *visibility = Visibility::Hidden;
+        }
+    }
+}
+
+/// Synchronizes looked block hud card for the `graphic::components::hud` module.
+#[derive(SystemParam)]
+struct LookedBlockHudQueries<'w, 's> {
+    card_visibility_q: Query<
+        'w,
+        's,
+        &'static mut Visibility,
+        (With<HudLookedBlockCard>, Without<HudLookedBlockProgress>),
+    >,
+    icon_q: Query<'w, 's, (&'static mut Img, &'static mut Node), With<HudLookedBlockIcon>>,
+    display_name_q: Query<
+        'w,
+        's,
+        &'static mut Paragraph,
+        (
+            With<HudLookedBlockDisplayName>,
+            Without<HudLookedBlockLocalizedName>,
+            Without<HudLookedBlockLevel>,
+        ),
+    >,
+    localized_name_q: Query<
+        'w,
+        's,
+        &'static mut Paragraph,
+        (
+            With<HudLookedBlockLocalizedName>,
+            Without<HudLookedBlockDisplayName>,
+            Without<HudLookedBlockLevel>,
+        ),
+    >,
+    level_q: Query<
+        'w,
+        's,
+        (&'static mut Paragraph, &'static mut TextColor),
+        (
+            With<HudLookedBlockLevel>,
+            Without<HudLookedBlockDisplayName>,
+            Without<HudLookedBlockLocalizedName>,
+        ),
+    >,
+    progress_q: Query<
+        'w,
+        's,
+        (&'static mut ProgressBar, &'static mut Visibility),
+        (With<HudLookedBlockProgress>, Without<HudLookedBlockCard>),
+    >,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sync_hud_looked_block_card(
+    selection: Res<SelectionState>,
+    mining_state: Res<MiningState>,
+    hotbar_state: Res<HotbarSelectionState>,
+    inventory: Res<PlayerInventory>,
+    block_registry: Res<BlockRegistry>,
+    item_registry: Res<ItemRegistry>,
+    language: Res<ClientLanguageState>,
+    time: Res<Time>,
+    asset_server: Res<AssetServer>,
+    mut image_cache: ResMut<ImageCache>,
+    mut images: ResMut<Assets<Image>>,
+    q_structures: Query<&crate::logic::events::block_event_handler::PlacedStructureMetadata>,
+    hud_q: LookedBlockHudQueries,
+) {
+    let LookedBlockHudQueries {
+        mut card_visibility_q,
+        mut icon_q,
+        mut display_name_q,
+        mut localized_name_q,
+        mut level_q,
+        mut progress_q,
+    } = hud_q;
+
+    struct LookedHudData {
+        display_name: String,
+        localized_name: String,
+        level: u8,
+        icon_block_id: Option<u16>,
+        block_progress_target: Option<(IVec3, u16)>,
+    }
+
+    let looked = if let Some(hit) = selection.hit.filter(|hit| hit.block_id != 0) {
+        let Some(block) = block_registry.def_opt(hit.block_id) else {
+            if let Ok(mut visibility) = card_visibility_q.single_mut() {
+                *visibility = Visibility::Hidden;
+            }
+            if let Ok((mut progress_bar, mut visibility)) = progress_q.single_mut() {
+                progress_bar.value = 0.0;
+                *visibility = Visibility::Hidden;
+            }
+            return;
+        };
+        LookedHudData {
+            display_name: localize_block_name_for_id(language.as_ref(), &block_registry, hit.block_id),
+            localized_name: block.localized_name.clone(),
+            level: block.stats.level,
+            icon_block_id: Some(hit.block_id),
+            block_progress_target: Some((hit.block_pos, hit.block_id)),
+        }
+    } else if let Some(structure_hit) = selection.structure_hit {
+        let Ok(meta) = q_structures.get(structure_hit.entity) else {
+            if let Ok(mut visibility) = card_visibility_q.single_mut() {
+                *visibility = Visibility::Hidden;
+            }
+            if let Ok((mut progress_bar, mut visibility)) = progress_q.single_mut() {
+                progress_bar.value = 0.0;
+                *visibility = Visibility::Hidden;
+            }
+            return;
+        };
+
+        let registration = meta.registration.as_ref();
+        let block_id = registration.and_then(|entry| entry.block_id).filter(|id| *id != 0);
+        let display_name = if let Some(id) = block_id {
+            localize_block_name_for_id(language.as_ref(), &block_registry, id)
+        } else if let Some(registration) = registration {
+            language.localize_name_key(registration.name.as_str())
+        } else {
+            meta.recipe_name.clone()
+        };
+        let localized_name = if let Some(id) = block_id {
+            block_registry
+                .def_opt(id)
+                .map(|block| block.localized_name.clone())
+                .unwrap_or_else(|| meta.recipe_name.clone())
+        } else if let Some(registration) = registration {
+            registration.name.clone()
+        } else {
+            meta.recipe_name.clone()
+        };
+
+        LookedHudData {
+            display_name,
+            localized_name,
+            level: meta.stats.level,
+            icon_block_id: block_id,
+            block_progress_target: None,
+        }
+    } else {
+        if let Ok(mut visibility) = card_visibility_q.single_mut() {
+            *visibility = Visibility::Hidden;
+        }
+        if let Ok((mut progress_bar, mut visibility)) = progress_q.single_mut() {
+            progress_bar.value = 0.0;
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    };
+
+    if let Ok(mut visibility) = card_visibility_q.single_mut() {
+        *visibility = Visibility::Inherited;
+    }
+
+    if let Ok(mut display_name) = display_name_q.single_mut() {
+        if display_name.text != looked.display_name {
+            display_name.text = looked.display_name.clone();
+        }
+    }
+
+    if let Ok(mut paragraph) = localized_name_q.single_mut() {
+        let next_localized_name = format!(
+            "{}: {}",
+            language.localize_name_key("KEY_UI_LOCALIZED_NAME_LABEL"),
+            looked.localized_name
+        );
+        if paragraph.text != next_localized_name {
+            paragraph.text = next_localized_name;
+        }
+    }
+
+    if let Ok((mut paragraph, mut text_color)) = level_q.single_mut() {
+        let next_level = format!(
+            "{}: {}",
+            language.localize_name_key("KEY_UI_MINING_LEVEL_LABEL"),
+            looked.level
+        );
+        if paragraph.text != next_level {
+            paragraph.text = next_level;
+        }
+
+        let held_tool = inventory
+            .slots
+            .get(hotbar_state.selected_index)
+            .filter(|slot| !slot.is_empty())
+            .and_then(|slot| item_registry.def_opt(slot.item_id))
+            .and_then(|item| infer_tool_from_item_key(item.key.as_str()));
+        let meets_requirement = looked
+            .icon_block_id
+            .and_then(|id| block_requirement_for_id(id, &block_registry))
+            .map(|requirement| requirement.is_met_by(held_tool))
+            .unwrap_or(true);
+        text_color.0 = if meets_requirement {
+            Color::srgb_u8(0x77, 0xd8, 0x82)
+        } else {
+            Color::srgb_u8(0xf2, 0x66, 0x66)
+        };
+    }
+
+    if let Ok((mut icon, mut icon_node)) = icon_q.single_mut() {
+        let mut next_icon = looked
+            .icon_block_id
+            .and_then(|block_id| item_registry.item_for_block(block_id))
+            .and_then(|item_id| {
+                resolve_item_icon_path(
+                    &item_registry,
+                    &block_registry,
+                    &asset_server,
+                    &mut image_cache,
+                    &mut images,
+                    item_id,
+                )
+            });
+        if next_icon.is_none() {
+            let fallback = "textures/items/missing.png".to_string();
+            ensure_item_icon_nearest_sampler(&asset_server, &image_cache, &mut images, fallback.as_str());
+            next_icon = Some(fallback);
+        }
+        let is_block_icon = next_icon
+            .as_deref()
+            .and_then(parse_block_icon_cache_key)
+            .is_some();
+        let target_size = if is_block_icon { 48.0 } else { 34.0 };
+        icon_node.width = Val::Px(target_size);
+        icon_node.height = Val::Px(target_size);
+        icon_node.min_width = Val::Px(target_size);
+        icon_node.min_height = Val::Px(target_size);
+        icon_node.max_width = Val::Px(target_size);
+        icon_node.max_height = Val::Px(target_size);
+
+        if icon.src != next_icon {
+            icon.src = next_icon;
+        }
+    }
+
+    if let Ok((mut progress_bar, mut visibility)) = progress_q.single_mut() {
+        let progress_percent = looked.block_progress_target.and_then(|(loc, id)| {
+            mining_state.target.and_then(|target| {
+                if target.loc == loc && target.id == id {
+                    Some(mining_progress(time.elapsed_secs(), &target) * 100.0)
+                } else {
+                    None
+                }
+            })
+        });
+
+        if let Some(percent) = progress_percent {
+            progress_bar.value = percent.clamp(0.0, 100.0);
+            *visibility = Visibility::Inherited;
+        } else {
+            progress_bar.value = 0.0;
             *visibility = Visibility::Hidden;
         }
     }

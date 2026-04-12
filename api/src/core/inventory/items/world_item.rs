@@ -1,5 +1,8 @@
 use crate::core::inventory::items::{ItemId, ItemRegistry};
-use crate::core::world::block::{BlockId, BlockRegistry, VOXEL_SIZE, build_block_cube_mesh};
+use crate::core::world::block::{
+    BlockId, BlockRegistry, VOXEL_SIZE, build_block_cube_mesh, get_block_world,
+};
+use crate::core::world::chunk::ChunkMap;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
@@ -21,6 +24,7 @@ pub const WORLD_ITEM_ATTRACT_MAX_SPEED: f32 = 12.0;
 pub const WORLD_ITEM_DROP_GRAVITY: f32 = 12.0;
 /// Delay after spawn before the item can be picked up.
 pub const WORLD_ITEM_PICKUP_DELAY_SECS: f32 = 0.7;
+const WORLD_BLOCK_DROP_SIZE: f32 = 0.35;
 
 const DROP_POP_MIN_DIST: f32 = 0.1;
 const DROP_POP_MAX_DIST: f32 = 1.0;
@@ -60,6 +64,7 @@ pub fn spawn_world_item_for_block_break(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     block_registry: &BlockRegistry,
+    chunk_map: &ChunkMap,
     item_registry: &ItemRegistry,
     block_id: u16,
     world_loc: IVec3,
@@ -68,11 +73,8 @@ pub fn spawn_world_item_for_block_break(
     let Some(item_id) = item_registry.item_for_block(block_id) else {
         return;
     };
-    let center = Vec3::new(
-        (world_loc.x as f32 + 0.5) * VOXEL_SIZE,
-        (world_loc.y as f32 + 0.5) * VOXEL_SIZE + 0.28,
-        (world_loc.z as f32 + 0.5) * VOXEL_SIZE,
-    );
+    let (spawn_cell, center) =
+        resolve_block_drop_spawn_center(block_registry, chunk_map, world_loc);
     spawn_world_item_with_motion(
         commands,
         meshes,
@@ -82,7 +84,7 @@ pub fn spawn_world_item_for_block_break(
         1,
         center,
         compute_drop_pop_velocity(world_loc, now),
-        world_loc,
+        spawn_cell,
         now,
     );
 }
@@ -158,8 +160,9 @@ pub fn build_world_item_drop_visual(
     }
 
     if let Some(block_id) = resolve_drop_block_id(block_registry, item_registry, item_id) {
-        let mut mesh = build_block_cube_mesh(block_registry, block_id, size);
-        center_mesh_vertices(&mut mesh, size * 0.5);
+        let block_size = size.min(WORLD_BLOCK_DROP_SIZE).max(0.10);
+        let mut mesh = build_block_cube_mesh(block_registry, block_id, block_size);
+        center_mesh_vertices(&mut mesh, block_size * 0.5);
         let visual_scale = block_registry
             .collision_box(block_id)
             .map(|(size_m, _)| {
@@ -259,8 +262,7 @@ pub fn spawn_world_item_with_motion(
 
 /// Runs the `player_drop_throw_direction` routine for player drop throw direction in the `core::inventory::items::world_item` module.
 fn player_drop_throw_direction(player_forward: Vec3) -> Vec3 {
-    let horizontal_forward = Vec3::new(player_forward.x, 0.0, player_forward.z);
-    horizontal_forward.try_normalize().unwrap_or(Vec3::Z)
+    player_forward.try_normalize().unwrap_or(Vec3::Z)
 }
 
 /// Runs the `player_drop_spawn_center` routine for player drop spawn center in the `core::inventory::items::world_item` module.
@@ -619,4 +621,60 @@ fn guess_block_name_from_item_key(item_key: &str) -> Option<String> {
         return Some(format!("{base}_block"));
     }
     Some(format!("{key}_block"))
+}
+
+fn resolve_block_drop_spawn_center(
+    block_registry: &BlockRegistry,
+    chunk_map: &ChunkMap,
+    world_loc: IVec3,
+) -> (IVec3, Vec3) {
+    const OFFSETS: [IVec3; 16] = [
+        IVec3::new(0, 0, 0),
+        IVec3::new(0, 1, 0),
+        IVec3::new(0, 2, 0),
+        IVec3::new(1, 0, 0),
+        IVec3::new(-1, 0, 0),
+        IVec3::new(0, 0, 1),
+        IVec3::new(0, 0, -1),
+        IVec3::new(1, 1, 0),
+        IVec3::new(-1, 1, 0),
+        IVec3::new(0, 1, 1),
+        IVec3::new(0, 1, -1),
+        IVec3::new(1, 0, 1),
+        IVec3::new(1, 0, -1),
+        IVec3::new(-1, 0, 1),
+        IVec3::new(-1, 0, -1),
+        IVec3::new(0, 3, 0),
+    ];
+
+    for offset in OFFSETS {
+        let cell = world_loc + offset;
+        if can_spawn_drop_in_cell(block_registry, chunk_map, cell) {
+            let center = Vec3::new(
+                (cell.x as f32 + 0.5) * VOXEL_SIZE,
+                (cell.y as f32) * VOXEL_SIZE + 0.36 * VOXEL_SIZE,
+                (cell.z as f32 + 0.5) * VOXEL_SIZE,
+            );
+            return (cell, center);
+        }
+    }
+
+    (
+        world_loc,
+        Vec3::new(
+            (world_loc.x as f32 + 0.5) * VOXEL_SIZE,
+            (world_loc.y as f32) * VOXEL_SIZE + 0.36 * VOXEL_SIZE,
+            (world_loc.z as f32 + 0.5) * VOXEL_SIZE,
+        ),
+    )
+}
+
+#[inline]
+fn can_spawn_drop_in_cell(
+    block_registry: &BlockRegistry,
+    chunk_map: &ChunkMap,
+    cell: IVec3,
+) -> bool {
+    let id = get_block_world(chunk_map, cell);
+    id == 0 || !block_registry.stats(id).solid
 }

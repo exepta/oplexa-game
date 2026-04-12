@@ -22,7 +22,7 @@ use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, get_block_world};
 use crate::core::world::chunk::{ChunkMap, LoadCenter, SEA_LEVEL, VoxelStage};
 use crate::core::world::chunk_dimension::{
-    CX, CY, CZ, SEC_COUNT, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local,
+    CX, CZ, SEC_COUNT, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local,
 };
 use crate::core::world::fluid::{FluidChunk, FluidMap, WaterMeshIndex};
 use crate::core::world::save::RegionCache;
@@ -332,7 +332,6 @@ const MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS: f32 = 0.12;
 const MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE: usize = 2;
 const LOCATE_MAX_RADIUS_BLOCKS_CAP: i32 = 1000;
 const NETWORK_CONFIG_PATH: &str = "config/network.toml";
-const CTRL_C_GRACEFUL_EXIT_DELAY_SECS: f64 = 0.25;
 const SERVER_TIMEOUT_ERROR_TEXT: &str = "Server time out!";
 
 static TERMINAL_INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -367,6 +366,61 @@ fn multiplayer_chunk_decode_budget(backlog_len: usize, frame_secs: f32) -> usize
     }
 
     budget.max(MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE)
+}
+
+fn dedupe_remote_chunk_decode_queue(queue: &mut VecDeque<ServerChunkData>) {
+    if queue.len() <= 1 {
+        return;
+    }
+
+    let mut newest_per_coord = HashSet::with_capacity(queue.len());
+    let mut deduped = VecDeque::with_capacity(queue.len());
+    for message in queue.drain(..).rev() {
+        if newest_per_coord.insert(message.coord) {
+            deduped.push_front(message);
+        }
+    }
+    *queue = deduped;
+}
+
+fn remap_server_chunk_payload_in_place(
+    chunk: &mut crate::core::world::chunk::ChunkData,
+    fluid_chunk: &mut FluidChunk,
+    block_remap: &BlockIdRemap,
+    local_block_registry_len: usize,
+    water_local_id: u16,
+) {
+    let server_to_local = &block_remap.server_to_local;
+    let remap = |server_id: u16| -> u16 {
+        let local_id = if server_to_local.is_empty() {
+            server_id
+        } else {
+            server_to_local
+                .get(server_id as usize)
+                .copied()
+                .unwrap_or(0)
+        };
+        if (local_id as usize) < local_block_registry_len {
+            local_id
+        } else {
+            0
+        }
+    };
+
+    for (index, server_id) in chunk.blocks.iter_mut().enumerate() {
+        let local_id = remap(*server_id);
+        if water_local_id != 0 && local_id == water_local_id {
+            *server_id = 0;
+            let word = index >> 6;
+            fluid_chunk.bits[word] |= 1u64 << (index & 63);
+        } else {
+            *server_id = local_id;
+        }
+    }
+
+    for server_id in &mut chunk.stacked_blocks {
+        *server_id = remap(*server_id);
+    }
 }
 
 /// Runs the main routine for the `client` module.
@@ -447,7 +501,6 @@ impl Plugin for MultiplayerClientPlugin {
 
 /// Handles terminal interrupt exit for the `client` module.
 fn handle_terminal_interrupt_exit(
-    time: Res<Time>,
     mut interrupt_state: ResMut<TerminalInterruptExitState>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut block_remap: ResMut<BlockIdRemap>,
@@ -457,7 +510,7 @@ fn handle_terminal_interrupt_exit(
     mut commands: Commands,
     mut app_exit: MessageWriter<AppExit>,
 ) {
-    if TERMINAL_INTERRUPT_REQUESTED.load(Ordering::SeqCst) && interrupt_state.started_at.is_none() {
+    if TERMINAL_INTERRUPT_REQUESTED.load(Ordering::SeqCst) && !interrupt_state.handled {
         let should_send_disconnect =
             runtime.connection_entity.is_some() && !multiplayer_connection.uses_local_save_data();
         if should_send_disconnect {
@@ -475,15 +528,7 @@ fn handle_terminal_interrupt_exit(
         chunk_stream.reset();
         chunk_decode_queue.reset();
         multiplayer_connection.clear_session();
-        interrupt_state.started_at = Some(time.elapsed_secs_f64());
-        return;
-    }
-
-    let Some(started_at) = interrupt_state.started_at else {
-        return;
-    };
-
-    if time.elapsed_secs_f64() - started_at >= CTRL_C_GRACEFUL_EXIT_DELAY_SECS {
+        interrupt_state.handled = true;
         app_exit.write(AppExit::Success);
     }
 }
@@ -846,7 +891,7 @@ fn receive_player_messages(
         multiplayer_connection.world_name = Some(message.world_name.clone());
         multiplayer_connection.world_seed = Some(message.world_seed);
         multiplayer_connection.last_error = None;
-        multiplayer_connection.spawn_yaw_pitch = None;
+        multiplayer_connection.spawn_yaw_pitch = Some(message.spawn_yaw_pitch);
         apply_welcome_inventory(&message, &mut inventory);
         let spawn_translation = message.spawn_translation;
         start_streamed_multiplayer_world_load(
@@ -1331,6 +1376,7 @@ fn receive_world_messages(
     for message in recv_chunk.receive() {
         chunk_decode_queue.queued.push_back(message);
     }
+    dedupe_remote_chunk_decode_queue(&mut chunk_decode_queue.queued);
 
     let decode_budget =
         multiplayer_chunk_decode_budget(chunk_decode_queue.queued.len(), time.delta_secs());
@@ -1346,16 +1392,6 @@ fn receive_world_messages(
                 break;
             };
 
-            // Keep only the newest queued payload per chunk coord to avoid stale
-            // rebuild work when the same chunk was streamed multiple times.
-            if chunk_decode_queue
-                .queued
-                .iter()
-                .any(|queued| queued.coord == message.coord)
-            {
-                continue;
-            }
-
             let coord = IVec2::new(message.coord[0], message.coord[1]);
             let Ok(mut chunk) = crate::generator::chunk::chunk_utils::decode_chunk(&message.blocks)
             else {
@@ -1364,24 +1400,13 @@ fn receive_world_messages(
             };
 
             let mut fluid_chunk = FluidChunk::new(SEA_LEVEL);
-            for y in 0..CY {
-                for z in 0..CZ {
-                    for x in 0..CX {
-                        let id = chunk.get(x, y, z);
-                        let stacked_id = chunk.get_stacked(x, y, z);
-                        let local_id = remap_server_block_id(&block_remap, registry, id);
-                        let local_stacked_id =
-                            remap_server_block_id(&block_remap, registry, stacked_id);
-                        if water_local_id != 0 && local_id == water_local_id {
-                            chunk.set(x, y, z, 0);
-                            fluid_chunk.set(x, y, z, true);
-                        } else {
-                            chunk.set(x, y, z, local_id);
-                        }
-                        chunk.set_stacked(x, y, z, local_stacked_id);
-                    }
-                }
-            }
+            remap_server_chunk_payload_in_place(
+                &mut chunk,
+                &mut fluid_chunk,
+                &block_remap,
+                registry.defs.len(),
+                water_local_id,
+            );
 
             chunk.mark_all_dirty();
             chunk_map.chunks.insert(coord, chunk);
@@ -1412,7 +1437,13 @@ fn receive_world_messages(
         if Some(message.player_id) == runtime.local_player_id {
             continue;
         }
-        apply_remote_block_break(message.location, &mut chunk_map, &mut fluids, &mut ev_dirty);
+        apply_remote_block_break(
+            message.location,
+            registry.as_deref(),
+            &mut chunk_map,
+            &mut fluids,
+            &mut ev_dirty,
+        );
     }
 
     for message in recv_block_place.receive() {
@@ -1425,6 +1456,7 @@ fn receive_world_messages(
         apply_remote_block_place(
             message.location,
             remap_server_block_id(&block_remap, registry, message.block_id),
+            remap_server_block_id(&block_remap, registry, message.stacked_block_id),
             registry,
             &mut chunk_map,
             &mut fluids,
@@ -1463,8 +1495,14 @@ fn receive_drop_messages(
 
     for message in recv_spawn.receive() {
         if let (Some(registry), Some(item_registry)) = (registry.as_ref(), item_registry.as_ref()) {
-            let local_block_id = remap_server_block_id(&block_remap, registry, message.block_id);
-            let local_item_id = item_registry.item_for_block(local_block_id).unwrap_or(0);
+            let local_item_id =
+                if message.item_id != 0 && item_registry.def_opt(message.item_id).is_some() {
+                    message.item_id
+                } else {
+                    let local_block_id =
+                        remap_server_block_id(&block_remap, registry, message.block_id);
+                    item_registry.item_for_block(local_block_id).unwrap_or(0)
+                };
             spawn_multiplayer_drop(
                 &mut commands,
                 registry,
@@ -1491,9 +1529,13 @@ fn receive_drop_messages(
             let local_item_id = if let (Some(registry), Some(item_registry)) =
                 (registry.as_ref(), item_registry.as_ref())
             {
-                let local_block_id =
-                    remap_server_block_id(&block_remap, registry, message.block_id);
-                item_registry.item_for_block(local_block_id).unwrap_or(0)
+                if message.item_id != 0 && item_registry.def_opt(message.item_id).is_some() {
+                    message.item_id
+                } else {
+                    let local_block_id =
+                        remap_server_block_id(&block_remap, registry, message.block_id);
+                    item_registry.item_for_block(local_block_id).unwrap_or(0)
+                }
             } else {
                 0
             };
@@ -1726,6 +1768,7 @@ fn send_local_block_place_events(
         sender.send::<OrderedReliable>(ClientBlockPlace::new(
             event.location.to_array(),
             block_remap.to_server(event.block_id),
+            block_remap.to_server(event.stacked_block_id),
         ));
     }
 }
@@ -1758,15 +1801,14 @@ fn send_local_item_drop_requests(
         if request.item_id == 0 || request.amount == 0 {
             continue;
         }
-        let Some(local_block_id) = item_registry
+        let local_block_id = item_registry
             .as_ref()
             .and_then(|items| items.block_for_item(request.item_id))
-        else {
-            continue;
-        };
+            .unwrap_or(0);
 
         sender.send::<OrderedReliable>(ClientDropItem::new(
             request.location,
+            request.item_id,
             block_remap.to_server(local_block_id),
             request.amount,
             request.spawn_translation,
@@ -1843,15 +1885,8 @@ fn simulate_multiplayer_drop_items(
             if has_support {
                 drop.velocity = Vec3::ZERO;
                 if drop.block_visual {
-                    let drag = (1.0 - 4.0 * delta).clamp(0.0, 1.0);
-                    drop.angular_velocity *= drag;
-                    drop.spin_speed *= drag;
-                    if drop.angular_velocity.length_squared() < 0.000_1 {
-                        drop.angular_velocity = Vec3::ZERO;
-                    }
-                    if drop.spin_speed.abs() < 0.01 {
-                        drop.spin_speed = 0.0;
-                    }
+                    drop.angular_velocity = Vec3::ZERO;
+                    drop.spin_speed = 0.0;
                 } else {
                     drop.angular_velocity = Vec3::ZERO;
                     drop.spin_speed = 0.0;
@@ -1882,11 +1917,17 @@ fn simulate_multiplayer_drop_items(
         }
 
         transform.translation.y = ground_top + half;
+        let impact_velocity = drop.velocity;
         drop.velocity = Vec3::ZERO;
         drop.resting = true;
         if drop.block_visual {
-            drop.angular_velocity *= 0.4;
-            drop.spin_speed *= 0.5;
+            drop.angular_velocity = Vec3::ZERO;
+            drop.spin_speed = 0.0;
+            transform.rotation = settled_block_drop_rotation(
+                transform.rotation,
+                transform.translation,
+                impact_velocity,
+            );
         } else {
             drop.angular_velocity = Vec3::ZERO;
             drop.spin_speed = 0.0;
@@ -1900,6 +1941,52 @@ fn flat_item_rotation(current_rotation: Quat) -> Quat {
     let forward = current_rotation * Vec3::Z;
     let yaw = forward.x.atan2(forward.z);
     Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)
+}
+
+#[inline]
+fn settled_block_drop_rotation(
+    current_rotation: Quat,
+    translation: Vec3,
+    impact_velocity: Vec3,
+) -> Quat {
+    let forward = current_rotation * Vec3::Z;
+    let yaw = forward.x.atan2(forward.z);
+    let base = Quat::from_rotation_y(yaw);
+
+    let frac_x = translation.x - translation.x.floor();
+    let frac_z = translation.z - translation.z.floor();
+    let edge_bias_x = (frac_x - 0.5).abs();
+    let edge_bias_z = (frac_z - 0.5).abs();
+    let horizontal_speed = Vec2::new(impact_velocity.x, impact_velocity.z).length();
+
+    let (axis, angle_deg): (Vec3, f32) = if horizontal_speed > 0.45 {
+        let dir = Vec2::new(impact_velocity.x, impact_velocity.z).normalize_or_zero();
+        let axis = Vec3::new(-dir.y, 0.0, dir.x).normalize_or_zero();
+        (
+            if axis.length_squared() > 0.000_001 {
+                axis
+            } else {
+                Vec3::X
+            },
+            72.0,
+        )
+    } else if edge_bias_x.max(edge_bias_z) > 0.34 {
+        if edge_bias_x >= edge_bias_z {
+            (Vec3::Z * if frac_x >= 0.5 { 1.0 } else { -1.0 }, 58.0)
+        } else {
+            (Vec3::X * if frac_z >= 0.5 { -1.0 } else { 1.0 }, 58.0)
+        }
+    } else {
+        let cell_x = translation.x.floor() as i32;
+        let cell_z = translation.z.floor() as i32;
+        if ((cell_x ^ cell_z) & 1) == 0 {
+            (Vec3::X, 90.0)
+        } else {
+            (Vec3::Z, 90.0)
+        }
+    };
+
+    (Quat::from_axis_angle(axis.normalize_or_zero(), angle_deg.to_radians()) * base).normalize()
 }
 
 /// Runs the `send_local_inventory_sync` routine for send local inventory sync in the `client` module.
@@ -2057,6 +2144,7 @@ fn send_client_keepalive(
 /// Applies remote block break for the `client` module.
 fn apply_remote_block_break(
     location: [i32; 3],
+    registry: Option<&BlockRegistry>,
     chunk_map: &mut ChunkMap,
     fluids: &mut FluidMap,
     ev_dirty: &mut MessageWriter<SubChunkNeedRemeshEvent>,
@@ -2068,12 +2156,22 @@ fn apply_remote_block_break(
 
     let mut changed = false;
     if let Some(mut access) = world_access_mut(chunk_map, world_pos) {
-        if access.get() != 0 || access.get_stacked() != 0 {
-            if access.get_stacked() != 0 {
-                access.set(access.get_stacked());
+        let primary = access.get();
+        let stacked = access.get_stacked();
+        if primary != 0 || stacked != 0 {
+            let clear_both = primary != 0
+                && stacked != 0
+                && registry.is_some_and(|registry| {
+                    registry
+                        .def_opt(primary)
+                        .is_some_and(|definition| !definition.mesh_visible)
+                });
+            if stacked != 0 && !clear_both {
+                access.set(stacked);
                 access.set_stacked(0);
             } else {
                 access.set(0);
+                access.set_stacked(0);
             }
             changed = true;
         }
@@ -2099,12 +2197,13 @@ fn apply_remote_block_break(
 fn apply_remote_block_place(
     location: [i32; 3],
     block_id: u16,
+    stacked_block_id: u16,
     registry: &BlockRegistry,
     chunk_map: &mut ChunkMap,
     fluids: &mut FluidMap,
     ev_dirty: &mut MessageWriter<SubChunkNeedRemeshEvent>,
 ) {
-    if block_id == 0 {
+    if block_id == 0 && stacked_block_id == 0 {
         return;
     }
 
@@ -2123,11 +2222,9 @@ fn apply_remote_block_place(
         if is_fluid {
             access.set(0);
             access.set_stacked(0);
-        } else if can_stack_remote_slab(access.get(), access.get_stacked(), block_id, registry) {
-            access.set_stacked(block_id);
         } else {
             access.set(block_id);
-            access.set_stacked(0);
+            access.set_stacked(stacked_block_id);
         }
         mark_dirty_block_and_neighbors(chunk_map, world_pos, ev_dirty);
     }
@@ -2141,56 +2238,6 @@ fn apply_remote_block_place(
     } else {
         fluid_chunk.set(lx, ly, lz, false);
     }
-}
-
-fn can_stack_remote_slab(
-    existing_id: u16,
-    stacked_id: u16,
-    incoming_id: u16,
-    registry: &BlockRegistry,
-) -> bool {
-    if existing_id == 0 || stacked_id != 0 {
-        return false;
-    }
-    let Some(existing_name) = registry.name_opt(existing_id) else {
-        return false;
-    };
-    let Some(incoming_name) = registry.name_opt(incoming_id) else {
-        return false;
-    };
-    let Some(existing_variant) = slab_variant_from_name_sync(existing_name) else {
-        return false;
-    };
-    let Some(incoming_variant) = slab_variant_from_name_sync(incoming_name) else {
-        return false;
-    };
-    slabs_are_complementary_sync(existing_variant, incoming_variant)
-}
-
-fn slab_variant_from_name_sync(name: &str) -> Option<u8> {
-    if name.ends_with("_slab_block") {
-        return Some(0);
-    }
-    if name.ends_with("_slab_top_block") {
-        return Some(1);
-    }
-    if name.ends_with("_slab_north_block") {
-        return Some(2);
-    }
-    if name.ends_with("_slab_south_block") {
-        return Some(3);
-    }
-    if name.ends_with("_slab_east_block") {
-        return Some(4);
-    }
-    if name.ends_with("_slab_west_block") {
-        return Some(5);
-    }
-    None
-}
-
-fn slabs_are_complementary_sync(a: u8, b: u8) -> bool {
-    matches!((a, b), (0, 1) | (1, 0) | (2, 3) | (3, 2) | (4, 5) | (5, 4))
 }
 
 /// Spawns multiplayer drop for the `client` module.

@@ -108,6 +108,53 @@ struct StructureMiningState {
     target: Option<StructureMiningTarget>,
 }
 
+#[derive(Resource, Default)]
+struct MultiplayerStructureReconcileQueue {
+    pending_chunks: HashSet<IVec2>,
+}
+
+const MULTIPLAYER_STRUCTURE_RECONCILE_CHUNKS_PER_FRAME: usize = 2;
+const MINING_PARTICLE_INTERVAL_SECS: f32 = 0.045;
+const MINING_PARTICLE_LIFETIME_MIN: f32 = 5.0;
+const MINING_PARTICLE_LIFETIME_MAX: f32 = 5.0;
+const MINING_RUBBLE_LIFETIME_MIN: f32 = 5.0;
+const MINING_RUBBLE_LIFETIME_MAX: f32 = 5.0;
+const MINING_RUBBLE_RADIUS_MAX_METERS: f32 = 1.0;
+
+#[derive(Resource, Default)]
+struct MiningDebrisFxAssets {
+    initialized: bool,
+    cube: Handle<Mesh>,
+}
+
+#[derive(Resource, Default)]
+struct MiningDebrisEmitterState {
+    next_emit_at: f32,
+    active_target: Option<(IVec3, BlockId)>,
+}
+
+#[derive(Component)]
+struct MiningDebrisVisual;
+
+#[derive(Component)]
+struct MiningDebrisLifetime {
+    age: f32,
+    lifetime: f32,
+}
+
+#[derive(Component)]
+struct MiningDebrisMotion {
+    velocity: Vec3,
+    angular_velocity: Vec3,
+    resting: bool,
+}
+
+#[derive(Component, Clone, Copy)]
+struct MiningRubblePiece {
+    origin: Vec3,
+    max_radius: f32,
+}
+
 /// Represents block event handler used by the `logic::events::block_event_handler` module.
 pub struct BlockEventHandler;
 
@@ -169,24 +216,35 @@ impl Plugin for BlockEventHandler {
     fn build(&self, app: &mut App) {
         app.init_resource::<StructureRuntimeState>();
         app.init_resource::<StructureMiningState>();
+        app.init_resource::<MultiplayerStructureReconcileQueue>();
+        app.init_resource::<MiningDebrisFxAssets>();
+        app.init_resource::<MiningDebrisEmitterState>();
         app.add_systems(
             Update,
             (
                 sync_structures_for_loaded_chunks.in_set(VoxelStage::WorldEdit),
                 enforce_block_texture_nearest_sampler_system.in_set(VoxelStage::WorldEdit),
+                ensure_mining_debris_fx_assets.in_set(VoxelStage::WorldEdit),
                 configure_structure_mesh_collider_name_filters.in_set(VoxelStage::WorldEdit),
                 cleanup_structure_none_mesh_colliders.in_set(VoxelStage::WorldEdit),
                 apply_structure_style_material_system.in_set(VoxelStage::WorldEdit),
                 (block_break_handler, sync_mining_overlay)
                     .chain()
                     .in_set(VoxelStage::WorldEdit),
+                update_mining_debris_fx.in_set(VoxelStage::WorldEdit),
                 block_place_handler.in_set(VoxelStage::WorldEdit),
+                (
+                    collect_multiplayer_structure_reconcile_chunks,
+                    reconcile_multiplayer_structure_visuals,
+                )
+                    .chain()
+                    .in_set(VoxelStage::Meshing),
             )
                 .run_if(in_state(AppState::InGame(InGameStates::Game))),
         );
         app.add_systems(
             OnExit(AppState::InGame(InGameStates::Game)),
-            cleanup_structure_runtime_on_exit,
+            (cleanup_structure_runtime_on_exit, cleanup_mining_debris_fx).chain(),
         );
     }
 }
@@ -218,6 +276,7 @@ fn cleanup_structure_runtime_on_exit(
     mut commands: Commands,
     mut runtime: ResMut<StructureRuntimeState>,
     mut structure_mining: ResMut<StructureMiningState>,
+    mut emitter_state: ResMut<MiningDebrisEmitterState>,
 ) {
     for (_, entity) in runtime.spawned_entities.drain() {
         safe_despawn_entity(&mut commands, entity);
@@ -226,6 +285,113 @@ fn cleanup_structure_runtime_on_exit(
     runtime.records_by_chunk.clear();
     runtime.loaded_chunks.clear();
     structure_mining.target = None;
+    emitter_state.active_target = None;
+    emitter_state.next_emit_at = 0.0;
+}
+
+fn ensure_mining_debris_fx_assets(
+    mut fx_assets: ResMut<MiningDebrisFxAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    if fx_assets.initialized {
+        return;
+    }
+
+    fx_assets.cube = meshes.add(Mesh::from(Cuboid::new(1.0, 1.0, 1.0)));
+    fx_assets.initialized = true;
+}
+
+fn update_mining_debris_fx(
+    mut commands: Commands,
+    time: Res<Time>,
+    registry: Res<BlockRegistry>,
+    chunk_map: Res<ChunkMap>,
+    mut debris_q: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut MiningDebrisLifetime,
+            Option<&mut MiningDebrisMotion>,
+            Option<&MiningRubblePiece>,
+        ),
+        With<MiningDebrisVisual>,
+    >,
+) {
+    let dt = time.delta_secs();
+    if dt <= 0.0 {
+        return;
+    }
+
+    for (entity, mut transform, mut lifetime, maybe_motion, maybe_rubble) in &mut debris_q {
+        lifetime.age += dt;
+        if lifetime.age >= lifetime.lifetime {
+            safe_despawn_entity(&mut commands, entity);
+            continue;
+        }
+
+        if let Some(mut motion) = maybe_motion {
+            if motion.resting {
+                motion.velocity = Vec3::ZERO;
+                motion.angular_velocity = Vec3::ZERO;
+                continue;
+            }
+
+            motion.velocity.y -= 6.8 * dt;
+            let damping = if maybe_rubble.is_some() { 4.2 } else { 2.1 };
+            motion.velocity *= 1.0 - (damping * dt).clamp(0.0, 0.92);
+            transform.translation += motion.velocity * dt;
+
+            if let Some(rubble) = maybe_rubble {
+                let delta = transform.translation - rubble.origin;
+                let horiz = Vec2::new(delta.x, delta.z);
+                let dist = horiz.length();
+                if dist > rubble.max_radius && dist > f32::EPSILON {
+                    let clamped = horiz / dist * rubble.max_radius;
+                    transform.translation.x = rubble.origin.x + clamped.x;
+                    transform.translation.z = rubble.origin.z + clamped.y;
+                    motion.velocity.x *= 0.25;
+                    motion.velocity.z *= 0.25;
+                }
+            }
+
+            let half = transform.scale.max_element().max(0.01) * 0.5;
+            let foot = transform.translation - Vec3::Y * (half + 0.03);
+            let wx = foot.x.floor() as i32;
+            let wy = foot.y.floor() as i32;
+            let wz = foot.z.floor() as i32;
+            let below = get_block_world(&chunk_map, IVec3::new(wx, wy, wz));
+            let below_is_support =
+                below != 0 && !registry.is_fluid(below) && registry.stats(below).solid;
+            if below_is_support && motion.velocity.y <= 0.0 {
+                let ground_top = wy as f32 + 1.0;
+                if transform.translation.y - half <= ground_top {
+                    transform.translation.y = ground_top + half;
+                    motion.velocity = Vec3::ZERO;
+                    motion.angular_velocity = Vec3::ZERO;
+                    motion.resting = true;
+                    continue;
+                }
+            }
+
+            if motion.angular_velocity.length_squared() > 0.000_001 {
+                let ang = motion.angular_velocity * dt;
+                let spin = Quat::from_euler(EulerRot::XYZ, ang.x, ang.y, ang.z);
+                transform.rotation = spin * transform.rotation;
+            }
+        }
+    }
+}
+
+fn cleanup_mining_debris_fx(
+    mut commands: Commands,
+    q_debris: Query<Entity, With<MiningDebrisVisual>>,
+    mut emitter_state: ResMut<MiningDebrisEmitterState>,
+) {
+    for entity in &q_debris {
+        safe_despawn_entity(&mut commands, entity);
+    }
+    emitter_state.active_target = None;
+    emitter_state.next_emit_at = 0.0;
 }
 
 /// Runs the `block_break_handler` routine for block break handler in the `logic::events::block_event_handler` module.
@@ -233,6 +399,8 @@ fn block_break_handler(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     time: Res<Time>,
+    fx_assets: Res<MiningDebrisFxAssets>,
+    mut emitter_state: ResMut<MiningDebrisEmitterState>,
     buttons: Res<ButtonInput<MouseButton>>,
     selection: Res<SelectionState>,
     registry: Res<BlockRegistry>,
@@ -273,6 +441,7 @@ fn block_break_handler(
     {
         state.target = None;
         structure_mining.target = None;
+        emitter_state.active_target = None;
         return;
     }
 
@@ -287,6 +456,7 @@ fn block_break_handler(
         }
         state.target = None;
         structure_mining.target = None;
+        emitter_state.active_target = None;
         return;
     }
 
@@ -296,16 +466,19 @@ fn block_break_handler(
 
     if game_mode.0.eq(&GameMode::Spectator) {
         structure_mining.target = None;
+        emitter_state.active_target = None;
         return;
     }
     if !buttons.pressed(MouseButton::Left) {
         state.target = None;
         structure_mining.target = None;
+        emitter_state.active_target = None;
         return;
     }
 
     if let Some(structure_hit) = selection.structure_hit {
         state.target = None;
+        emitter_state.active_target = None;
         handle_structure_break(
             &mut commands,
             &mut meshes,
@@ -330,12 +503,14 @@ fn block_break_handler(
 
     let Some(hit) = selection.hit else {
         state.target = None;
+        emitter_state.active_target = None;
         return;
     };
 
     let id_now = hit.block_id;
     if id_now == 0 {
         state.target = None;
+        emitter_state.active_target = None;
         return;
     }
 
@@ -350,9 +525,11 @@ fn block_break_handler(
             return;
         }
         state.target = None;
+        emitter_state.active_target = None;
     } else if prop_block {
         // Props (e.g. tall grass) break instantly in survival.
         state.target = None;
+        emitter_state.active_target = None;
     } else {
         let duration = (break_time_for(id_now, &registry)
             / mining_speed_multiplier(requirement, held_tool))
@@ -368,14 +545,26 @@ fn block_break_handler(
                 started_at: now,
                 duration,
             });
+            emitter_state.active_target = Some((hit.block_pos, id_now));
+            emitter_state.next_emit_at = now;
             return;
         }
 
         if let Some(target) = state.target {
             if mining_progress(now, &target) < 1.0 {
+                spawn_mining_hit_particles(
+                    &mut commands,
+                    fx_assets.as_ref(),
+                    &registry,
+                    hit,
+                    id_now,
+                    now,
+                    &mut emitter_state,
+                );
                 return;
             }
         } else {
+            emitter_state.active_target = None;
             return;
         }
     }
@@ -383,6 +572,7 @@ fn block_break_handler(
     let world_loc = hit.block_pos;
     if !remove_hit_block_occupant(&mut chunk_map, world_loc, id_now, hit.is_stacked) {
         state.target = None;
+        emitter_state.active_target = None;
         return;
     }
     mark_dirty_block_and_neighbors(&mut chunk_map, world_loc, &mut ev_dirty);
@@ -429,6 +619,7 @@ fn block_break_handler(
             &mut commands,
             &mut meshes,
             &registry,
+            &chunk_map,
             &item_registry,
             id_now,
             world_loc,
@@ -436,7 +627,151 @@ fn block_break_handler(
         );
     }
 
+    if !creative_mode {
+        spawn_mining_rubble_pile(
+            &mut commands,
+            fx_assets.as_ref(),
+            &registry,
+            id_now,
+            world_loc,
+        );
+    }
+
     state.target = None;
+    emitter_state.active_target = None;
+}
+
+fn spawn_mining_hit_particles(
+    commands: &mut Commands,
+    fx_assets: &MiningDebrisFxAssets,
+    registry: &BlockRegistry,
+    hit: crate::core::entities::player::block_selection::BlockHit,
+    block_id: BlockId,
+    now: f32,
+    emitter_state: &mut MiningDebrisEmitterState,
+) {
+    if !fx_assets.initialized
+        || block_id == 0
+        || registry.is_air(block_id)
+        || registry.is_fluid(block_id)
+    {
+        return;
+    }
+
+    let target_key = (hit.block_pos, block_id);
+    if emitter_state.active_target != Some(target_key) {
+        emitter_state.active_target = Some(target_key);
+        emitter_state.next_emit_at = now;
+    }
+    if now < emitter_state.next_emit_at {
+        return;
+    }
+    emitter_state.next_emit_at = now + MINING_PARTICLE_INTERVAL_SECS;
+
+    let spawn_count = if rand_f32() < 0.45 { 2 } else { 1 };
+    let s = VOXEL_SIZE;
+    let face_normal = face_offset(hit.face).as_vec3().normalize_or_zero();
+    let hit_world = Vec3::new(
+        (hit.block_pos.x as f32 + hit.hit_local.x) * s,
+        (hit.block_pos.y as f32 + hit.hit_local.y) * s,
+        (hit.block_pos.z as f32 + hit.hit_local.z) * s,
+    ) + face_normal * 0.03;
+    let material = registry.material(block_id);
+
+    for _ in 0..spawn_count {
+        let tangent = random_unit_vector3();
+        let jitter = Vec3::new(
+            rand_range(-0.045, 0.045),
+            rand_range(-0.045, 0.045),
+            rand_range(-0.045, 0.045),
+        );
+        let velocity = face_normal * rand_range(0.28, 0.72)
+            + tangent * rand_range(0.08, 0.42)
+            + Vec3::Y * rand_range(0.05, 0.34);
+        let size = rand_range(0.028, 0.058) * s;
+        let lifetime = rand_range(MINING_PARTICLE_LIFETIME_MIN, MINING_PARTICLE_LIFETIME_MAX);
+
+        commands.spawn((
+            MiningDebrisVisual,
+            MiningDebrisLifetime { age: 0.0, lifetime },
+            MiningDebrisMotion {
+                velocity,
+                angular_velocity: random_unit_vector3() * rand_range(5.0, 14.0),
+                resting: false,
+            },
+            Mesh3d(fx_assets.cube.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_translation(hit_world + jitter).with_scale(Vec3::splat(size)),
+            Visibility::default(),
+            NotShadowCaster,
+            NotShadowReceiver,
+            Name::new("MiningHitParticle"),
+        ));
+    }
+}
+
+fn spawn_mining_rubble_pile(
+    commands: &mut Commands,
+    fx_assets: &MiningDebrisFxAssets,
+    registry: &BlockRegistry,
+    block_id: BlockId,
+    world_loc: IVec3,
+) {
+    if !fx_assets.initialized
+        || block_id == 0
+        || registry.is_air(block_id)
+        || registry.is_fluid(block_id)
+    {
+        return;
+    }
+
+    let s = VOXEL_SIZE;
+    let center = Vec3::new(
+        (world_loc.x as f32 + 0.5) * s,
+        (world_loc.y as f32 + 0.03) * s,
+        (world_loc.z as f32 + 0.5) * s,
+    );
+    let material = registry.material(block_id);
+    let piece_count = rand_i32(10, 18);
+
+    for _ in 0..piece_count {
+        let angle = rand_range(0.0, std::f32::consts::TAU);
+        let radius = rand_range(0.04, MINING_RUBBLE_RADIUS_MAX_METERS * 0.65);
+        let offset = Vec3::new(
+            angle.cos() * radius,
+            rand_range(0.0, 0.12),
+            angle.sin() * radius,
+        );
+        let size = rand_range(0.045, 0.13) * s;
+        let lifetime = rand_range(MINING_RUBBLE_LIFETIME_MIN, MINING_RUBBLE_LIFETIME_MAX);
+        let initial_velocity = Vec3::new(
+            rand_range(-0.18, 0.18),
+            rand_range(0.05, 0.42),
+            rand_range(-0.18, 0.18),
+        );
+        let spawn_pos = center + offset;
+
+        commands.spawn((
+            MiningDebrisVisual,
+            MiningDebrisLifetime { age: 0.0, lifetime },
+            MiningDebrisMotion {
+                velocity: initial_velocity,
+                angular_velocity: random_unit_vector3() * rand_range(1.5, 7.5),
+                resting: false,
+            },
+            MiningRubblePiece {
+                origin: center,
+                max_radius: MINING_RUBBLE_RADIUS_MAX_METERS,
+            },
+            Mesh3d(fx_assets.cube.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_translation(spawn_pos).with_scale(Vec3::splat(size)),
+            Visibility::default(),
+            NotShadowCaster,
+            NotShadowReceiver,
+            Name::new("MiningRubblePiece"),
+        ));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -687,6 +1022,16 @@ fn block_place_handler(
         open_workbench_menu_requests.write(OpenWorkbenchMenuRequest);
         return;
     }
+    if let Some(hit) = sel.hit
+        && block_has_workbench_ui(get_block_world(&chunk_map, hit.block_pos), &registry)
+        && !shift_held
+    {
+        // Block interaction UI has priority over hammer right-click interaction.
+        active_structure_recipe.selected_recipe_name = None;
+        active_structure_placement.rotation_quarters = 0;
+        open_workbench_menu_requests.write(OpenWorkbenchMenuRequest);
+        return;
+    }
 
     let held_item_id = selected_hotbar_item_id(&inventory, hotbar_selection.as_deref());
     let holding_hammer = held_item_id
@@ -730,6 +1075,85 @@ fn block_place_handler(
             let style_source_item_id = consumed_requirements
                 .style_source_item_id
                 .or_else(|| resolve_default_structure_style_item_id(recipe, &item_registry));
+            let style_source_block_id = style_source_item_id
+                .and_then(|item_id| item_registry.block_for_item(item_id))
+                .filter(|block_id| *block_id != 0);
+
+            if !multiplayer_connection.uses_local_save_data() {
+                let Some(registered_block_id) =
+                    structure_runtime_placeholder_block_id(recipe, &registry, rotation_quarters)
+                else {
+                    bevy::log::warn!(
+                        "Structure recipe '{}' has no registered block id for rotation {}; cannot place in multiplayer.",
+                        recipe.name,
+                        rotation_quarters
+                    );
+                    return;
+                };
+
+                let (chunk_coord, local) = world_to_chunk_xz(place_origin.x, place_origin.z);
+                let lx = local.x.clamp(0, (CX as i32 - 1) as u32) as usize;
+                let lz = local.y.clamp(0, (CZ as i32 - 1) as u32) as usize;
+                let ly = (place_origin.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+                if let Some(fc) = fluids.0.get_mut(&chunk_coord) {
+                    fc.set(lx, ly, lz, false);
+                }
+                if let Some(mut access) = world_access_mut(&mut chunk_map, place_origin) {
+                    access.set(registered_block_id);
+                    access.set_stacked(style_source_block_id.unwrap_or(0));
+                } else {
+                    return;
+                }
+                mark_dirty_block_and_neighbors(&mut chunk_map, place_origin, &mut ev_dirty);
+
+                let name = registry
+                    .name_opt(registered_block_id)
+                    .unwrap_or("")
+                    .to_string();
+                place_ev.write(BlockPlaceByPlayerEvent {
+                    location: place_origin,
+                    block_id: registered_block_id,
+                    stacked_block_id: style_source_block_id.unwrap_or(0),
+                    block_name: name,
+                });
+
+                let structure_entity = spawn_structure_model_entity(
+                    &mut commands,
+                    &asset_server,
+                    recipe,
+                    place_origin,
+                    rotation_quarters,
+                    rotation_steps,
+                    consumed_requirements.drop_requirements.clone(),
+                    style_source_item_id,
+                );
+                clear_props_within_structure_volume(
+                    place_origin,
+                    recipe,
+                    rotation_quarters,
+                    &mut chunk_map,
+                    &registry,
+                    &mut ev_dirty,
+                );
+                register_structure_in_runtime(
+                    &mut structure_runtime,
+                    structure_entity,
+                    recipe,
+                    place_origin,
+                    rotation_quarters,
+                    rotation_steps,
+                    style_source_item_id,
+                    consumed_requirements.drop_requirements.as_slice(),
+                    &item_registry,
+                    multiplayer_connection.uses_local_save_data(),
+                    ws.as_deref(),
+                    region_cache.as_deref_mut(),
+                );
+
+                active_structure_recipe.selected_recipe_name = None;
+                active_structure_placement.rotation_quarters = 0;
+                return;
+            }
 
             let structure_entity = spawn_structure_model_entity(
                 &mut commands,
@@ -855,6 +1279,13 @@ fn block_place_handler(
         fc.set(lx, ly, lz, false);
     }
 
+    let existing_primary_id = get_block_world(&chunk_map, world_pos);
+    let (network_block_id, network_stacked_block_id) = if place_into_stacked {
+        (existing_primary_id, place_id)
+    } else {
+        (place_id, 0)
+    };
+
     if let Some(mut access) = world_access_mut(&mut chunk_map, world_pos) {
         if place_into_stacked {
             access.set_stacked(place_id);
@@ -879,7 +1310,8 @@ fn block_place_handler(
     let name = registry.name_opt(place_id).unwrap_or("").to_string();
     place_ev.write(BlockPlaceByPlayerEvent {
         location: world_pos,
-        block_id: place_id,
+        block_id: network_block_id,
+        stacked_block_id: network_stacked_block_id,
         block_name: name,
     });
 }
@@ -1086,6 +1518,53 @@ fn structure_has_workbench_ui(meta: &PlacedStructureMetadata) -> bool {
             .localized_name
             .eq_ignore_ascii_case("workbench_block")
     })
+}
+
+#[inline]
+fn block_has_workbench_ui(block_id: u16, registry: &BlockRegistry) -> bool {
+    if block_id == 0 {
+        return false;
+    }
+    registry.def_opt(block_id).is_some_and(|def| {
+        let localized = def.localized_name.to_ascii_lowercase();
+        let key = def.name.to_ascii_uppercase();
+        localized == "workbench_block"
+            || localized.starts_with("workbench_block_r")
+            || key == "KEY_WORKBENCH_BLOCK"
+            || key.starts_with("KEY_WORKBENCH_BLOCK_R")
+    })
+}
+
+#[inline]
+fn structure_runtime_placeholder_localized_name(
+    base_localized_name: &str,
+    rotation_quarters: u8,
+) -> String {
+    let normalized = normalize_rotation_quarters(rotation_quarters as i32);
+    if normalized == 0 {
+        base_localized_name.to_string()
+    } else {
+        format!("{base_localized_name}_r{normalized}")
+    }
+}
+
+fn structure_runtime_placeholder_block_id(
+    recipe: &BuildingStructureRecipe,
+    registry: &BlockRegistry,
+    rotation_quarters: u8,
+) -> Option<u16> {
+    let registration = recipe.model_meta.block_registration.as_ref()?;
+    let normalized = normalize_rotation_quarters(rotation_quarters as i32);
+    if normalized == 0 {
+        return registration.block_id.filter(|block_id| *block_id != 0);
+    }
+    let localized = structure_runtime_placeholder_localized_name(
+        registration.localized_name.as_str(),
+        normalized,
+    );
+    registry
+        .id_opt(localized.as_str())
+        .or_else(|| registration.block_id.filter(|block_id| *block_id != 0))
 }
 
 fn is_structure_collider_entity(
@@ -1333,6 +1812,7 @@ fn sync_structures_for_loaded_chunks(
     ws: Option<Res<WorldSave>>,
     mut region_cache: Option<ResMut<RegionCache>>,
     mut runtime: ResMut<StructureRuntimeState>,
+    mut reconcile_queue: ResMut<MultiplayerStructureReconcileQueue>,
 ) {
     let Some(structure_recipe_registry) = structure_recipe_registry.as_ref() else {
         return;
@@ -1355,7 +1835,12 @@ fn sync_structures_for_loaded_chunks(
         } else {
             Vec::new()
         };
-        runtime.records_by_chunk.insert(coord, entries.clone());
+        if !uses_local_save_data {
+            reconcile_queue.pending_chunks.insert(coord);
+        }
+        if uses_local_save_data || !entries.is_empty() {
+            runtime.records_by_chunk.insert(coord, entries.clone());
+        }
 
         for entry in entries {
             let place_origin = IVec3::new(
@@ -1414,7 +1899,9 @@ fn sync_structures_for_loaded_chunks(
         .collect();
     for coord in unloaded {
         runtime.loaded_chunks.remove(&coord);
-        runtime.records_by_chunk.remove(&coord);
+        if uses_local_save_data {
+            runtime.records_by_chunk.remove(&coord);
+        }
 
         let keys: Vec<PlacedStructureKey> = runtime
             .spawned_entities
@@ -1427,6 +1914,184 @@ fn sync_structures_for_loaded_chunks(
                 runtime.entity_to_key.remove(&entity);
                 safe_despawn_entity(&mut commands, entity);
             }
+        }
+    }
+}
+
+fn collect_multiplayer_structure_reconcile_chunks(
+    multiplayer_connection: Res<MultiplayerConnectionState>,
+    mut dirty_events: MessageReader<SubChunkNeedRemeshEvent>,
+    mut queue: ResMut<MultiplayerStructureReconcileQueue>,
+) {
+    if multiplayer_connection.uses_local_save_data() {
+        for _ in dirty_events.read() {}
+        queue.pending_chunks.clear();
+        return;
+    }
+
+    for event in dirty_events.read() {
+        queue.pending_chunks.insert(event.coord);
+    }
+}
+
+fn reconcile_multiplayer_structure_visuals(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    item_registry: Res<ItemRegistry>,
+    registry: Res<BlockRegistry>,
+    chunk_map: Res<ChunkMap>,
+    multiplayer_connection: Res<MultiplayerConnectionState>,
+    structure_recipe_registry: Option<Res<BuildingStructureRecipeRegistry>>,
+    mut runtime: ResMut<StructureRuntimeState>,
+    mut queue: ResMut<MultiplayerStructureReconcileQueue>,
+) {
+    if multiplayer_connection.uses_local_save_data() {
+        queue.pending_chunks.clear();
+        return;
+    }
+    if queue.pending_chunks.is_empty() {
+        return;
+    }
+    let Some(structure_recipe_registry) = structure_recipe_registry.as_ref() else {
+        queue.pending_chunks.clear();
+        return;
+    };
+
+    let mut recipe_by_block_id: HashMap<u16, (&BuildingStructureRecipe, u8, u8)> = HashMap::new();
+    for recipe in &structure_recipe_registry.recipes {
+        for rotation_quarters in 0..4u8 {
+            let Some(block_id) =
+                structure_runtime_placeholder_block_id(recipe, &registry, rotation_quarters)
+            else {
+                continue;
+            };
+            let rotation_steps = normalize_rotation_steps((rotation_quarters as i32) * 2);
+            recipe_by_block_id.insert(block_id, (recipe, rotation_quarters, rotation_steps));
+        }
+    }
+    if recipe_by_block_id.is_empty() {
+        queue.pending_chunks.clear();
+        return;
+    }
+
+    let process_limit = MULTIPLAYER_STRUCTURE_RECONCILE_CHUNKS_PER_FRAME.max(1);
+    let queued_chunks: Vec<IVec2> = queue
+        .pending_chunks
+        .iter()
+        .copied()
+        .take(process_limit)
+        .collect();
+    for coord in &queued_chunks {
+        queue.pending_chunks.remove(coord);
+    }
+    for coord in queued_chunks {
+        let Some(chunk) = chunk_map.chunks.get(&coord) else {
+            continue;
+        };
+
+        let mut expected_keys: HashMap<
+            PlacedStructureKey,
+            (&BuildingStructureRecipe, IVec3, Option<ItemId>),
+        > = HashMap::new();
+        for y in 0..CY {
+            for z in 0..CZ {
+                for x in 0..CX {
+                    let block_id = chunk.get(x, y, z);
+                    let Some((recipe, rotation_quarters, rotation_steps)) =
+                        recipe_by_block_id.get(&block_id).copied()
+                    else {
+                        continue;
+                    };
+
+                    let place_origin = IVec3::new(
+                        coord.x * CX as i32 + x as i32,
+                        Y_MIN + y as i32,
+                        coord.y * CZ as i32 + z as i32,
+                    );
+                    let key = placed_structure_key(
+                        coord,
+                        recipe.name.clone(),
+                        place_origin,
+                        rotation_quarters,
+                        rotation_steps,
+                    );
+                    let style_source_item_id = item_registry
+                        .item_for_block(chunk.get_stacked(x, y, z))
+                        .filter(|item_id| *item_id != 0);
+                    expected_keys.entry(key).or_insert((
+                        recipe,
+                        place_origin,
+                        style_source_item_id,
+                    ));
+                }
+            }
+        }
+
+        let existing_keys: Vec<PlacedStructureKey> = runtime
+            .spawned_entities
+            .keys()
+            .filter(|key| key.origin_chunk == coord)
+            .cloned()
+            .collect();
+        for key in existing_keys {
+            if expected_keys.contains_key(&key) {
+                continue;
+            }
+            if let Some(entity) = runtime.spawned_entities.remove(&key) {
+                runtime.entity_to_key.remove(&entity);
+                safe_despawn_entity(&mut commands, entity);
+            }
+        }
+
+        for (key, (recipe, place_origin, stacked_style_item_id)) in expected_keys {
+            if runtime.spawned_entities.contains_key(&key) {
+                continue;
+            }
+            let matching_entry = runtime.records_by_chunk.get(&coord).and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| structure_entry_matches_key(entry, &key))
+            });
+            let (drop_requirements, style_source_item_id) = if let Some(entry) = matching_entry {
+                let drop_requirements =
+                    resolve_structure_drop_requirements_for_entry(entry, recipe, &item_registry);
+                let style_source_item_id = resolve_structure_style_source_item_id_for_entry(
+                    entry,
+                    drop_requirements.as_slice(),
+                    recipe,
+                    &item_registry,
+                );
+                (drop_requirements, style_source_item_id)
+            } else {
+                let fallback_entry = StructureRegionEntry {
+                    recipe_name: recipe.name.clone(),
+                    place_origin: [place_origin.x, place_origin.y, place_origin.z],
+                    rotation_quarters: key.rotation_quarters,
+                    rotation_steps: Some(key.rotation_steps),
+                    style_item: String::new(),
+                    drop_items: Vec::new(),
+                };
+                let drop_requirements = resolve_structure_drop_requirements_for_entry(
+                    &fallback_entry,
+                    recipe,
+                    &item_registry,
+                );
+                let style_source_item_id = stacked_style_item_id
+                    .or_else(|| resolve_default_structure_style_item_id(recipe, &item_registry));
+                (drop_requirements, style_source_item_id)
+            };
+            let entity = spawn_structure_model_entity(
+                &mut commands,
+                &asset_server,
+                recipe,
+                place_origin,
+                key.rotation_quarters,
+                key.rotation_steps,
+                drop_requirements,
+                style_source_item_id,
+            );
+            runtime.spawned_entities.insert(key.clone(), entity);
+            runtime.entity_to_key.insert(entity, key);
         }
     }
 }
@@ -1511,6 +2176,20 @@ fn placed_structure_key(
         rotation_quarters,
         rotation_steps,
     }
+}
+
+fn structure_entry_matches_key(entry: &StructureRegionEntry, key: &PlacedStructureKey) -> bool {
+    let entry_rotation_steps = normalize_rotation_steps(
+        entry
+            .rotation_steps
+            .map_or((entry.rotation_quarters as i32) * 2, i32::from),
+    );
+    let entry_rotation_quarters = rotation_steps_to_placement_quarters(entry_rotation_steps);
+
+    entry.recipe_name == key.recipe_name
+        && entry.place_origin == [key.place_origin.x, key.place_origin.y, key.place_origin.z]
+        && entry_rotation_quarters == key.rotation_quarters
+        && entry_rotation_steps == key.rotation_steps
 }
 
 fn load_structure_records_for_chunk(
@@ -2457,6 +3136,38 @@ fn rotated_structure_offset(
         2 => (size_x - 1 - local_x, size_z - 1 - local_z),
         _ => (size_z - 1 - local_z, local_x),
     }
+}
+
+#[inline]
+fn rand_f32() -> f32 {
+    rand::random::<f32>()
+}
+
+#[inline]
+fn rand_range(min: f32, max: f32) -> f32 {
+    min + (max - min) * rand_f32()
+}
+
+#[inline]
+fn rand_i32(min: i32, max: i32) -> i32 {
+    if min >= max {
+        return min;
+    }
+    let span = (max - min + 1) as u32;
+    min + (rand::random::<u32>() % span) as i32
+}
+
+#[inline]
+fn random_unit_vector3() -> Vec3 {
+    let mut v = Vec3::new(
+        rand_range(-1.0, 1.0),
+        rand_range(-1.0, 1.0),
+        rand_range(-1.0, 1.0),
+    );
+    if v.length_squared() <= 1e-6 {
+        v = Vec3::X;
+    }
+    v.normalize()
 }
 
 include!("block_event_handler/overlay.rs");

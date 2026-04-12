@@ -25,6 +25,10 @@ struct TerrainParams {
   leaf_tint: vec4<f32>,
   // x: prop nearest sampling flag, y: wind strength, z: wind frequency, w: time
   material_cfg: vec4<f32>,
+  // x: wobble enabled, y: amplitude, z: frequency, w: vertical contribution
+  mining_wobble_cfg: vec4<f32>,
+  // xyz: mining target block coords (world), w: progress (0..1), <0 when inactive
+  mining_target: vec4<f32>,
 };
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: TerrainParams;
@@ -34,6 +38,45 @@ struct TerrainParams {
 fn hash12(p: vec2<f32>) -> f32 {
   let h = dot(p, vec2<f32>(127.1, 311.7));
   return fract(sin(h) * 43758.5453);
+}
+
+fn hash22(p: vec2<f32>) -> vec2<f32> {
+  return vec2<f32>(
+    hash12(p + vec2<f32>(31.27, 91.41)),
+    hash12(p + vec2<f32>(17.83, 47.77))
+  );
+}
+
+// Distance to Worley cell borders (small values == near crack-like boundaries).
+fn worley_edge(p: vec2<f32>) -> f32 {
+  let ip = floor(p);
+  let fp = fract(p);
+  var d1 = 1e9;
+  var d2 = 1e9;
+
+  var oy: i32 = -1;
+  loop {
+    if (oy > 1) { break; }
+    var ox: i32 = -1;
+    loop {
+      if (ox > 1) { break; }
+      let b = vec2<f32>(f32(ox), f32(oy));
+      let feature = b + hash22(ip + b);
+      let r = feature - fp;
+      let d = dot(r, r);
+      if (d < d1) {
+        d2 = d1;
+        d1 = d;
+      } else if (d < d2) {
+        d2 = d;
+      }
+      ox = ox + 1;
+    }
+    oy = oy + 1;
+  }
+
+  let e = sqrt(max(d2, 0.0)) - sqrt(max(d1, 0.0));
+  return max(e, 0.0);
 }
 
 @vertex
@@ -153,7 +196,53 @@ fn fragment(in: VOut) -> @location(0) vec4<f32> {
     discard;
   }
 
+  var surface_rgb = tex.rgb;
+  if (params.mining_target.w >= 0.0) {
+    let sample_cell = floor(in.world_pos - n * 0.001);
+    let target_cell = params.mining_target.xyz;
+    let on_target = all(abs(sample_cell - target_cell) < vec3<f32>(0.5));
+    if (on_target) {
+      let progress = clamp(params.mining_target.w, 0.0, 1.0);
+      let local = clamp(in.world_pos - target_cell, vec3<f32>(0.0), vec3<f32>(1.0));
+
+      let an = abs(n);
+      var crack_uv = vec2<f32>(0.0, 0.0);
+      if (an.y >= an.x && an.y >= an.z) {
+        crack_uv = local.xz;
+      } else if (an.x >= an.z) {
+        crack_uv = local.zy;
+      } else {
+        crack_uv = local.xy;
+      }
+
+      // Clean progression: cracks appear at center and spread outward with smooth edge.
+      let radial_dist = distance(crack_uv, vec2<f32>(0.5, 0.5));
+      let reveal_radius = progress * 0.72;
+      let reveal = 1.0 - smoothstep(reveal_radius - 0.10, reveal_radius + 0.02, radial_dist);
+
+      let macro_scale = 8.0;
+      let micro_scale = 16.0;
+      let edge_macro = worley_edge(crack_uv * macro_scale);
+      let edge_micro = worley_edge(crack_uv * micro_scale + vec2<f32>(17.0, 9.0));
+      let width_macro = 0.018 + (0.095 - 0.018) * progress;
+      let width_micro = 0.010 + (0.045 - 0.010) * progress;
+      let crack_macro = 1.0 - smoothstep(0.0, width_macro, edge_macro);
+      let crack_micro = 1.0 - smoothstep(0.0, width_micro, edge_micro);
+      let crack_mask = clamp((crack_macro * 0.85 + crack_micro * 0.35) * reveal, 0.0, 1.0);
+
+      let crack_darkness = (0.18 + 0.62 * progress) * crack_mask;
+      surface_rgb = surface_rgb * (1.0 - crack_darkness);
+
+      // Subtle "bröckeln": darker chips near strong crack regions at high progress.
+      let chip_cell = floor(crack_uv * (macro_scale * 1.6));
+      let chip_noise = hash12(chip_cell + vec2<f32>(3.0, 11.0));
+      let chip_threshold = 0.985 - progress * 0.22;
+      let chip = step(chip_threshold, chip_noise) * crack_mask;
+      surface_rgb = surface_rgb * (1.0 - chip * (0.08 + 0.18 * progress));
+    }
+  }
+
   let diff = 0.35 + 0.65 * max(dot(n, l), 0.0);
-  let lit = vec4<f32>(tex.rgb * diff, tex.a);
+  let lit = vec4<f32>(surface_rgb * diff, tex.a);
   return apply_fog(fog, lit, in.world_pos, view.world_position.xyz);
 }

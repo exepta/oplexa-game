@@ -176,7 +176,7 @@ pub(super) struct MultiplayerClientRuntime {
 /// Represents terminal interrupt exit state used by the `client` module.
 #[derive(Resource, Default)]
 pub(super) struct TerminalInterruptExitState {
-    pub(super) started_at: Option<f64>,
+    pub(super) handled: bool,
 }
 
 impl MultiplayerClientRuntime {

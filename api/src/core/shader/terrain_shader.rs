@@ -11,6 +11,8 @@ pub struct TerrainChunkParams {
     pub leaf_cfg: Vec4,
     pub leaf_tint: Vec4,
     pub material_cfg: Vec4,
+    pub mining_wobble_cfg: Vec4,
+    pub mining_target: Vec4,
 }
 
 /// Material for greedy terrain chunk meshes using atlas-local tiling in shader.

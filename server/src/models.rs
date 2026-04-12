@@ -22,6 +22,7 @@ pub struct HostedPlayer {
 pub struct HostedDrop {
     pub drop_id: u64,
     pub location: [i32; 3],
+    pub item_id: u16,
     pub block_id: u16,
     pub has_motion: bool,
     pub spawn_translation: [f32; 3],

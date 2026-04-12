@@ -759,6 +759,120 @@ fn spawn_hardcoded_ui(
         .with_children(|root| {
             root.spawn((
                 Node {
+                    width: Val::Percent(100.0),
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(16.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Start,
+                    ..default()
+                },
+                BackgroundColor::DEFAULT,
+                Pickable::IGNORE,
+            ))
+            .with_children(|overlay| {
+                overlay
+                    .spawn((
+                        Name::new("UI HUD Looked Block Card"),
+                        HudLookedBlockCard,
+                        Visibility::Hidden,
+                        Node {
+                            width: Val::Px(360.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            padding: UiRect::all(Val::Px(10.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.06, 0.08, 0.11, 0.78)),
+                        BorderColor::all(Color::srgba(0.22, 0.28, 0.33, 0.88)),
+                        Pickable::IGNORE,
+                    ))
+                    .with_children(|card| {
+                        card.spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                column_gap: Val::Px(10.0),
+                                align_items: AlignItems::Start,
+                                ..default()
+                            },
+                            BackgroundColor::DEFAULT,
+                            Pickable::IGNORE,
+                        ))
+                        .with_children(|content| {
+                            content.spawn((
+                                Img {
+                                    src: None,
+                                    ..default()
+                                },
+                                Node {
+                                    width: Val::Px(48.0),
+                                    height: Val::Px(48.0),
+                                    min_width: Val::Px(48.0),
+                                    min_height: Val::Px(48.0),
+                                    max_width: Val::Px(48.0),
+                                    max_height: Val::Px(48.0),
+                                    ..default()
+                                },
+                                HudLookedBlockIcon,
+                                Pickable::IGNORE,
+                            ));
+                            content
+                                .spawn((
+                                    Node {
+                                        flex_direction: FlexDirection::Column,
+                                        row_gap: Val::Px(2.0),
+                                        flex_grow: 1.0,
+                                        ..default()
+                                    },
+                                    BackgroundColor::DEFAULT,
+                                    Pickable::IGNORE,
+                                ))
+                                .with_children(|text| {
+                                    text.spawn((
+                                        Paragraph {
+                                            text: String::new(),
+                                            ..default()
+                                        },
+                                        HudLookedBlockDisplayName,
+                                        UiTextTone::Heading,
+                                        Pickable::IGNORE,
+                                    ));
+                                    text.spawn((
+                                        Paragraph {
+                                            text: String::new(),
+                                            ..default()
+                                        },
+                                        HudLookedBlockLocalizedName,
+                                        UiTextTone::Darker,
+                                        Pickable::IGNORE,
+                                    ));
+                                    text.spawn((
+                                        Paragraph {
+                                            text: String::new(),
+                                            ..default()
+                                        },
+                                        HudLookedBlockLevel,
+                                        UiTextTone::Darker,
+                                        Pickable::IGNORE,
+                                    ));
+                                });
+                        });
+                        card.spawn((
+                            ProgressBar {
+                                value: 0.0,
+                                min: 0.0,
+                                max: 100.0,
+                                ..default()
+                            },
+                            HudLookedBlockProgress,
+                            Visibility::Hidden,
+                            Pickable::IGNORE,
+                        ));
+                    });
+            });
+
+            root.spawn((
+                Node {
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
                     row_gap: Val::Px(8.0),

@@ -17,8 +17,9 @@ use crate::core::inventory::creative_panel::{
     CREATIVE_PANEL_COLUMNS, CREATIVE_PANEL_PAGE_SIZE, CreativePanelState,
 };
 use crate::core::inventory::items::{
-    ItemId, ItemRegistry, build_block_item_icon_image, parse_block_icon_cache_key,
-    player_drop_spawn_motion, player_drop_world_location, spawn_player_dropped_item_stack,
+    ItemId, ItemRegistry, block_requirement_for_id, build_block_item_icon_image,
+    infer_tool_from_item_key, parse_block_icon_cache_key, player_drop_spawn_motion,
+    player_drop_world_location, spawn_player_dropped_item_stack,
 };
 use crate::core::inventory::recipe::{
     ActiveStructurePlacementState, ActiveStructureRecipeState, BuildingMaterialRequirementSource,
@@ -34,7 +35,9 @@ use crate::core::states::world_gen::{LoadingPhase, LoadingProgress};
 use crate::core::ui::{HOTBAR_SLOTS, HotbarSelectionState, UiInteractionState};
 use crate::core::world::biome::func::dominant_biome_at_p_chunks;
 use crate::core::world::biome::registry::BiomeRegistry;
-use crate::core::world::block::{BlockRegistry, SelectedBlock, VOXEL_SIZE};
+use crate::core::world::block::{
+    BlockRegistry, MiningState, SelectedBlock, VOXEL_SIZE, mining_progress,
+};
 use crate::core::world::chunk::{CaveTracker, ChunkMap, LoadCenter};
 use crate::core::world::chunk_dimension::{CX, CZ, SEC_COUNT, world_to_chunk_xz};
 use crate::core::world::fluid::{FluidMap, WaterMeshIndex};
@@ -274,6 +277,24 @@ struct HudRoot;
 /// Represents hotbar selection tooltip text used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct HotbarSelectionTooltipText;
+/// Represents looked block hud card used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HudLookedBlockCard;
+/// Represents looked block hud icon used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HudLookedBlockIcon;
+/// Represents looked block hud localized display name used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HudLookedBlockDisplayName;
+/// Represents looked block hud localized id used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HudLookedBlockLocalizedName;
+/// Represents looked block hud mining level text used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HudLookedBlockLevel;
+/// Represents looked block hud mining progress bar used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HudLookedBlockProgress;
 /// Represents player inventory root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct PlayerInventoryRoot;
@@ -982,6 +1003,10 @@ impl Plugin for HardcodedUiPlugin {
                     sync_hud_hotbar_ui,
                 )
                     .run_if(in_state(AppState::InGame(InGameStates::Game))),
+            )
+            .add_systems(
+                Update,
+                sync_hud_looked_block_card.run_if(in_state(AppState::InGame(InGameStates::Game))),
             )
             .add_systems(
                 Update,

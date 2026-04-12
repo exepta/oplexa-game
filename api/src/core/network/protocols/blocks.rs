@@ -24,12 +24,17 @@ impl ClientBlockBreak {
 pub struct ClientBlockPlace {
     pub location: [i32; 3],
     pub block_id: u16,
+    pub stacked_block_id: u16,
 }
 
 impl ClientBlockPlace {
     /// Creates a new instance for the `core::network::protocols::blocks` module.
-    pub fn new(location: [i32; 3], block_id: u16) -> Self {
-        Self { location, block_id }
+    pub fn new(location: [i32; 3], block_id: u16, stacked_block_id: u16) -> Self {
+        Self {
+            location,
+            block_id,
+            stacked_block_id,
+        }
     }
 }
 
@@ -56,15 +61,17 @@ pub struct ServerBlockPlace {
     pub player_id: u64,
     pub location: [i32; 3],
     pub block_id: u16,
+    pub stacked_block_id: u16,
 }
 
 impl ServerBlockPlace {
     /// Creates a new instance for the `core::network::protocols::blocks` module.
-    pub fn new(player_id: u64, location: [i32; 3], block_id: u16) -> Self {
+    pub fn new(player_id: u64, location: [i32; 3], block_id: u16, stacked_block_id: u16) -> Self {
         Self {
             player_id,
             location,
             block_id,
+            stacked_block_id,
         }
     }
 }

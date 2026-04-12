@@ -54,8 +54,10 @@ pub struct UvRect {
 pub struct BlockDef {
     pub localized_name: String,
     pub name: String,
+    pub mesh_visible: bool,
     pub overridable: bool,
     pub stats: BlockStats,
+    pub mining_wobble: MiningWobbleConfig,
     pub prop: Option<PropDefinition>,
     pub collider: BlockColliderDefinition,
     pub uv_top: UvRect,
@@ -88,6 +90,39 @@ pub struct BlockStats {
     pub solid: bool,
     #[serde(default)]
     pub emissive: f32,
+}
+
+/// Per-block configuration for mining hit wobble in terrain shader.
+#[derive(Deserialize, Clone, Copy, Debug)]
+pub struct MiningWobbleConfig {
+    #[serde(default = "d_true")]
+    pub enabled: bool,
+    #[serde(default = "default_mining_wobble_amplitude")]
+    pub amplitude: f32,
+    #[serde(default = "default_mining_wobble_frequency")]
+    pub frequency: f32,
+    #[serde(default = "default_mining_wobble_vertical_scale")]
+    pub vertical_scale: f32,
+}
+
+impl Default for MiningWobbleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: d_true(),
+            amplitude: default_mining_wobble_amplitude(),
+            frequency: default_mining_wobble_frequency(),
+            vertical_scale: default_mining_wobble_vertical_scale(),
+        }
+    }
+}
+
+impl MiningWobbleConfig {
+    pub fn sanitized(mut self) -> Self {
+        self.amplitude = self.amplitude.clamp(0.0, 0.20);
+        self.frequency = self.frequency.clamp(0.1, 120.0);
+        self.vertical_scale = self.vertical_scale.clamp(0.0, 2.0);
+        self
+    }
 }
 
 /// Defines collider behavior for one block.
@@ -410,8 +445,10 @@ impl BlockRegistry {
         defs.push(BlockDef {
             localized_name: "air".into(),
             name: "air".into(),
+            mesh_visible: false,
             overridable: false,
             stats: BlockStats::default(),
+            mining_wobble: MiningWobbleConfig::default(),
             prop: None,
             collider: BlockColliderDefinition::default(),
             uv_top: Z,
@@ -430,6 +467,7 @@ impl BlockRegistry {
             let (localized_name, display_name) =
                 normalize_block_identity(&block_json.localized_name, &block_json.name);
             let collider = block_json.collider.sanitized();
+            let mining_wobble = block_json.mining_wobble.sanitized();
             let tex_dir = block_json
                 .texture_dir
                 .clone()
@@ -485,8 +523,10 @@ impl BlockRegistry {
             defs.push(BlockDef {
                 localized_name,
                 name: display_name,
+                mesh_visible: true,
                 overridable: block_json.overridable,
                 stats: block_json.stats,
+                mining_wobble,
                 prop: block_json.prop.map(PropDefinition::sanitized),
                 collider,
                 uv_top,
@@ -512,8 +552,10 @@ impl BlockRegistry {
         defs.push(BlockDef {
             localized_name: "air".into(),
             name: "air".into(),
+            mesh_visible: false,
             overridable: false,
             stats: BlockStats::default(),
+            mining_wobble: MiningWobbleConfig::default(),
             prop: None,
             collider: BlockColliderDefinition::default(),
             uv_top: Z,
@@ -532,13 +574,16 @@ impl BlockRegistry {
             let (localized_name, display_name) =
                 normalize_block_identity(&block_json.localized_name, &block_json.name);
             let collider = block_json.collider.sanitized();
+            let mining_wobble = block_json.mining_wobble.sanitized();
             let id = defs.len() as BlockId;
             name_to_id.insert(localized_name.clone(), id);
             defs.push(BlockDef {
                 localized_name,
                 name: display_name,
+                mesh_visible: true,
                 overridable: block_json.overridable,
                 stats: block_json.stats,
+                mining_wobble,
                 prop: block_json.prop.map(PropDefinition::sanitized),
                 collider,
                 uv_top: Z,
@@ -586,8 +631,8 @@ impl BlockRegistry {
         });
         let collider = if stats.solid {
             BlockColliderDefinition {
-                kind: BlockColliderKind::FullBlock,
-                block_entities: true,
+                kind: BlockColliderKind::None,
+                block_entities: false,
                 size_m: default_block_collider_size_m(),
                 offset_m: [0.0, 0.0, 0.0],
             }
@@ -606,8 +651,10 @@ impl BlockRegistry {
         self.defs.push(BlockDef {
             localized_name: normalized_localized_name,
             name: display_name,
+            mesh_visible: false,
             overridable: !stats.solid,
             stats,
+            mining_wobble: MiningWobbleConfig::default(),
             prop: None,
             collider,
             uv_top: Z,
@@ -618,6 +665,60 @@ impl BlockRegistry {
             uv_west: Z,
             image,
             material,
+        });
+        id
+    }
+
+    /// Ensures that one runtime-defined block exists in headless mode and returns its id.
+    pub fn ensure_runtime_block_headless(
+        &mut self,
+        localized_name: &str,
+        name: &str,
+        stats: BlockStats,
+    ) -> BlockId {
+        let normalized_localized_name = normalize_runtime_block_localized_name(localized_name);
+        if let Some(existing) = self.id_opt(normalized_localized_name.as_str()) {
+            return existing;
+        }
+
+        let display_name =
+            normalize_runtime_block_name_key(name, normalized_localized_name.as_str());
+        let collider = if stats.solid {
+            BlockColliderDefinition {
+                kind: BlockColliderKind::None,
+                block_entities: false,
+                size_m: default_block_collider_size_m(),
+                offset_m: [0.0, 0.0, 0.0],
+            }
+        } else {
+            BlockColliderDefinition {
+                kind: BlockColliderKind::None,
+                block_entities: false,
+                size_m: default_block_collider_size_m(),
+                offset_m: [0.0, 0.0, 0.0],
+            }
+        };
+
+        let id = self.defs.len() as BlockId;
+        self.name_to_id
+            .insert(normalized_localized_name.clone(), id);
+        self.defs.push(BlockDef {
+            localized_name: normalized_localized_name,
+            name: display_name,
+            mesh_visible: false,
+            overridable: !stats.solid,
+            stats,
+            mining_wobble: MiningWobbleConfig::default(),
+            prop: None,
+            collider,
+            uv_top: Z,
+            uv_bottom: Z,
+            uv_north: Z,
+            uv_east: Z,
+            uv_south: Z,
+            uv_west: Z,
+            image: Handle::default(),
+            material: Handle::default(),
         });
         id
     }
@@ -1065,6 +1166,7 @@ fn block_json_paths(blocks_dir: &str) -> Vec<PathBuf> {
             paths.push(path);
         }
     }
+    paths.sort_unstable();
     paths
 }
 
@@ -1089,6 +1191,8 @@ struct BlockJson {
     pub texture: TextureFacesJson,
     #[serde(default)]
     pub stats: BlockStats,
+    #[serde(default)]
+    pub mining_wobble: MiningWobbleConfig,
     #[serde(default)]
     pub overridable: bool,
     #[serde(default)]
@@ -1233,6 +1337,21 @@ fn guess_tex_dir_from_block_name(block_name: &str) -> String {
 #[inline]
 fn default_block_collider_size_m() -> [f32; 3] {
     [1.0, 1.0, 1.0]
+}
+
+#[inline]
+fn default_mining_wobble_amplitude() -> f32 {
+    0.055
+}
+
+#[inline]
+fn default_mining_wobble_frequency() -> f32 {
+    28.0
+}
+
+#[inline]
+fn default_mining_wobble_vertical_scale() -> f32 {
+    0.35
 }
 
 /// Normalizes block identity fields loaded from JSON.

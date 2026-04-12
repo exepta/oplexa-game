@@ -282,6 +282,13 @@ pub fn handle_block_break_messages(
         );
 
         if message.drop_block_id != 0 {
+            let drop_item_id = state
+                .item_registry
+                .item_for_block(message.drop_block_id)
+                .unwrap_or(0);
+            if drop_item_id == 0 {
+                continue;
+            }
             let drop_id = if message.drop_id != 0 {
                 message.drop_id
             } else {
@@ -295,6 +302,7 @@ pub fn handle_block_break_messages(
                 HostedDrop {
                     drop_id,
                     location: message.location,
+                    item_id: drop_item_id,
                     block_id: message.drop_block_id,
                     has_motion: false,
                     spawn_translation: [0.0, 0.0, 0.0],
@@ -306,6 +314,7 @@ pub fn handle_block_break_messages(
                 &ServerDropSpawn::new(
                     drop_id,
                     message.location,
+                    drop_item_id,
                     message.drop_block_id,
                     false,
                     [0.0, 0.0, 0.0],
@@ -339,12 +348,21 @@ pub fn handle_block_place_messages(
         player.last_seen = Instant::now();
         let player_id = player.player_id;
 
-        if !state.set_block_persisted(message.location, message.block_id) {
+        if !state.set_block_persisted_with_stacked(
+            message.location,
+            message.block_id,
+            message.stacked_block_id,
+        ) {
             continue;
         }
 
         let _ = multi_sender.send::<_, OrderedReliable>(
-            &ServerBlockPlace::new(player_id, message.location, message.block_id),
+            &ServerBlockPlace::new(
+                player_id,
+                message.location,
+                message.block_id,
+                message.stacked_block_id,
+            ),
             *server,
             &NetworkTarget::All,
         );
@@ -371,9 +389,28 @@ pub fn handle_drop_item_messages(
         };
         player.last_seen = Instant::now();
 
-        if message.block_id == 0 || message.amount == 0 {
+        if message.amount == 0 {
             continue;
         }
+
+        let item_id =
+            if message.item_id != 0 && state.item_registry.def_opt(message.item_id).is_some() {
+                message.item_id
+            } else if message.block_id != 0 {
+                state
+                    .item_registry
+                    .item_for_block(message.block_id)
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+        if item_id == 0 {
+            continue;
+        }
+        let block_id = state
+            .item_registry
+            .block_for_item(item_id)
+            .unwrap_or(message.block_id);
 
         let amount = message.amount.min(128);
         for i in 0..amount {
@@ -390,7 +427,8 @@ pub fn handle_drop_item_messages(
                 HostedDrop {
                     drop_id,
                     location: message.location,
-                    block_id: message.block_id,
+                    item_id,
+                    block_id,
                     has_motion: true,
                     spawn_translation,
                     initial_velocity: message.initial_velocity,
@@ -401,7 +439,8 @@ pub fn handle_drop_item_messages(
                 &ServerDropSpawn::new(
                     drop_id,
                     message.location,
-                    message.block_id,
+                    item_id,
+                    block_id,
                     true,
                     spawn_translation,
                     message.initial_velocity,
@@ -439,7 +478,7 @@ pub fn handle_drop_pickup_messages(
         };
 
         let _ = multi_sender.send::<_, OrderedReliable>(
-            &ServerDropPicked::new(drop.drop_id, player_id, drop.block_id),
+            &ServerDropPicked::new(drop.drop_id, player_id, drop.item_id, drop.block_id),
             *server,
             &NetworkTarget::All,
         );

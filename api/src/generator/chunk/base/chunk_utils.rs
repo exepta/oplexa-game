@@ -145,8 +145,12 @@ pub async fn mesh_subchunk_async(
 
         !reg.opaque(neigh_id)
     };
-    let is_cube_voxel =
-        |id: BlockId| id != 0 && !reg.is_crossed_prop(id) && reg.custom_mesh_box(id).is_none();
+    let is_cube_voxel = |id: BlockId| {
+        id != 0
+            && reg.mesh_visible(id)
+            && !reg.is_crossed_prop(id)
+            && reg.custom_mesh_box(id).is_none()
+    };
 
     // +Y (Top): greedy in XZ plane for each Y slice.
     let mut top_mask = vec![0u16; CX * CZ];
@@ -379,6 +383,9 @@ pub async fn mesh_subchunk_async(
         for z in 0..CZ {
             for x in 0..CX {
                 let id = chunk.get(x, y, z);
+                if !reg.mesh_visible(id) {
+                    continue;
+                }
                 let Some((size_m, offset_m)) = reg.custom_mesh_box(id) else {
                     continue;
                 };
@@ -479,6 +486,9 @@ pub async fn mesh_subchunk_async(
         for z in 0..CZ {
             for x in 0..CX {
                 let id = chunk.get_stacked(x, y, z);
+                if !reg.mesh_visible(id) {
+                    continue;
+                }
                 let Some((size_m, offset_m)) = reg.custom_mesh_box(id) else {
                     continue;
                 };
@@ -579,6 +589,9 @@ pub async fn mesh_subchunk_async(
         for z in 0..CZ {
             for x in 0..CX {
                 let id = chunk.get(x, y, z);
+                if !reg.mesh_visible(id) {
+                    continue;
+                }
                 let Some(prop) = reg.prop(id) else {
                     continue;
                 };
