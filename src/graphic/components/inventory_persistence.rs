@@ -355,9 +355,7 @@ fn decode_inventory_blob(blob: &[u8]) -> Result<PlayerPersistedData, &'static st
             position = Some([x, y, z]);
             offset += 12;
         }
-        if version == PLAYER_INVENTORY_SAVE_VERSION
-            && (flags & PLAYER_SAVE_FLAG_HAS_YAW_PITCH) != 0
-        {
+        if (flags & PLAYER_SAVE_FLAG_HAS_YAW_PITCH) != 0 {
             if blob.len() < offset + 8 {
                 return Err("truncated yaw/pitch");
             }

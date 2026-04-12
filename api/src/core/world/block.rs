@@ -54,6 +54,7 @@ pub struct UvRect {
 pub struct BlockDef {
     pub localized_name: String,
     pub name: String,
+    pub mesh_visible: bool,
     pub overridable: bool,
     pub stats: BlockStats,
     pub prop: Option<PropDefinition>,
@@ -410,6 +411,7 @@ impl BlockRegistry {
         defs.push(BlockDef {
             localized_name: "air".into(),
             name: "air".into(),
+            mesh_visible: false,
             overridable: false,
             stats: BlockStats::default(),
             prop: None,
@@ -485,6 +487,7 @@ impl BlockRegistry {
             defs.push(BlockDef {
                 localized_name,
                 name: display_name,
+                mesh_visible: true,
                 overridable: block_json.overridable,
                 stats: block_json.stats,
                 prop: block_json.prop.map(PropDefinition::sanitized),
@@ -512,6 +515,7 @@ impl BlockRegistry {
         defs.push(BlockDef {
             localized_name: "air".into(),
             name: "air".into(),
+            mesh_visible: false,
             overridable: false,
             stats: BlockStats::default(),
             prop: None,
@@ -537,6 +541,7 @@ impl BlockRegistry {
             defs.push(BlockDef {
                 localized_name,
                 name: display_name,
+                mesh_visible: true,
                 overridable: block_json.overridable,
                 stats: block_json.stats,
                 prop: block_json.prop.map(PropDefinition::sanitized),
@@ -586,8 +591,8 @@ impl BlockRegistry {
         });
         let collider = if stats.solid {
             BlockColliderDefinition {
-                kind: BlockColliderKind::FullBlock,
-                block_entities: true,
+                kind: BlockColliderKind::None,
+                block_entities: false,
                 size_m: default_block_collider_size_m(),
                 offset_m: [0.0, 0.0, 0.0],
             }
@@ -606,6 +611,7 @@ impl BlockRegistry {
         self.defs.push(BlockDef {
             localized_name: normalized_localized_name,
             name: display_name,
+            mesh_visible: false,
             overridable: !stats.solid,
             stats,
             prop: None,
@@ -618,6 +624,59 @@ impl BlockRegistry {
             uv_west: Z,
             image,
             material,
+        });
+        id
+    }
+
+    /// Ensures that one runtime-defined block exists in headless mode and returns its id.
+    pub fn ensure_runtime_block_headless(
+        &mut self,
+        localized_name: &str,
+        name: &str,
+        stats: BlockStats,
+    ) -> BlockId {
+        let normalized_localized_name = normalize_runtime_block_localized_name(localized_name);
+        if let Some(existing) = self.id_opt(normalized_localized_name.as_str()) {
+            return existing;
+        }
+
+        let display_name =
+            normalize_runtime_block_name_key(name, normalized_localized_name.as_str());
+        let collider = if stats.solid {
+            BlockColliderDefinition {
+                kind: BlockColliderKind::None,
+                block_entities: false,
+                size_m: default_block_collider_size_m(),
+                offset_m: [0.0, 0.0, 0.0],
+            }
+        } else {
+            BlockColliderDefinition {
+                kind: BlockColliderKind::None,
+                block_entities: false,
+                size_m: default_block_collider_size_m(),
+                offset_m: [0.0, 0.0, 0.0],
+            }
+        };
+
+        let id = self.defs.len() as BlockId;
+        self.name_to_id
+            .insert(normalized_localized_name.clone(), id);
+        self.defs.push(BlockDef {
+            localized_name: normalized_localized_name,
+            name: display_name,
+            mesh_visible: false,
+            overridable: !stats.solid,
+            stats,
+            prop: None,
+            collider,
+            uv_top: Z,
+            uv_bottom: Z,
+            uv_north: Z,
+            uv_east: Z,
+            uv_south: Z,
+            uv_west: Z,
+            image: Handle::default(),
+            material: Handle::default(),
         });
         id
     }
@@ -1065,6 +1124,7 @@ fn block_json_paths(blocks_dir: &str) -> Vec<PathBuf> {
             paths.push(path);
         }
     }
+    paths.sort_unstable();
     paths
 }
 

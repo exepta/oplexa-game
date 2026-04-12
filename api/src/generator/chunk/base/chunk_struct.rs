@@ -31,6 +31,7 @@ pub struct RegLiteEntry {
     pub east: UvRect,
     pub south: UvRect,
     pub west: UvRect,
+    pub mesh_visible: bool,
     pub opaque: bool,
     pub fluid: bool,
     pub foliage: bool,
@@ -60,6 +61,7 @@ impl RegLite {
                     east: reg.uv(id, Face::East),
                     south: reg.uv(id, Face::South),
                     west: reg.uv(id, Face::West),
+                    mesh_visible: reg.def(id).mesh_visible,
                     opaque: reg.def(id).stats.opaque,
                     fluid: reg.def(id).stats.fluid,
                     foliage: reg.def(id).stats.foliage,
@@ -91,6 +93,11 @@ impl RegLite {
             Face::South => e.south,
             Face::West => e.west,
         }
+    }
+    /// Runs the `mesh_visible` routine for mesh visible in the `generator::chunk::chunk_struct` module.
+    #[inline]
+    pub fn mesh_visible(&self, id: BlockId) -> bool {
+        self.map.get(&id).map(|e| e.mesh_visible).unwrap_or(false)
     }
     /// Runs the `opaque` routine for opaque in the `generator::chunk::chunk_struct` module.
     #[inline]

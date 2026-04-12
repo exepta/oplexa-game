@@ -19,5 +19,6 @@ pub struct BlockBreakByPlayerEvent {
 pub struct BlockPlaceByPlayerEvent {
     pub location: IVec3,
     pub block_id: u16,
+    pub stacked_block_id: u16,
     pub block_name: String,
 }

@@ -5,6 +5,7 @@ use api::{
         entities::player::inventory::{
             InventorySlot, PLAYER_INVENTORY_SLOTS, PLAYER_INVENTORY_STACK_MAX, PlayerInventory,
         },
+        inventory::{items::ItemRegistry, recipe::load_building_structure_recipe_registry},
         world::{
             biome::registry::BiomeRegistry,
             block::{BlockId, BlockRegistry},
@@ -78,6 +79,7 @@ pub struct ServerRuntimeConfig {
 pub struct ServerState {
     pub world_root: PathBuf,
     pub block_registry: Arc<BlockRegistry>,
+    pub item_registry: Arc<ItemRegistry>,
     pub biome_registry: Arc<BiomeRegistry>,
     pub tree_registry: Arc<TreeRegistry>,
     pub world_gen_config: WorldGenConfig,
@@ -101,7 +103,34 @@ pub struct ServerState {
 impl ServerState {
     /// Creates a new instance for the `state` module.
     pub fn new(world_root: PathBuf, world_seed: i32) -> Self {
-        let block_registry = Arc::new(BlockRegistry::load_headless("assets/blocks"));
+        let mut block_registry = BlockRegistry::load_headless("assets/blocks");
+        let item_registry = ItemRegistry::load_headless("assets/items", &block_registry);
+        let mut structure_recipe_registry =
+            load_building_structure_recipe_registry("assets/recipes/structures", &item_registry);
+        for recipe in &mut structure_recipe_registry.recipes {
+            let Some(registration) = recipe.model_meta.block_registration.as_mut() else {
+                continue;
+            };
+            let block_id = block_registry.ensure_runtime_block_headless(
+                registration.localized_name.as_str(),
+                registration.name.as_str(),
+                recipe.model_meta.stats.clone(),
+            );
+            for rotation_quarters in 1..4u8 {
+                let localized_name =
+                    format!("{}_r{}", registration.localized_name, rotation_quarters);
+                let name_key = format!("{}_R{}", registration.name, rotation_quarters);
+                let _ = block_registry.ensure_runtime_block_headless(
+                    localized_name.as_str(),
+                    name_key.as_str(),
+                    recipe.model_meta.stats.clone(),
+                );
+            }
+            registration.block_id = Some(block_id);
+        }
+
+        let block_registry = Arc::new(block_registry);
+        let item_registry = Arc::new(item_registry);
         let biome_registry = Arc::new(BiomeRegistry::load_from_folder("assets/biomes"));
         let tree_registry = Arc::new(TreeRegistry::load_from_folder("assets/data/trees"));
         let world_gen_config = WorldGenConfig { seed: world_seed };
@@ -109,6 +138,7 @@ impl ServerState {
         let mut state = Self {
             world_root,
             block_registry,
+            item_registry,
             biome_registry,
             tree_registry,
             world_gen_config,
@@ -132,6 +162,16 @@ impl ServerState {
 
     /// Persists one world-space block into the chunk region data.
     pub fn set_block_persisted(&mut self, location: [i32; 3], block_id: u16) -> bool {
+        self.set_block_persisted_with_stacked(location, block_id, 0)
+    }
+
+    /// Persists one world-space block + optional stacked block into the chunk region data.
+    pub fn set_block_persisted_with_stacked(
+        &mut self,
+        location: [i32; 3],
+        block_id: u16,
+        stacked_block_id: u16,
+    ) -> bool {
         let world_y = location[1];
         if !(Y_MIN..=Y_MAX).contains(&world_y) {
             return false;
@@ -139,14 +179,21 @@ impl ServerState {
 
         let (coord, local) = world_to_chunk_xz(location[0], location[2]);
         let ly = world_y_to_local(world_y);
-        let edits = [(local.x as usize, ly, local.y as usize, block_id)];
+        let edits = [(
+            local.x as usize,
+            ly,
+            local.y as usize,
+            block_id,
+            stacked_block_id,
+        )];
 
         let refill_ocean_water = block_id == 0;
         if let Err(error) = self.persist_chunk_edits(coord, &edits, refill_ocean_water) {
             log::warn!(
-                "Failed to persist block edit at {:?} (id={}): {}",
+                "Failed to persist block edit at {:?} (id={}, stacked={}): {}",
                 location,
                 block_id,
+                stacked_block_id,
                 error
             );
             return false;
@@ -159,7 +206,7 @@ impl ServerState {
     fn persist_chunk_edits(
         &self,
         coord: IVec2,
-        edits: &[(usize, usize, usize, u16)],
+        edits: &[(usize, usize, usize, u16, u16)],
         refill_ocean_water: bool,
     ) -> std::io::Result<()> {
         let border_id = self.block_registry.id_opt("border_block").unwrap_or(0);
@@ -186,8 +233,9 @@ impl ServerState {
             }
         }
 
-        for (lx, ly, lz, block_id) in edits {
+        for (lx, ly, lz, block_id, stacked_block_id) in edits {
             chunk.set(*lx, *ly, *lz, *block_id);
+            chunk.set_stacked(*lx, *ly, *lz, *stacked_block_id);
         }
         if refill_ocean_water && water_id != 0 {
             flood_ocean_connected_water(&mut chunk, SEA_LEVEL, water_id);
@@ -205,7 +253,8 @@ impl ServerState {
             return;
         }
 
-        let mut edits_by_chunk: HashMap<IVec2, Vec<(usize, usize, usize, u16)>> = HashMap::new();
+        let mut edits_by_chunk: HashMap<IVec2, Vec<(usize, usize, usize, u16, u16)>> =
+            HashMap::new();
         for (location, block_id) in overrides {
             let world_y = location[1];
             if !(Y_MIN..=Y_MAX).contains(&world_y) {
@@ -218,6 +267,7 @@ impl ServerState {
                 world_y_to_local(world_y),
                 local.y as usize,
                 block_id,
+                0,
             ));
         }
 
@@ -937,7 +987,7 @@ fn decode_player_blob(blob: &[u8]) -> Result<PlayerPersistedData, &'static str> 
             ];
             offset += 12;
         }
-        if version == PLAYER_SAVE_VERSION && (flags & PLAYER_SAVE_FLAG_HAS_YAW_PITCH) != 0 {
+        if (flags & PLAYER_SAVE_FLAG_HAS_YAW_PITCH) != 0 {
             if blob.len() < offset + 8 {
                 return Err("truncated yaw/pitch");
             }

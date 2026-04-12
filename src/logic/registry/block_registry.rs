@@ -47,6 +47,33 @@ fn start_block_registry(
             registration.name.as_str(),
             recipe.model_meta.stats.clone(),
         );
+        let mut runtime_block_ids = vec![block_id];
+        for rotation_quarters in 1..4u8 {
+            let localized_name = format!("{}_r{}", registration.localized_name, rotation_quarters);
+            let name_key = format!("{}_R{}", registration.name, rotation_quarters);
+            let rotated_block_id = block_registry.ensure_runtime_block(
+                &asset_server,
+                &mut materials,
+                localized_name.as_str(),
+                name_key.as_str(),
+                recipe.model_meta.stats.clone(),
+            );
+            runtime_block_ids.push(rotated_block_id);
+        }
+        // Structure runtime blocks are persisted placeholders (multiplayer/server-side state).
+        // Their visible mesh comes from the GLB scene, so keep the voxel block itself invisible.
+        let placeholder_material = materials.add(StandardMaterial {
+            base_color: Color::srgba(1.0, 1.0, 1.0, 0.0),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            cull_mode: None,
+            ..default()
+        });
+        for runtime_block_id in runtime_block_ids {
+            if let Some(def) = block_registry.defs.get_mut(runtime_block_id as usize) {
+                def.material = placeholder_material.clone();
+            }
+        }
         let item_id =
             item_registry.ensure_runtime_block_item(&asset_server, &block_registry, block_id);
         registration.block_id = Some(block_id);

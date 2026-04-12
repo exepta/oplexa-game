@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct ServerDropSpawn {
     pub drop_id: u64,
     pub location: [i32; 3],
+    pub item_id: u16,
     pub block_id: u16,
     pub has_motion: bool,
     pub spawn_translation: [f32; 3],
@@ -16,6 +17,7 @@ impl ServerDropSpawn {
     pub fn new(
         drop_id: u64,
         location: [i32; 3],
+        item_id: u16,
         block_id: u16,
         has_motion: bool,
         spawn_translation: [f32; 3],
@@ -24,6 +26,7 @@ impl ServerDropSpawn {
         Self {
             drop_id,
             location,
+            item_id,
             block_id,
             has_motion,
             spawn_translation,
@@ -49,6 +52,7 @@ impl ClientDropPickup {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientDropItem {
     pub location: [i32; 3],
+    pub item_id: u16,
     pub block_id: u16,
     pub amount: u16,
     pub spawn_translation: [f32; 3],
@@ -59,6 +63,7 @@ impl ClientDropItem {
     /// Creates a new instance for the `core::network::protocols::drops` module.
     pub fn new(
         location: [i32; 3],
+        item_id: u16,
         block_id: u16,
         amount: u16,
         spawn_translation: [f32; 3],
@@ -66,6 +71,7 @@ impl ClientDropItem {
     ) -> Self {
         Self {
             location,
+            item_id,
             block_id,
             amount,
             spawn_translation,
@@ -79,15 +85,17 @@ impl ClientDropItem {
 pub struct ServerDropPicked {
     pub drop_id: u64,
     pub player_id: u64,
+    pub item_id: u16,
     pub block_id: u16,
 }
 
 impl ServerDropPicked {
     /// Creates a new instance for the `core::network::protocols::drops` module.
-    pub fn new(drop_id: u64, player_id: u64, block_id: u16) -> Self {
+    pub fn new(drop_id: u64, player_id: u64, item_id: u16, block_id: u16) -> Self {
         Self {
             drop_id,
             player_id,
+            item_id,
             block_id,
         }
     }

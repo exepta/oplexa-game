@@ -300,6 +300,7 @@ pub fn handle_auth_messages(
                 world_name: config.world_name.clone(),
                 world_seed: config.world_seed,
                 spawn_translation,
+                spawn_yaw_pitch: [spawn_yaw, spawn_pitch],
                 inventory_slots: player
                     .inventory_slots
                     .iter()
@@ -339,6 +340,7 @@ pub fn handle_auth_messages(
                     &ServerDropSpawn::new(
                         drop.drop_id,
                         drop.location,
+                        drop.item_id,
                         drop.block_id,
                         drop.has_motion,
                         drop.spawn_translation,
