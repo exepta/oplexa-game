@@ -91,7 +91,7 @@ fn spawn_overlay_at(
 ) -> Entity {
     let quad = meshes.add(unit_centered_quad());
     let mat = mats.add(StandardMaterial {
-        base_color: Color::srgba(0.9, 0.9, 0.9, 0.02),
+        base_color: Color::srgba(0.9, 0.9, 0.9, 0.0),
         alpha_mode: AlphaMode::Blend,
         unlit: true,
         cull_mode: None,

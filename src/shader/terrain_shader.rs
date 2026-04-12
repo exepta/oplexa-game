@@ -2,7 +2,7 @@ use crate::core::shader::terrain_shader::{
     TerrainChunkMatIndex, TerrainChunkMaterial, TerrainChunkParams,
 };
 use crate::core::states::states::{AppState, LoadingStates};
-use crate::core::world::block::BlockRegistry;
+use crate::core::world::block::{BlockRegistry, MiningState, mining_progress};
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -50,6 +50,15 @@ fn material_cfg_for_block(reg: &BlockRegistry, id: u16) -> Vec4 {
 }
 
 #[inline]
+fn mining_wobble_cfg_for_block(reg: &BlockRegistry, id: u16) -> Vec4 {
+    let cfg = reg.def(id).mining_wobble;
+    if !cfg.enabled {
+        return Vec4::ZERO;
+    }
+    Vec4::new(1.0, cfg.amplitude, cfg.frequency, cfg.vertical_scale)
+}
+
+#[inline]
 fn terrain_alpha_mode_for_block(reg: &BlockRegistry, id: u16) -> AlphaMode {
     if reg.is_opaque(id) {
         return AlphaMode::Opaque;
@@ -77,6 +86,8 @@ fn setup_chunk_terrain_materials(
             leaf_cfg: Vec4::ZERO,
             leaf_tint: Vec4::new(1.0, 1.0, 1.0, 0.0),
             material_cfg: material_cfg_for_block(&reg, id),
+            mining_wobble_cfg: mining_wobble_cfg_for_block(&reg, id),
+            mining_target: Vec4::new(0.0, 0.0, 0.0, -1.0),
         };
 
         let handle = mats.add(TerrainChunkMaterial {
@@ -117,6 +128,8 @@ fn ensure_chunk_terrain_materials(
             leaf_cfg: Vec4::ZERO,
             leaf_tint: Vec4::new(1.0, 1.0, 1.0, 0.0),
             material_cfg: material_cfg_for_block(&reg, id),
+            mining_wobble_cfg: mining_wobble_cfg_for_block(&reg, id),
+            mining_target: Vec4::new(0.0, 0.0, 0.0, -1.0),
         };
 
         let handle = mats.add(TerrainChunkMaterial {
@@ -132,13 +145,26 @@ fn ensure_chunk_terrain_materials(
 
 fn tick_terrain_material_time(
     time: Res<Time>,
+    mining: Res<MiningState>,
     index: Res<TerrainChunkMatIndex>,
     mut mats: ResMut<Assets<TerrainChunkMaterial>>,
 ) {
     let now = time.elapsed_secs();
+    let mining_target = if let Some(target) = mining.target {
+        Vec4::new(
+            target.loc.x as f32,
+            target.loc.y as f32,
+            target.loc.z as f32,
+            mining_progress(now, &target),
+        )
+    } else {
+        Vec4::new(0.0, 0.0, 0.0, -1.0)
+    };
+
     for handle in index.0.values() {
         if let Some(material) = mats.get_mut(handle) {
             material.params.material_cfg.w = now;
+            material.params.mining_target = mining_target;
         }
     }
 }

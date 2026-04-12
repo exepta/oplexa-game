@@ -131,7 +131,7 @@ fn drop_selected_hotbar_item(
     hotbar_state: Res<HotbarSelectionState>,
     multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
     mut inventory: ResMut<PlayerInventory>,
-    player_q: Query<&Transform, With<Player>>,
+    player_q: Query<(&Transform, Option<&FpsController>), With<Player>>,
     mut drop_requests: MessageWriter<DropItemRequest>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -161,9 +161,10 @@ fn drop_selected_hotbar_item(
         return;
     }
 
-    let Ok(player_tf) = player_q.single() else {
+    let Ok((player_tf, player_ctrl)) = player_q.single() else {
         return;
     };
+    let player_forward = player_drop_forward_vector(player_tf, player_ctrl);
 
     let dropped_item_id = slot.item_id;
     if slot.count <= 1 {
@@ -177,9 +178,8 @@ fn drop_selected_hotbar_item(
         .is_some_and(|state| state.connected)
     {
         let (spawn_center, initial_velocity) =
-            player_drop_spawn_motion(player_tf.translation, player_tf.forward().as_vec3());
-        let world_loc =
-            player_drop_world_location(player_tf.translation, player_tf.forward().as_vec3());
+            player_drop_spawn_motion(player_tf.translation, player_forward);
+        let world_loc = player_drop_world_location(player_tf.translation, player_forward);
         drop_requests.write(DropItemRequest::new(
             dropped_item_id,
             1,
@@ -196,10 +196,22 @@ fn drop_selected_hotbar_item(
             dropped_item_id,
             1,
             player_tf.translation,
-            player_tf.forward().as_vec3(),
+            player_forward,
             time.elapsed_secs(),
         );
     }
+}
+
+#[inline]
+fn player_drop_forward_vector(player_tf: &Transform, player_ctrl: Option<&FpsController>) -> Vec3 {
+    if let Some(ctrl) = player_ctrl {
+        let look_forward =
+            Quat::from_rotation_y(ctrl.yaw) * Quat::from_rotation_x(ctrl.pitch) * Vec3::NEG_Z;
+        if look_forward.length_squared() > 0.000_001 {
+            return look_forward.normalize();
+        }
+    }
+    player_tf.forward().as_vec3()
 }
 
 /// Synchronizes hotbar selected block for the `graphic::components::hud` module.

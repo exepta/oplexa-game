@@ -62,7 +62,7 @@ struct InventoryDragDropDeps<'w, 's> {
     >,
     recipe_preview_panel_q:
         Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<RecipePreviewDialogPanel>>,
-    player_q: Query<'w, 's, &'static Transform, With<Player>>,
+    player_q: Query<'w, 's, (&'static Transform, Option<&'static FpsController>), With<Player>>,
     drop_requests: MessageWriter<'w, DropItemRequest>,
     craft_requests: MessageWriter<'w, CraftHandCraftedRequest>,
     work_table_craft_requests: MessageWriter<'w, CraftWorkTableRequest>,
@@ -491,17 +491,17 @@ fn handle_inventory_drag_and_drop(
             return;
         }
 
-        let Ok(player_tf) = player_q.single() else {
+        let Ok((player_tf, player_ctrl)) = player_q.single() else {
             return;
         };
+        let player_forward = player_drop_forward_vector(player_tf, player_ctrl);
         let dropped_slot = cursor_item.slot;
         cursor_item.slot = InventorySlot::default();
 
         if multiplayer_connection.as_ref().is_some_and(|state| state.connected) {
             let (spawn_center, initial_velocity) =
-                player_drop_spawn_motion(player_tf.translation, player_tf.forward().as_vec3());
-            let world_loc =
-                player_drop_world_location(player_tf.translation, player_tf.forward().as_vec3());
+                player_drop_spawn_motion(player_tf.translation, player_forward);
+            let world_loc = player_drop_world_location(player_tf.translation, player_forward);
             drop_requests.write(DropItemRequest::new(
                 dropped_slot.item_id,
                 dropped_slot.count,
@@ -518,7 +518,7 @@ fn handle_inventory_drag_and_drop(
                 dropped_slot.item_id,
                 dropped_slot.count,
                 player_tf.translation,
-                player_tf.forward().as_vec3(),
+                player_forward,
                 time.elapsed_secs(),
             );
         }
@@ -538,9 +538,10 @@ fn handle_inventory_drag_and_drop(
         if slot.is_empty() {
             return;
         }
-        let Ok(player_tf) = player_q.single() else {
+        let Ok((player_tf, player_ctrl)) = player_q.single() else {
             return;
         };
+        let player_forward = player_drop_forward_vector(player_tf, player_ctrl);
 
         let dropped_item_id = slot.item_id;
         if slot.count <= 1 {
@@ -551,9 +552,8 @@ fn handle_inventory_drag_and_drop(
 
         if multiplayer_connection.as_ref().is_some_and(|state| state.connected) {
             let (spawn_center, initial_velocity) =
-                player_drop_spawn_motion(player_tf.translation, player_tf.forward().as_vec3());
-            let world_loc =
-                player_drop_world_location(player_tf.translation, player_tf.forward().as_vec3());
+                player_drop_spawn_motion(player_tf.translation, player_forward);
+            let world_loc = player_drop_world_location(player_tf.translation, player_forward);
             drop_requests.write(DropItemRequest::new(
                 dropped_item_id,
                 1,
@@ -570,7 +570,7 @@ fn handle_inventory_drag_and_drop(
                 dropped_item_id,
                 1,
                 player_tf.translation,
-                player_tf.forward().as_vec3(),
+                player_forward,
                 time.elapsed_secs(),
             );
         }

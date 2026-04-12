@@ -1885,15 +1885,8 @@ fn simulate_multiplayer_drop_items(
             if has_support {
                 drop.velocity = Vec3::ZERO;
                 if drop.block_visual {
-                    let drag = (1.0 - 4.0 * delta).clamp(0.0, 1.0);
-                    drop.angular_velocity *= drag;
-                    drop.spin_speed *= drag;
-                    if drop.angular_velocity.length_squared() < 0.000_1 {
-                        drop.angular_velocity = Vec3::ZERO;
-                    }
-                    if drop.spin_speed.abs() < 0.01 {
-                        drop.spin_speed = 0.0;
-                    }
+                    drop.angular_velocity = Vec3::ZERO;
+                    drop.spin_speed = 0.0;
                 } else {
                     drop.angular_velocity = Vec3::ZERO;
                     drop.spin_speed = 0.0;
@@ -1924,11 +1917,17 @@ fn simulate_multiplayer_drop_items(
         }
 
         transform.translation.y = ground_top + half;
+        let impact_velocity = drop.velocity;
         drop.velocity = Vec3::ZERO;
         drop.resting = true;
         if drop.block_visual {
-            drop.angular_velocity *= 0.4;
-            drop.spin_speed *= 0.5;
+            drop.angular_velocity = Vec3::ZERO;
+            drop.spin_speed = 0.0;
+            transform.rotation = settled_block_drop_rotation(
+                transform.rotation,
+                transform.translation,
+                impact_velocity,
+            );
         } else {
             drop.angular_velocity = Vec3::ZERO;
             drop.spin_speed = 0.0;
@@ -1942,6 +1941,52 @@ fn flat_item_rotation(current_rotation: Quat) -> Quat {
     let forward = current_rotation * Vec3::Z;
     let yaw = forward.x.atan2(forward.z);
     Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)
+}
+
+#[inline]
+fn settled_block_drop_rotation(
+    current_rotation: Quat,
+    translation: Vec3,
+    impact_velocity: Vec3,
+) -> Quat {
+    let forward = current_rotation * Vec3::Z;
+    let yaw = forward.x.atan2(forward.z);
+    let base = Quat::from_rotation_y(yaw);
+
+    let frac_x = translation.x - translation.x.floor();
+    let frac_z = translation.z - translation.z.floor();
+    let edge_bias_x = (frac_x - 0.5).abs();
+    let edge_bias_z = (frac_z - 0.5).abs();
+    let horizontal_speed = Vec2::new(impact_velocity.x, impact_velocity.z).length();
+
+    let (axis, angle_deg): (Vec3, f32) = if horizontal_speed > 0.45 {
+        let dir = Vec2::new(impact_velocity.x, impact_velocity.z).normalize_or_zero();
+        let axis = Vec3::new(-dir.y, 0.0, dir.x).normalize_or_zero();
+        (
+            if axis.length_squared() > 0.000_001 {
+                axis
+            } else {
+                Vec3::X
+            },
+            72.0,
+        )
+    } else if edge_bias_x.max(edge_bias_z) > 0.34 {
+        if edge_bias_x >= edge_bias_z {
+            (Vec3::Z * if frac_x >= 0.5 { 1.0 } else { -1.0 }, 58.0)
+        } else {
+            (Vec3::X * if frac_z >= 0.5 { -1.0 } else { 1.0 }, 58.0)
+        }
+    } else {
+        let cell_x = translation.x.floor() as i32;
+        let cell_z = translation.z.floor() as i32;
+        if ((cell_x ^ cell_z) & 1) == 0 {
+            (Vec3::X, 90.0)
+        } else {
+            (Vec3::Z, 90.0)
+        }
+    };
+
+    (Quat::from_axis_angle(axis.normalize_or_zero(), angle_deg.to_radians()) * base).normalize()
 }
 
 /// Runs the `send_local_inventory_sync` routine for send local inventory sync in the `client` module.
