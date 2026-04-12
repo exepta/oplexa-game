@@ -142,6 +142,13 @@ pub struct InterfaceConfig {
     /// Language locale (`en_US`, `de_DE`) or language alias (`germany`, `english`).
     #[serde(default = "default_interface_language")]
     pub language: String,
+    /// Lifetime in seconds for mining debris particles.
+    #[serde(
+        default = "default_mining_debris_lifetime_seconds",
+        rename = "mining-debris-lifetime-seconds",
+        alias = "mining_debris_lifetime_seconds"
+    )]
+    pub mining_debris_lifetime_seconds: f32,
 }
 
 impl Default for InterfaceConfig {
@@ -153,6 +160,7 @@ impl Default for InterfaceConfig {
             block_selection_border_color: default_block_selection_border_color_hex(),
             selection_line_width: default_selection_line_width(),
             language: default_interface_language(),
+            mining_debris_lifetime_seconds: default_mining_debris_lifetime_seconds(),
         }
     }
 }
@@ -614,6 +622,11 @@ fn default_selection_line_width() -> f32 {
 /// Runs the `default_interface_language` routine for default interface language in the `core::config` module.
 fn default_interface_language() -> String {
     "en_US".to_string()
+}
+
+/// Runs the `default_mining_debris_lifetime_seconds` routine for default mining debris lifetime seconds in the `core::config` module.
+fn default_mining_debris_lifetime_seconds() -> f32 {
+    3.0
 }
 
 // =======================================================

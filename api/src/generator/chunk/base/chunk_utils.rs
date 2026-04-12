@@ -85,12 +85,34 @@ pub async fn mesh_subchunk_async(
     let y1 = (y0 + SEC_H).min(CY);
     let yh = y1 - y0;
 
-    let (east, west, south, north, snap_y0, _snap_y1) = if let Some(b) = borders {
+    let (
+        east,
+        west,
+        south,
+        north,
+        east_stacked,
+        west_stacked,
+        south_stacked,
+        north_stacked,
+        snap_y0,
+        _snap_y1,
+    ) = if let Some(b) = borders {
         debug_assert_eq!(b.y0, y0, "BorderSnapshot.y0 != sub y0");
         debug_assert_eq!(b.y1, y1, "BorderSnapshot.y1 != sub y1");
-        (b.east, b.west, b.south, b.north, b.y0, b.y1)
+        (
+            b.east,
+            b.west,
+            b.south,
+            b.north,
+            b.east_stacked,
+            b.west_stacked,
+            b.south_stacked,
+            b.north_stacked,
+            b.y0,
+            b.y1,
+        )
     } else {
-        (None, None, None, None, y0, y1)
+        (None, None, None, None, None, None, None, None, y0, y1)
     };
 
     let sample_opt =
@@ -105,6 +127,10 @@ pub async fn mesh_subchunk_async(
     let west_at_opt = |y: usize, z: usize| sample_opt(&west, y, z, CZ);
     let south_at_opt = |y: usize, x: usize| sample_opt(&south, y, x, CX);
     let north_at_opt = |y: usize, x: usize| sample_opt(&north, y, x, CX);
+    let east_stacked_at_opt = |y: usize, z: usize| sample_opt(&east_stacked, y, z, CZ);
+    let west_stacked_at_opt = |y: usize, z: usize| sample_opt(&west_stacked, y, z, CZ);
+    let south_stacked_at_opt = |y: usize, x: usize| sample_opt(&south_stacked, y, x, CX);
+    let north_stacked_at_opt = |y: usize, x: usize| sample_opt(&north_stacked, y, x, CX);
 
     let get = |x: isize, y: isize, z: isize| -> BlockId {
         if x < 0 || y < 0 || z < 0 || x >= CX as isize || y >= CY as isize || z >= CZ as isize {
@@ -112,6 +138,30 @@ pub async fn mesh_subchunk_async(
         } else {
             chunk.blocks[((y as usize) * CZ + (z as usize)) * CX + (x as usize)]
         }
+    };
+    let sample_with_borders = |x: i32, y: i32, z: i32| -> BlockId {
+        if y < 0 || y >= CY as i32 {
+            return 0;
+        }
+        let yu = y as usize;
+
+        if (0..CX as i32).contains(&x) && (0..CZ as i32).contains(&z) {
+            return chunk.get(x as usize, yu, z as usize);
+        }
+
+        if x == -1 && (0..CZ as i32).contains(&z) {
+            return west_at_opt(yu, z as usize).unwrap_or(0);
+        }
+        if x == CX as i32 && (0..CZ as i32).contains(&z) {
+            return east_at_opt(yu, z as usize).unwrap_or(0);
+        }
+        if z == -1 && (0..CX as i32).contains(&x) {
+            return north_at_opt(yu, x as usize).unwrap_or(0);
+        }
+        if z == CZ as i32 && (0..CX as i32).contains(&x) {
+            return south_at_opt(yu, x as usize).unwrap_or(0);
+        }
+        0
     };
     let uvq_tiled = |ur: f32, vr: f32, flip_v: bool| -> [[f32; 2]; 4] {
         if !flip_v {
@@ -136,6 +186,11 @@ pub async fn mesh_subchunk_async(
             return false;
         }
 
+        let self_connect_group = reg.connect_group(self_id);
+        if self_connect_group != 0 && self_connect_group == reg.connect_group(neigh_id) {
+            return false;
+        }
+
         let self_fluid = reg.fluid(self_id);
         let neigh_fluid = reg.fluid(neigh_id);
 
@@ -151,6 +206,395 @@ pub async fn mesh_subchunk_async(
             && !reg.is_crossed_prop(id)
             && reg.custom_mesh_box(id).is_none()
     };
+    let is_connected_cube_voxel = |id: BlockId| is_cube_voxel(id) && reg.has_connected_mask4(id);
+    let face_uv_axes = |face: Face| -> (IVec3, IVec3) {
+        match face {
+            Face::Top => (IVec3::new(1, 0, 0), IVec3::new(0, 0, -1)),
+            Face::Bottom => (IVec3::new(1, 0, 0), IVec3::new(0, 0, 1)),
+            Face::East => (IVec3::new(0, 0, -1), IVec3::new(0, -1, 0)),
+            Face::West => (IVec3::new(0, 0, 1), IVec3::new(0, -1, 0)),
+            Face::South => (IVec3::new(1, 0, 0), IVec3::new(0, -1, 0)),
+            Face::North => (IVec3::new(-1, 0, 0), IVec3::new(0, -1, 0)),
+        }
+    };
+    let connected_mask4 = |id: BlockId, face: Face, x: usize, y: usize, z: usize| -> u8 {
+        let group = reg.connect_group(id);
+        if group == 0 {
+            return 0;
+        }
+        let pos = IVec3::new(x as i32, y as i32, z as i32);
+        let (u_pos, v_pos) = face_uv_axes(face);
+        let mut mask = 0u8;
+        for (bit, off) in [(1u8, u_pos), (2u8, -u_pos), (4u8, v_pos), (8u8, -v_pos)] {
+            let nid = sample_with_borders(pos.x + off.x, pos.y + off.y, pos.z + off.z);
+            if reg.connect_group(nid) == group {
+                mask |= bit;
+            }
+        }
+        mask
+    };
+    let local_box_bounds = |size_m: [f32; 3], offset_m: [f32; 3]| -> ([f32; 3], [f32; 3]) {
+        let half_x = (size_m[0] * 0.5).max(0.0005);
+        let half_y = (size_m[1] * 0.5).max(0.0005);
+        let half_z = (size_m[2] * 0.5).max(0.0005);
+        let cx = 0.5 + offset_m[0];
+        let cy = 0.5 + offset_m[1];
+        let cz = 0.5 + offset_m[2];
+        (
+            [cx - half_x, cy - half_y, cz - half_z],
+            [cx + half_x, cy + half_y, cz + half_z],
+        )
+    };
+    let neighbor_stacked = |x: i32, y: i32, z: i32| -> BlockId {
+        if y < 0 || y >= CY as i32 {
+            return 0;
+        }
+        let yu = y as usize;
+        if (0..CX as i32).contains(&x) && (0..CZ as i32).contains(&z) {
+            return chunk.get_stacked(x as usize, yu, z as usize);
+        }
+        if x == -1 && (0..CZ as i32).contains(&z) {
+            return west_stacked_at_opt(yu, z as usize).unwrap_or(0);
+        }
+        if x == CX as i32 && (0..CZ as i32).contains(&z) {
+            return east_stacked_at_opt(yu, z as usize).unwrap_or(0);
+        }
+        if z == -1 && (0..CX as i32).contains(&x) {
+            return north_stacked_at_opt(yu, x as usize).unwrap_or(0);
+        }
+        if z == CZ as i32 && (0..CX as i32).contains(&x) {
+            return south_stacked_at_opt(yu, x as usize).unwrap_or(0);
+        }
+        0
+    };
+    let overlap = |a0: f32, a1: f32, b0: f32, b1: f32| -> bool {
+        const EPS: f32 = 0.001;
+        (a1.min(b1) - a0.max(b0)) > EPS
+    };
+    let face_occluded_by_bounds = |self_min: [f32; 3],
+                                   self_max: [f32; 3],
+                                   other_min: [f32; 3],
+                                   other_max: [f32; 3],
+                                   face: Face| {
+        const EPS: f32 = 0.001;
+        match face {
+            Face::Top => {
+                overlap(self_min[0], self_max[0], other_min[0], other_max[0])
+                    && overlap(self_min[2], self_max[2], other_min[2], other_max[2])
+                    && other_min[1] <= self_max[1] + EPS
+                    && other_max[1] > self_max[1] + EPS
+            }
+            Face::Bottom => {
+                overlap(self_min[0], self_max[0], other_min[0], other_max[0])
+                    && overlap(self_min[2], self_max[2], other_min[2], other_max[2])
+                    && other_max[1] >= self_min[1] - EPS
+                    && other_min[1] < self_min[1] - EPS
+            }
+            Face::East => {
+                overlap(self_min[1], self_max[1], other_min[1], other_max[1])
+                    && overlap(self_min[2], self_max[2], other_min[2], other_max[2])
+                    && other_min[0] <= self_max[0] + EPS
+                    && other_max[0] > self_max[0] + EPS
+            }
+            Face::West => {
+                overlap(self_min[1], self_max[1], other_min[1], other_max[1])
+                    && overlap(self_min[2], self_max[2], other_min[2], other_max[2])
+                    && other_max[0] >= self_min[0] - EPS
+                    && other_min[0] < self_min[0] - EPS
+            }
+            Face::South => {
+                overlap(self_min[0], self_max[0], other_min[0], other_max[0])
+                    && overlap(self_min[1], self_max[1], other_min[1], other_max[1])
+                    && other_min[2] <= self_max[2] + EPS
+                    && other_max[2] > self_max[2] + EPS
+            }
+            Face::North => {
+                overlap(self_min[0], self_max[0], other_min[0], other_max[0])
+                    && overlap(self_min[1], self_max[1], other_min[1], other_max[1])
+                    && other_max[2] >= self_min[2] - EPS
+                    && other_min[2] < self_min[2] - EPS
+            }
+        }
+    };
+    let same_cell_connected_occludes_face = |self_id: BlockId,
+                                             self_size_m: [f32; 3],
+                                             self_offset_m: [f32; 3],
+                                             other_id: BlockId,
+                                             face: Face|
+     -> bool {
+        let self_group = reg.connect_group(self_id);
+        if other_id == 0 || self_group == 0 || self_group != reg.connect_group(other_id) {
+            return false;
+        }
+        let Some((other_size_m, other_offset_m)) = reg.custom_mesh_box(other_id) else {
+            return false;
+        };
+
+        let ([smin_x, smin_y, smin_z], [smax_x, smax_y, smax_z]) =
+            local_box_bounds(self_size_m, self_offset_m);
+        let ([omin_x, omin_y, omin_z], [omax_x, omax_y, omax_z]) =
+            local_box_bounds(other_size_m, other_offset_m);
+        face_occluded_by_bounds(
+            [smin_x, smin_y, smin_z],
+            [smax_x, smax_y, smax_z],
+            [omin_x, omin_y, omin_z],
+            [omax_x, omax_y, omax_z],
+            face,
+        )
+    };
+    let same_cell_connected_edge_mask = |self_id: BlockId,
+                                         self_size_m: [f32; 3],
+                                         self_offset_m: [f32; 3],
+                                         other_id: BlockId,
+                                         face: Face|
+     -> u8 {
+        const EPS: f32 = 0.001;
+        let self_group = reg.connect_group(self_id);
+        if other_id == 0 || self_group == 0 || self_group != reg.connect_group(other_id) {
+            return 0;
+        }
+        let Some((other_size_m, other_offset_m)) = reg.custom_mesh_box(other_id) else {
+            return 0;
+        };
+
+        let (self_min, self_max) = local_box_bounds(self_size_m, self_offset_m);
+        let (other_min, other_max) = local_box_bounds(other_size_m, other_offset_m);
+        let (u_pos, v_pos) = face_uv_axes(face);
+        let face_normal = match face {
+            Face::Top => IVec3::new(0, 1, 0),
+            Face::Bottom => IVec3::new(0, -1, 0),
+            Face::East => IVec3::new(1, 0, 0),
+            Face::West => IVec3::new(-1, 0, 0),
+            Face::South => IVec3::new(0, 0, 1),
+            Face::North => IVec3::new(0, 0, -1),
+        };
+        let axis_idx = |v: IVec3| -> usize {
+            if v.x != 0 {
+                0
+            } else if v.y != 0 {
+                1
+            } else {
+                2
+            }
+        };
+        let axis_sign = |v: IVec3, axis: usize| -> i32 {
+            match axis {
+                0 => v.x.signum(),
+                1 => v.y.signum(),
+                _ => v.z.signum(),
+            }
+        };
+        let overlap_axis = |axis: usize| -> bool {
+            overlap(
+                self_min[axis],
+                self_max[axis],
+                other_min[axis],
+                other_max[axis],
+            )
+        };
+
+        // Require overlap on face normal axis so only this face-plane is considered.
+        if !overlap_axis(axis_idx(face_normal)) {
+            return 0;
+        }
+
+        let mut out = 0u8;
+        for (bit, dir, orth) in [
+            (1u8, u_pos, v_pos),
+            (2u8, -u_pos, v_pos),
+            (4u8, v_pos, u_pos),
+            (8u8, -v_pos, u_pos),
+        ] {
+            let axis = axis_idx(dir);
+            let sign = axis_sign(dir, axis);
+            let orth_axis = axis_idx(orth);
+            if !overlap_axis(orth_axis) {
+                continue;
+            }
+            let touches = if sign > 0 {
+                other_min[axis] <= self_max[axis] + EPS && other_max[axis] > self_max[axis] + EPS
+            } else {
+                other_max[axis] >= self_min[axis] - EPS && other_min[axis] < self_min[axis] - EPS
+            };
+            if touches {
+                out |= bit;
+            }
+        }
+        out
+    };
+    let connected_neighbor_edge_mask = |self_id: BlockId,
+                                        self_size_m: [f32; 3],
+                                        self_offset_m: [f32; 3],
+                                        face: Face,
+                                        x: usize,
+                                        y: usize,
+                                        z: usize|
+     -> u8 {
+        const EPS: f32 = 0.001;
+        let self_group = reg.connect_group(self_id);
+        if self_group == 0 {
+            return 0;
+        }
+        let (self_min, self_max) = local_box_bounds(self_size_m, self_offset_m);
+        let (u_pos, v_pos) = face_uv_axes(face);
+        let face_normal = match face {
+            Face::Top => IVec3::new(0, 1, 0),
+            Face::Bottom => IVec3::new(0, -1, 0),
+            Face::East => IVec3::new(1, 0, 0),
+            Face::West => IVec3::new(-1, 0, 0),
+            Face::South => IVec3::new(0, 0, 1),
+            Face::North => IVec3::new(0, 0, -1),
+        };
+        let axis_idx = |v: IVec3| -> usize {
+            if v.x != 0 {
+                0
+            } else if v.y != 0 {
+                1
+            } else {
+                2
+            }
+        };
+        let axis_sign = |v: IVec3, axis: usize| -> i32 {
+            match axis {
+                0 => v.x.signum(),
+                1 => v.y.signum(),
+                _ => v.z.signum(),
+            }
+        };
+
+        let mut out = 0u8;
+        for (bit, dir, orth) in [
+            (1u8, u_pos, v_pos),
+            (2u8, -u_pos, v_pos),
+            (4u8, v_pos, u_pos),
+            (8u8, -v_pos, u_pos),
+        ] {
+            let nx = x as i32 + dir.x;
+            let ny = y as i32 + dir.y;
+            let nz = z as i32 + dir.z;
+            let candidates = [
+                sample_with_borders(nx, ny, nz),
+                neighbor_stacked(nx, ny, nz),
+            ];
+            let shift = [dir.x as f32, dir.y as f32, dir.z as f32];
+            let edge_axis = axis_idx(dir);
+            let edge_sign = axis_sign(dir, edge_axis);
+            let orth_axis = axis_idx(orth);
+            let normal_axis = axis_idx(face_normal);
+
+            let mut connected = false;
+            for neigh_id in candidates {
+                if neigh_id == 0 || reg.connect_group(neigh_id) != self_group {
+                    continue;
+                }
+                let (other_min, other_max) =
+                    if let Some((other_size_m, other_offset_m)) = reg.custom_mesh_box(neigh_id) {
+                        local_box_bounds(other_size_m, other_offset_m)
+                    } else {
+                        ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+                    };
+                let shifted_min = [
+                    other_min[0] + shift[0],
+                    other_min[1] + shift[1],
+                    other_min[2] + shift[2],
+                ];
+                let shifted_max = [
+                    other_max[0] + shift[0],
+                    other_max[1] + shift[1],
+                    other_max[2] + shift[2],
+                ];
+                if !overlap(
+                    self_min[orth_axis],
+                    self_max[orth_axis],
+                    shifted_min[orth_axis],
+                    shifted_max[orth_axis],
+                ) {
+                    continue;
+                }
+                if !overlap(
+                    self_min[normal_axis],
+                    self_max[normal_axis],
+                    shifted_min[normal_axis],
+                    shifted_max[normal_axis],
+                ) {
+                    continue;
+                }
+                let touches = if edge_sign > 0 {
+                    shifted_min[edge_axis] <= self_max[edge_axis] + EPS
+                        && shifted_max[edge_axis] > self_max[edge_axis] + EPS
+                } else {
+                    shifted_max[edge_axis] >= self_min[edge_axis] - EPS
+                        && shifted_min[edge_axis] < self_min[edge_axis] - EPS
+                };
+                if touches {
+                    connected = true;
+                    break;
+                }
+            }
+            if connected {
+                out |= bit;
+            }
+        }
+        out
+    };
+    let connected_neighbor_occludes_face = |self_id: BlockId,
+                                            self_size_m: [f32; 3],
+                                            self_offset_m: [f32; 3],
+                                            face: Face,
+                                            x: usize,
+                                            y: usize,
+                                            z: usize|
+     -> bool {
+        let self_group = reg.connect_group(self_id);
+        if self_group == 0 {
+            return false;
+        }
+
+        let cell_off = match face {
+            Face::Top => IVec3::new(0, 1, 0),
+            Face::Bottom => IVec3::new(0, -1, 0),
+            Face::East => IVec3::new(1, 0, 0),
+            Face::West => IVec3::new(-1, 0, 0),
+            Face::South => IVec3::new(0, 0, 1),
+            Face::North => IVec3::new(0, 0, -1),
+        };
+
+        let nx = x as i32 + cell_off.x;
+        let ny = y as i32 + cell_off.y;
+        let nz = z as i32 + cell_off.z;
+        let neigh_primary = sample_with_borders(nx, ny, nz);
+        let neigh_stacked = neighbor_stacked(nx, ny, nz);
+
+        let (self_min, self_max) = local_box_bounds(self_size_m, self_offset_m);
+        let shift = [cell_off.x as f32, cell_off.y as f32, cell_off.z as f32];
+
+        for neigh_id in [neigh_primary, neigh_stacked] {
+            if neigh_id == 0 || reg.connect_group(neigh_id) != self_group {
+                continue;
+            }
+
+            let (other_min, other_max) =
+                if let Some((other_size_m, other_offset_m)) = reg.custom_mesh_box(neigh_id) {
+                    local_box_bounds(other_size_m, other_offset_m)
+                } else {
+                    ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+                };
+            let shifted_min = [
+                other_min[0] + shift[0],
+                other_min[1] + shift[1],
+                other_min[2] + shift[2],
+            ];
+            let shifted_max = [
+                other_max[0] + shift[0],
+                other_max[1] + shift[1],
+                other_max[2] + shift[2],
+            ];
+            if face_occluded_by_bounds(self_min, self_max, shifted_min, shifted_max, face) {
+                return true;
+            }
+        }
+        false
+    };
 
     // +Y (Top): greedy in XZ plane for each Y slice.
     let mut top_mask = vec![0u16; CX * CZ];
@@ -159,7 +603,7 @@ pub async fn mesh_subchunk_async(
         for z in 0..CZ {
             for x in 0..CX {
                 let id = chunk.get(x, y, z);
-                if !is_cube_voxel(id) {
+                if !is_cube_voxel(id) || is_connected_cube_voxel(id) {
                     continue;
                 }
                 let n_up = get(x as isize, y as isize + 1, z as isize);
@@ -192,7 +636,7 @@ pub async fn mesh_subchunk_async(
         for z in 0..CZ {
             for x in 0..CX {
                 let id = chunk.get(x, y, z);
-                if !is_cube_voxel(id) {
+                if !is_cube_voxel(id) || is_connected_cube_voxel(id) {
                     continue;
                 }
                 let n_down = get(x as isize, y as isize - 1, z as isize);
@@ -226,7 +670,7 @@ pub async fn mesh_subchunk_async(
             let yr = y - y0;
             for z in 0..CZ {
                 let id = chunk.get(x, y, z);
-                if !is_cube_voxel(id) {
+                if !is_cube_voxel(id) || is_connected_cube_voxel(id) {
                     continue;
                 }
                 let n_east = if x + 1 < CX {
@@ -266,7 +710,7 @@ pub async fn mesh_subchunk_async(
             let yr = y - y0;
             for z in 0..CZ {
                 let id = chunk.get(x, y, z);
-                if !is_cube_voxel(id) {
+                if !is_cube_voxel(id) || is_connected_cube_voxel(id) {
                     continue;
                 }
                 let n_west = if x > 0 {
@@ -306,7 +750,7 @@ pub async fn mesh_subchunk_async(
             let yr = y - y0;
             for x in 0..CX {
                 let id = chunk.get(x, y, z);
-                if !is_cube_voxel(id) {
+                if !is_cube_voxel(id) || is_connected_cube_voxel(id) {
                     continue;
                 }
                 let n_south = if z + 1 < CZ {
@@ -346,7 +790,7 @@ pub async fn mesh_subchunk_async(
             let yr = y - y0;
             for x in 0..CX {
                 let id = chunk.get(x, y, z);
-                if !is_cube_voxel(id) {
+                if !is_cube_voxel(id) || is_connected_cube_voxel(id) {
                     continue;
                 }
                 let n_north = if z > 0 {
@@ -376,6 +820,103 @@ pub async fn mesh_subchunk_async(
                 [u.u0, u.v0, u.u1, u.v1],
             );
         });
+    }
+
+    // Connected-texture cube pass (mask4, non-greedy per face).
+    let connected_tile_rect = |id: BlockId, face: Face, x: usize, y: usize, z: usize| -> [f32; 4] {
+        let uv = reg
+            .connected_mask4_uv(id, connected_mask4(id, face, x, y, z))
+            .unwrap_or_else(|| reg.uv(id, face));
+        [uv.u0, uv.v0, uv.u1, uv.v1]
+    };
+    let connected_ctm = |id: BlockId, face: Face, x: usize, y: usize, z: usize| -> [f32; 2] {
+        let mask = connected_mask4(id, face, x, y, z);
+        [mask as f32, reg.connected_edge_clip_uv(id)]
+    };
+    let face_neighbor = |face: Face, x: usize, y: usize, z: usize| -> BlockId {
+        let p = IVec3::new(x as i32, y as i32, z as i32);
+        let off = match face {
+            Face::Top => IVec3::new(0, 1, 0),
+            Face::Bottom => IVec3::new(0, -1, 0),
+            Face::North => IVec3::new(0, 0, -1),
+            Face::East => IVec3::new(1, 0, 0),
+            Face::South => IVec3::new(0, 0, 1),
+            Face::West => IVec3::new(-1, 0, 0),
+        };
+        sample_with_borders(p.x + off.x, p.y + off.y, p.z + off.z)
+    };
+    for y in y0..y1 {
+        for z in 0..CZ {
+            for x in 0..CX {
+                let id = chunk.get(x, y, z);
+                if !is_connected_cube_voxel(id) {
+                    continue;
+                }
+                let b = by_block.entry(id).or_insert_with(MeshBuild::new);
+
+                let x0 = x as f32 * s;
+                let x1 = (x + 1) as f32 * s;
+                let y0p = y as f32 * s;
+                let y1p = (y + 1) as f32 * s;
+                let z0 = z as f32 * s;
+                let z1 = (z + 1) as f32 * s;
+
+                if face_visible(id, face_neighbor(Face::Top, x, y, z)) {
+                    b.quad_with_ctm(
+                        [[x0, y1p, z1], [x1, y1p, z1], [x1, y1p, z0], [x0, y1p, z0]],
+                        [0.0, 1.0, 0.0],
+                        uvq_tiled(1.0, 1.0, false),
+                        connected_tile_rect(id, Face::Top, x, y, z),
+                        connected_ctm(id, Face::Top, x, y, z),
+                    );
+                }
+                if face_visible(id, face_neighbor(Face::Bottom, x, y, z)) {
+                    b.quad_with_ctm(
+                        [[x0, y0p, z0], [x1, y0p, z0], [x1, y0p, z1], [x0, y0p, z1]],
+                        [0.0, -1.0, 0.0],
+                        uvq_tiled(1.0, 1.0, false),
+                        connected_tile_rect(id, Face::Bottom, x, y, z),
+                        connected_ctm(id, Face::Bottom, x, y, z),
+                    );
+                }
+                if face_visible(id, face_neighbor(Face::East, x, y, z)) {
+                    b.quad_with_ctm(
+                        [[x1, y0p, z1], [x1, y0p, z0], [x1, y1p, z0], [x1, y1p, z1]],
+                        [1.0, 0.0, 0.0],
+                        uvq_tiled(1.0, 1.0, true),
+                        connected_tile_rect(id, Face::East, x, y, z),
+                        connected_ctm(id, Face::East, x, y, z),
+                    );
+                }
+                if face_visible(id, face_neighbor(Face::West, x, y, z)) {
+                    b.quad_with_ctm(
+                        [[x0, y0p, z0], [x0, y0p, z1], [x0, y1p, z1], [x0, y1p, z0]],
+                        [-1.0, 0.0, 0.0],
+                        uvq_tiled(1.0, 1.0, true),
+                        connected_tile_rect(id, Face::West, x, y, z),
+                        connected_ctm(id, Face::West, x, y, z),
+                    );
+                }
+                if face_visible(id, face_neighbor(Face::South, x, y, z)) {
+                    b.quad_with_ctm(
+                        [[x0, y0p, z1], [x1, y0p, z1], [x1, y1p, z1], [x0, y1p, z1]],
+                        [0.0, 0.0, 1.0],
+                        uvq_tiled(1.0, 1.0, true),
+                        connected_tile_rect(id, Face::South, x, y, z),
+                        connected_ctm(id, Face::South, x, y, z),
+                    );
+                }
+                if face_visible(id, face_neighbor(Face::North, x, y, z)) {
+                    b.quad_with_ctm(
+                        [[x1, y0p, z0], [x0, y0p, z0], [x0, y1p, z0], [x1, y1p, z0]],
+                        [0.0, 0.0, -1.0],
+                        uvq_tiled(1.0, 1.0, true),
+                        connected_tile_rect(id, Face::North, x, y, z),
+                        connected_ctm(id, Face::North, x, y, z),
+                    );
+                }
+            }
+        }
     }
 
     // Custom block box pass (non-prop blocks with collider.kind = box).
@@ -410,73 +951,285 @@ pub async fn mesh_subchunk_async(
                 let max_y = cy + half_y;
                 let min_z = cz - half_z;
                 let max_z = cz + half_z;
+                let connected = reg.has_connected_mask4(id);
+                let framed_slab = connected
+                    && reg.connected_edge_clip_uv(id) > 0.0
+                    && (size_m[0] < 0.999 || size_m[1] < 0.999 || size_m[2] < 0.999);
+                let uv_span =
+                    |dim: f32| -> f32 { if framed_slab && dim < 0.999 { 1.0 } else { dim } };
+                let same_cell_other = chunk.get_stacked(x, y, z);
+                let connected_mask_for_face = |face: Face| -> u8 {
+                    let neighbor_mask =
+                        connected_neighbor_edge_mask(id, size_m, offset_m, face, x, y, z);
+                    let same_cell_mask =
+                        same_cell_connected_edge_mask(id, size_m, offset_m, same_cell_other, face);
+                    neighbor_mask | same_cell_mask
+                };
 
-                b.quad(
-                    [
-                        [min_x, max_y, max_z],
-                        [max_x, max_y, max_z],
-                        [max_x, max_y, min_z],
-                        [min_x, max_y, min_z],
-                    ],
-                    [0.0, 1.0, 0.0],
-                    uvq_tiled(size_m[0], size_m[2], false),
-                    [u_top.u0, u_top.v0, u_top.u1, u_top.v1],
-                );
-                b.quad(
-                    [
-                        [min_x, min_y, min_z],
-                        [max_x, min_y, min_z],
-                        [max_x, min_y, max_z],
-                        [min_x, min_y, max_z],
-                    ],
-                    [0.0, -1.0, 0.0],
-                    uvq_tiled(size_m[0], size_m[2], false),
-                    [u_bottom.u0, u_bottom.v0, u_bottom.u1, u_bottom.v1],
-                );
-                b.quad(
-                    [
-                        [max_x, min_y, max_z],
-                        [max_x, min_y, min_z],
-                        [max_x, max_y, min_z],
-                        [max_x, max_y, max_z],
-                    ],
-                    [1.0, 0.0, 0.0],
-                    uvq_tiled(size_m[2], size_m[1], true),
-                    [u_east.u0, u_east.v0, u_east.u1, u_east.v1],
-                );
-                b.quad(
-                    [
-                        [min_x, min_y, min_z],
-                        [min_x, min_y, max_z],
-                        [min_x, max_y, max_z],
-                        [min_x, max_y, min_z],
-                    ],
-                    [-1.0, 0.0, 0.0],
-                    uvq_tiled(size_m[2], size_m[1], true),
-                    [u_west.u0, u_west.v0, u_west.u1, u_west.v1],
-                );
-                b.quad(
-                    [
-                        [min_x, min_y, max_z],
-                        [max_x, min_y, max_z],
-                        [max_x, max_y, max_z],
-                        [min_x, max_y, max_z],
-                    ],
-                    [0.0, 0.0, 1.0],
-                    uvq_tiled(size_m[0], size_m[1], true),
-                    [u_south.u0, u_south.v0, u_south.u1, u_south.v1],
-                );
-                b.quad(
-                    [
-                        [max_x, min_y, min_z],
-                        [min_x, min_y, min_z],
-                        [min_x, max_y, min_z],
-                        [max_x, max_y, min_z],
-                    ],
-                    [0.0, 0.0, -1.0],
-                    uvq_tiled(size_m[0], size_m[1], true),
-                    [u_north.u0, u_north.v0, u_north.u1, u_north.v1],
-                );
+                if (!connected || face_visible(id, face_neighbor(Face::Top, x, y, z)))
+                    && !(connected
+                        && connected_neighbor_occludes_face(
+                            id,
+                            size_m,
+                            offset_m,
+                            Face::Top,
+                            x,
+                            y,
+                            z,
+                        ))
+                    && !same_cell_connected_occludes_face(
+                        id,
+                        size_m,
+                        offset_m,
+                        same_cell_other,
+                        Face::Top,
+                    )
+                {
+                    let mask = connected_mask_for_face(Face::Top);
+                    b.quad_with_ctm(
+                        [
+                            [min_x, max_y, max_z],
+                            [max_x, max_y, max_z],
+                            [max_x, max_y, min_z],
+                            [min_x, max_y, min_z],
+                        ],
+                        [0.0, 1.0, 0.0],
+                        uvq_tiled(uv_span(size_m[0]), uv_span(size_m[2]), false),
+                        if connected {
+                            let uv = reg
+                                .connected_mask4_uv(id, mask)
+                                .unwrap_or_else(|| reg.uv(id, Face::Top));
+                            [uv.u0, uv.v0, uv.u1, uv.v1]
+                        } else {
+                            [u_top.u0, u_top.v0, u_top.u1, u_top.v1]
+                        },
+                        if connected {
+                            [mask as f32, reg.connected_edge_clip_uv(id)]
+                        } else {
+                            [-1.0, 0.0]
+                        },
+                    );
+                }
+                if (!connected || face_visible(id, face_neighbor(Face::Bottom, x, y, z)))
+                    && !(connected
+                        && connected_neighbor_occludes_face(
+                            id,
+                            size_m,
+                            offset_m,
+                            Face::Bottom,
+                            x,
+                            y,
+                            z,
+                        ))
+                    && !same_cell_connected_occludes_face(
+                        id,
+                        size_m,
+                        offset_m,
+                        same_cell_other,
+                        Face::Bottom,
+                    )
+                {
+                    let mask = connected_mask_for_face(Face::Bottom);
+                    b.quad_with_ctm(
+                        [
+                            [min_x, min_y, min_z],
+                            [max_x, min_y, min_z],
+                            [max_x, min_y, max_z],
+                            [min_x, min_y, max_z],
+                        ],
+                        [0.0, -1.0, 0.0],
+                        uvq_tiled(uv_span(size_m[0]), uv_span(size_m[2]), false),
+                        if connected {
+                            let uv = reg
+                                .connected_mask4_uv(id, mask)
+                                .unwrap_or_else(|| reg.uv(id, Face::Bottom));
+                            [uv.u0, uv.v0, uv.u1, uv.v1]
+                        } else {
+                            [u_bottom.u0, u_bottom.v0, u_bottom.u1, u_bottom.v1]
+                        },
+                        if connected {
+                            [mask as f32, reg.connected_edge_clip_uv(id)]
+                        } else {
+                            [-1.0, 0.0]
+                        },
+                    );
+                }
+                if (!connected || face_visible(id, face_neighbor(Face::East, x, y, z)))
+                    && !(connected
+                        && connected_neighbor_occludes_face(
+                            id,
+                            size_m,
+                            offset_m,
+                            Face::East,
+                            x,
+                            y,
+                            z,
+                        ))
+                    && !same_cell_connected_occludes_face(
+                        id,
+                        size_m,
+                        offset_m,
+                        same_cell_other,
+                        Face::East,
+                    )
+                {
+                    let mask = connected_mask_for_face(Face::East);
+                    b.quad_with_ctm(
+                        [
+                            [max_x, min_y, max_z],
+                            [max_x, min_y, min_z],
+                            [max_x, max_y, min_z],
+                            [max_x, max_y, max_z],
+                        ],
+                        [1.0, 0.0, 0.0],
+                        uvq_tiled(uv_span(size_m[2]), uv_span(size_m[1]), true),
+                        if connected {
+                            let uv = reg
+                                .connected_mask4_uv(id, mask)
+                                .unwrap_or_else(|| reg.uv(id, Face::East));
+                            [uv.u0, uv.v0, uv.u1, uv.v1]
+                        } else {
+                            [u_east.u0, u_east.v0, u_east.u1, u_east.v1]
+                        },
+                        if connected {
+                            [mask as f32, reg.connected_edge_clip_uv(id)]
+                        } else {
+                            [-1.0, 0.0]
+                        },
+                    );
+                }
+                if (!connected || face_visible(id, face_neighbor(Face::West, x, y, z)))
+                    && !(connected
+                        && connected_neighbor_occludes_face(
+                            id,
+                            size_m,
+                            offset_m,
+                            Face::West,
+                            x,
+                            y,
+                            z,
+                        ))
+                    && !same_cell_connected_occludes_face(
+                        id,
+                        size_m,
+                        offset_m,
+                        same_cell_other,
+                        Face::West,
+                    )
+                {
+                    let mask = connected_mask_for_face(Face::West);
+                    b.quad_with_ctm(
+                        [
+                            [min_x, min_y, min_z],
+                            [min_x, min_y, max_z],
+                            [min_x, max_y, max_z],
+                            [min_x, max_y, min_z],
+                        ],
+                        [-1.0, 0.0, 0.0],
+                        uvq_tiled(uv_span(size_m[2]), uv_span(size_m[1]), true),
+                        if connected {
+                            let uv = reg
+                                .connected_mask4_uv(id, mask)
+                                .unwrap_or_else(|| reg.uv(id, Face::West));
+                            [uv.u0, uv.v0, uv.u1, uv.v1]
+                        } else {
+                            [u_west.u0, u_west.v0, u_west.u1, u_west.v1]
+                        },
+                        if connected {
+                            [mask as f32, reg.connected_edge_clip_uv(id)]
+                        } else {
+                            [-1.0, 0.0]
+                        },
+                    );
+                }
+                if (!connected || face_visible(id, face_neighbor(Face::South, x, y, z)))
+                    && !(connected
+                        && connected_neighbor_occludes_face(
+                            id,
+                            size_m,
+                            offset_m,
+                            Face::South,
+                            x,
+                            y,
+                            z,
+                        ))
+                    && !same_cell_connected_occludes_face(
+                        id,
+                        size_m,
+                        offset_m,
+                        same_cell_other,
+                        Face::South,
+                    )
+                {
+                    let mask = connected_mask_for_face(Face::South);
+                    b.quad_with_ctm(
+                        [
+                            [min_x, min_y, max_z],
+                            [max_x, min_y, max_z],
+                            [max_x, max_y, max_z],
+                            [min_x, max_y, max_z],
+                        ],
+                        [0.0, 0.0, 1.0],
+                        uvq_tiled(uv_span(size_m[0]), uv_span(size_m[1]), true),
+                        if connected {
+                            let uv = reg
+                                .connected_mask4_uv(id, mask)
+                                .unwrap_or_else(|| reg.uv(id, Face::South));
+                            [uv.u0, uv.v0, uv.u1, uv.v1]
+                        } else {
+                            [u_south.u0, u_south.v0, u_south.u1, u_south.v1]
+                        },
+                        if connected {
+                            [mask as f32, reg.connected_edge_clip_uv(id)]
+                        } else {
+                            [-1.0, 0.0]
+                        },
+                    );
+                }
+                if (!connected || face_visible(id, face_neighbor(Face::North, x, y, z)))
+                    && !(connected
+                        && connected_neighbor_occludes_face(
+                            id,
+                            size_m,
+                            offset_m,
+                            Face::North,
+                            x,
+                            y,
+                            z,
+                        ))
+                    && !same_cell_connected_occludes_face(
+                        id,
+                        size_m,
+                        offset_m,
+                        same_cell_other,
+                        Face::North,
+                    )
+                {
+                    let mask = connected_mask_for_face(Face::North);
+                    b.quad_with_ctm(
+                        [
+                            [max_x, min_y, min_z],
+                            [min_x, min_y, min_z],
+                            [min_x, max_y, min_z],
+                            [max_x, max_y, min_z],
+                        ],
+                        [0.0, 0.0, -1.0],
+                        uvq_tiled(uv_span(size_m[0]), uv_span(size_m[1]), true),
+                        if connected {
+                            let uv = reg
+                                .connected_mask4_uv(id, mask)
+                                .unwrap_or_else(|| reg.uv(id, Face::North));
+                            [uv.u0, uv.v0, uv.u1, uv.v1]
+                        } else {
+                            [u_north.u0, u_north.v0, u_north.u1, u_north.v1]
+                        },
+                        if connected {
+                            [mask as f32, reg.connected_edge_clip_uv(id)]
+                        } else {
+                            [-1.0, 0.0]
+                        },
+                    );
+                }
             }
         }
     }
@@ -513,73 +1266,285 @@ pub async fn mesh_subchunk_async(
                 let max_y = cy + half_y;
                 let min_z = cz - half_z;
                 let max_z = cz + half_z;
+                let connected = reg.has_connected_mask4(id);
+                let framed_slab = connected
+                    && reg.connected_edge_clip_uv(id) > 0.0
+                    && (size_m[0] < 0.999 || size_m[1] < 0.999 || size_m[2] < 0.999);
+                let uv_span =
+                    |dim: f32| -> f32 { if framed_slab && dim < 0.999 { 1.0 } else { dim } };
+                let same_cell_other = chunk.get(x, y, z);
+                let connected_mask_for_face = |face: Face| -> u8 {
+                    let neighbor_mask =
+                        connected_neighbor_edge_mask(id, size_m, offset_m, face, x, y, z);
+                    let same_cell_mask =
+                        same_cell_connected_edge_mask(id, size_m, offset_m, same_cell_other, face);
+                    neighbor_mask | same_cell_mask
+                };
 
-                b.quad(
-                    [
-                        [min_x, max_y, max_z],
-                        [max_x, max_y, max_z],
-                        [max_x, max_y, min_z],
-                        [min_x, max_y, min_z],
-                    ],
-                    [0.0, 1.0, 0.0],
-                    uvq_tiled(size_m[0], size_m[2], false),
-                    [u_top.u0, u_top.v0, u_top.u1, u_top.v1],
-                );
-                b.quad(
-                    [
-                        [min_x, min_y, min_z],
-                        [max_x, min_y, min_z],
-                        [max_x, min_y, max_z],
-                        [min_x, min_y, max_z],
-                    ],
-                    [0.0, -1.0, 0.0],
-                    uvq_tiled(size_m[0], size_m[2], false),
-                    [u_bottom.u0, u_bottom.v0, u_bottom.u1, u_bottom.v1],
-                );
-                b.quad(
-                    [
-                        [max_x, min_y, max_z],
-                        [max_x, min_y, min_z],
-                        [max_x, max_y, min_z],
-                        [max_x, max_y, max_z],
-                    ],
-                    [1.0, 0.0, 0.0],
-                    uvq_tiled(size_m[2], size_m[1], true),
-                    [u_east.u0, u_east.v0, u_east.u1, u_east.v1],
-                );
-                b.quad(
-                    [
-                        [min_x, min_y, min_z],
-                        [min_x, min_y, max_z],
-                        [min_x, max_y, max_z],
-                        [min_x, max_y, min_z],
-                    ],
-                    [-1.0, 0.0, 0.0],
-                    uvq_tiled(size_m[2], size_m[1], true),
-                    [u_west.u0, u_west.v0, u_west.u1, u_west.v1],
-                );
-                b.quad(
-                    [
-                        [min_x, min_y, max_z],
-                        [max_x, min_y, max_z],
-                        [max_x, max_y, max_z],
-                        [min_x, max_y, max_z],
-                    ],
-                    [0.0, 0.0, 1.0],
-                    uvq_tiled(size_m[0], size_m[1], true),
-                    [u_south.u0, u_south.v0, u_south.u1, u_south.v1],
-                );
-                b.quad(
-                    [
-                        [max_x, min_y, min_z],
-                        [min_x, min_y, min_z],
-                        [min_x, max_y, min_z],
-                        [max_x, max_y, min_z],
-                    ],
-                    [0.0, 0.0, -1.0],
-                    uvq_tiled(size_m[0], size_m[1], true),
-                    [u_north.u0, u_north.v0, u_north.u1, u_north.v1],
-                );
+                if (!connected || face_visible(id, face_neighbor(Face::Top, x, y, z)))
+                    && !(connected
+                        && connected_neighbor_occludes_face(
+                            id,
+                            size_m,
+                            offset_m,
+                            Face::Top,
+                            x,
+                            y,
+                            z,
+                        ))
+                    && !same_cell_connected_occludes_face(
+                        id,
+                        size_m,
+                        offset_m,
+                        same_cell_other,
+                        Face::Top,
+                    )
+                {
+                    let mask = connected_mask_for_face(Face::Top);
+                    b.quad_with_ctm(
+                        [
+                            [min_x, max_y, max_z],
+                            [max_x, max_y, max_z],
+                            [max_x, max_y, min_z],
+                            [min_x, max_y, min_z],
+                        ],
+                        [0.0, 1.0, 0.0],
+                        uvq_tiled(uv_span(size_m[0]), uv_span(size_m[2]), false),
+                        if connected {
+                            let uv = reg
+                                .connected_mask4_uv(id, mask)
+                                .unwrap_or_else(|| reg.uv(id, Face::Top));
+                            [uv.u0, uv.v0, uv.u1, uv.v1]
+                        } else {
+                            [u_top.u0, u_top.v0, u_top.u1, u_top.v1]
+                        },
+                        if connected {
+                            [mask as f32, reg.connected_edge_clip_uv(id)]
+                        } else {
+                            [-1.0, 0.0]
+                        },
+                    );
+                }
+                if (!connected || face_visible(id, face_neighbor(Face::Bottom, x, y, z)))
+                    && !(connected
+                        && connected_neighbor_occludes_face(
+                            id,
+                            size_m,
+                            offset_m,
+                            Face::Bottom,
+                            x,
+                            y,
+                            z,
+                        ))
+                    && !same_cell_connected_occludes_face(
+                        id,
+                        size_m,
+                        offset_m,
+                        same_cell_other,
+                        Face::Bottom,
+                    )
+                {
+                    let mask = connected_mask_for_face(Face::Bottom);
+                    b.quad_with_ctm(
+                        [
+                            [min_x, min_y, min_z],
+                            [max_x, min_y, min_z],
+                            [max_x, min_y, max_z],
+                            [min_x, min_y, max_z],
+                        ],
+                        [0.0, -1.0, 0.0],
+                        uvq_tiled(uv_span(size_m[0]), uv_span(size_m[2]), false),
+                        if connected {
+                            let uv = reg
+                                .connected_mask4_uv(id, mask)
+                                .unwrap_or_else(|| reg.uv(id, Face::Bottom));
+                            [uv.u0, uv.v0, uv.u1, uv.v1]
+                        } else {
+                            [u_bottom.u0, u_bottom.v0, u_bottom.u1, u_bottom.v1]
+                        },
+                        if connected {
+                            [mask as f32, reg.connected_edge_clip_uv(id)]
+                        } else {
+                            [-1.0, 0.0]
+                        },
+                    );
+                }
+                if (!connected || face_visible(id, face_neighbor(Face::East, x, y, z)))
+                    && !(connected
+                        && connected_neighbor_occludes_face(
+                            id,
+                            size_m,
+                            offset_m,
+                            Face::East,
+                            x,
+                            y,
+                            z,
+                        ))
+                    && !same_cell_connected_occludes_face(
+                        id,
+                        size_m,
+                        offset_m,
+                        same_cell_other,
+                        Face::East,
+                    )
+                {
+                    let mask = connected_mask_for_face(Face::East);
+                    b.quad_with_ctm(
+                        [
+                            [max_x, min_y, max_z],
+                            [max_x, min_y, min_z],
+                            [max_x, max_y, min_z],
+                            [max_x, max_y, max_z],
+                        ],
+                        [1.0, 0.0, 0.0],
+                        uvq_tiled(uv_span(size_m[2]), uv_span(size_m[1]), true),
+                        if connected {
+                            let uv = reg
+                                .connected_mask4_uv(id, mask)
+                                .unwrap_or_else(|| reg.uv(id, Face::East));
+                            [uv.u0, uv.v0, uv.u1, uv.v1]
+                        } else {
+                            [u_east.u0, u_east.v0, u_east.u1, u_east.v1]
+                        },
+                        if connected {
+                            [mask as f32, reg.connected_edge_clip_uv(id)]
+                        } else {
+                            [-1.0, 0.0]
+                        },
+                    );
+                }
+                if (!connected || face_visible(id, face_neighbor(Face::West, x, y, z)))
+                    && !(connected
+                        && connected_neighbor_occludes_face(
+                            id,
+                            size_m,
+                            offset_m,
+                            Face::West,
+                            x,
+                            y,
+                            z,
+                        ))
+                    && !same_cell_connected_occludes_face(
+                        id,
+                        size_m,
+                        offset_m,
+                        same_cell_other,
+                        Face::West,
+                    )
+                {
+                    let mask = connected_mask_for_face(Face::West);
+                    b.quad_with_ctm(
+                        [
+                            [min_x, min_y, min_z],
+                            [min_x, min_y, max_z],
+                            [min_x, max_y, max_z],
+                            [min_x, max_y, min_z],
+                        ],
+                        [-1.0, 0.0, 0.0],
+                        uvq_tiled(uv_span(size_m[2]), uv_span(size_m[1]), true),
+                        if connected {
+                            let uv = reg
+                                .connected_mask4_uv(id, mask)
+                                .unwrap_or_else(|| reg.uv(id, Face::West));
+                            [uv.u0, uv.v0, uv.u1, uv.v1]
+                        } else {
+                            [u_west.u0, u_west.v0, u_west.u1, u_west.v1]
+                        },
+                        if connected {
+                            [mask as f32, reg.connected_edge_clip_uv(id)]
+                        } else {
+                            [-1.0, 0.0]
+                        },
+                    );
+                }
+                if (!connected || face_visible(id, face_neighbor(Face::South, x, y, z)))
+                    && !(connected
+                        && connected_neighbor_occludes_face(
+                            id,
+                            size_m,
+                            offset_m,
+                            Face::South,
+                            x,
+                            y,
+                            z,
+                        ))
+                    && !same_cell_connected_occludes_face(
+                        id,
+                        size_m,
+                        offset_m,
+                        same_cell_other,
+                        Face::South,
+                    )
+                {
+                    let mask = connected_mask_for_face(Face::South);
+                    b.quad_with_ctm(
+                        [
+                            [min_x, min_y, max_z],
+                            [max_x, min_y, max_z],
+                            [max_x, max_y, max_z],
+                            [min_x, max_y, max_z],
+                        ],
+                        [0.0, 0.0, 1.0],
+                        uvq_tiled(uv_span(size_m[0]), uv_span(size_m[1]), true),
+                        if connected {
+                            let uv = reg
+                                .connected_mask4_uv(id, mask)
+                                .unwrap_or_else(|| reg.uv(id, Face::South));
+                            [uv.u0, uv.v0, uv.u1, uv.v1]
+                        } else {
+                            [u_south.u0, u_south.v0, u_south.u1, u_south.v1]
+                        },
+                        if connected {
+                            [mask as f32, reg.connected_edge_clip_uv(id)]
+                        } else {
+                            [-1.0, 0.0]
+                        },
+                    );
+                }
+                if (!connected || face_visible(id, face_neighbor(Face::North, x, y, z)))
+                    && !(connected
+                        && connected_neighbor_occludes_face(
+                            id,
+                            size_m,
+                            offset_m,
+                            Face::North,
+                            x,
+                            y,
+                            z,
+                        ))
+                    && !same_cell_connected_occludes_face(
+                        id,
+                        size_m,
+                        offset_m,
+                        same_cell_other,
+                        Face::North,
+                    )
+                {
+                    let mask = connected_mask_for_face(Face::North);
+                    b.quad_with_ctm(
+                        [
+                            [max_x, min_y, min_z],
+                            [min_x, min_y, min_z],
+                            [min_x, max_y, min_z],
+                            [max_x, max_y, min_z],
+                        ],
+                        [0.0, 0.0, -1.0],
+                        uvq_tiled(uv_span(size_m[0]), uv_span(size_m[1]), true),
+                        if connected {
+                            let uv = reg
+                                .connected_mask4_uv(id, mask)
+                                .unwrap_or_else(|| reg.uv(id, Face::North));
+                            [uv.u0, uv.v0, uv.u1, uv.v1]
+                        } else {
+                            [u_north.u0, u_north.v0, u_north.u1, u_north.v1]
+                        },
+                        if connected {
+                            [mask as f32, reg.connected_edge_clip_uv(id)]
+                        } else {
+                            [-1.0, 0.0]
+                        },
+                    );
+                }
             }
         }
     }
@@ -765,45 +1730,63 @@ pub fn snapshot_borders(
         west: None,
         south: None,
         north: None,
+        east_stacked: None,
+        west_stacked: None,
+        south_stacked: None,
+        north_stacked: None,
     };
 
     let take_xz = |c: &ChunkData, x: usize, z: usize, y: usize| -> BlockId { c.get(x, y, z) };
+    let take_xz_stacked =
+        |c: &ChunkData, x: usize, z: usize, y: usize| -> BlockId { c.get_stacked(x, y, z) };
 
     if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x + 1, coord.y)) {
         let mut v = Vec::with_capacity((y1 - y0) * CZ);
+        let mut vs = Vec::with_capacity((y1 - y0) * CZ);
         for y in y0..y1 {
             for z in 0..CZ {
                 v.push(take_xz(n, 0, z, y));
+                vs.push(take_xz_stacked(n, 0, z, y));
             }
         }
         snap.east = Some(v);
+        snap.east_stacked = Some(vs);
     }
     if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x - 1, coord.y)) {
         let mut v = Vec::with_capacity((y1 - y0) * CZ);
+        let mut vs = Vec::with_capacity((y1 - y0) * CZ);
         for y in y0..y1 {
             for z in 0..CZ {
                 v.push(take_xz(n, CX - 1, z, y));
+                vs.push(take_xz_stacked(n, CX - 1, z, y));
             }
         }
         snap.west = Some(v);
+        snap.west_stacked = Some(vs);
     }
     if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x, coord.y + 1)) {
         let mut v = Vec::with_capacity((y1 - y0) * CX);
+        let mut vs = Vec::with_capacity((y1 - y0) * CX);
         for y in y0..y1 {
             for x in 0..CX {
                 v.push(take_xz(n, x, 0, y));
+                vs.push(take_xz_stacked(n, x, 0, y));
             }
         }
         snap.south = Some(v);
+        snap.south_stacked = Some(vs);
     }
     if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x, coord.y - 1)) {
         let mut v = Vec::with_capacity((y1 - y0) * CX);
+        let mut vs = Vec::with_capacity((y1 - y0) * CX);
         for y in y0..y1 {
             for x in 0..CX {
                 v.push(take_xz(n, x, CZ - 1, y));
+                vs.push(take_xz_stacked(n, x, CZ - 1, y));
             }
         }
         snap.north = Some(v);
+        snap.north_stacked = Some(vs);
     }
     snap
 }

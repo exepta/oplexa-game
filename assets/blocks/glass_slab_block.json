@@ -5,6 +5,10 @@
   "texture": {
     "all": "glass"
   },
+  "connected_texture": {
+    "group": "glass",
+    "mode": "mask4"
+  },
   "stats": {
     "hardness": 0.1,
     "blast_resistance": 1.5,

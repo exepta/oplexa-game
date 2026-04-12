@@ -5,6 +5,11 @@
   "texture": {
     "all": "ice"
   },
+  "connected_texture": {
+    "group": "ice",
+    "mode": "mask4",
+    "edge_clip_px": 4.0
+  },
   "stats": {
     "hardness": 0.5,
     "blast_resistance": 0.5,

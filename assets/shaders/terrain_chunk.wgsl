@@ -7,13 +7,15 @@ struct VOut {
   @location(0) uv_local: vec2<f32>,
   @location(1) tile_rect: vec4<f32>,
   @location(2) normal_ws: vec3<f32>,
-  @location(3) world_pos: vec3<f32>,
+  @location(3) ctm: vec2<f32>,
+  @location(4) world_pos: vec3<f32>,
 };
 
 struct VertexInput {
   @location(0) position: vec3<f32>,
   @location(1) normal: vec3<f32>,
   @location(2) uv_local: vec2<f32>,
+  @location(3) ctm: vec2<f32>,
   @location(5) tile_rect: vec4<f32>,
   @builtin(instance_index) instance_index: u32,
 };
@@ -117,6 +119,7 @@ fn vertex(v: VertexInput) -> VOut {
   out.normal_ws = normal_ws;
   out.uv_local = v.uv_local;
   out.tile_rect = v.tile_rect;
+  out.ctm = v.ctm;
   out.world_pos = world_pos;
   return out;
 }
@@ -137,12 +140,35 @@ fn fragment(in: VOut) -> @location(0) vec4<f32> {
   let safe_tile_size = max(safe_tile_max - safe_tile_min, vec2<f32>(1e-6, 1e-6));
 
   // Repeat inside one atlas tile, independent of greedy quad size.
-  let tiled = fract(in.uv_local);
+  var tiled = fract(in.uv_local);
+  var ctm_span = vec2<f32>(1.0, 1.0);
+  let ctm_mask = i32(round(in.ctm.x));
+  let edge_clip = clamp(in.ctm.y, 0.0, 0.49);
+  if (edge_clip > 0.0001 && ctm_mask >= 0) {
+    let has_u_pos = (ctm_mask & 1) != 0;
+    let has_u_neg = (ctm_mask & 2) != 0;
+    let has_v_pos = (ctm_mask & 4) != 0;
+    let has_v_neg = (ctm_mask & 8) != 0;
+
+    var u0 = 0.0;
+    var u1 = 1.0;
+    var v0 = 0.0;
+    var v1 = 1.0;
+    if (has_u_neg) { u0 = edge_clip; }
+    if (has_u_pos) { u1 = 1.0 - edge_clip; }
+    if (has_v_neg) { v0 = edge_clip; }
+    if (has_v_pos) { v1 = 1.0 - edge_clip; }
+
+    let span_u = max(u1 - u0, 1e-4);
+    let span_v = max(v1 - v0, 1e-4);
+    ctm_span = vec2<f32>(span_u, span_v);
+    tiled = vec2<f32>(u0 + tiled.x * span_u, v0 + tiled.y * span_v);
+  }
   let atlas_uv = safe_tile_min + tiled * safe_tile_size;
 
   // Provide explicit gradients from unwrapped UVs to avoid seam artifacts from fract()-based derivatives.
-  let duvdx = dpdx(in.uv_local) * safe_tile_size;
-  let duvdy = dpdy(in.uv_local) * safe_tile_size;
+  let duvdx = dpdx(in.uv_local) * safe_tile_size * ctm_span;
+  let duvdy = dpdy(in.uv_local) * safe_tile_size * ctm_span;
   var tex: vec4<f32>;
   if (params.material_cfg.x > 0.5) {
     // Pixel-art props: sample exact texel centers at LOD0 for crisp visuals.

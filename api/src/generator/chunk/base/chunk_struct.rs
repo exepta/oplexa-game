@@ -37,6 +37,9 @@ pub struct RegLiteEntry {
     pub foliage: bool,
     pub prop: Option<PropDefinition>,
     pub custom_mesh_box: Option<([f32; 3], [f32; 3])>,
+    pub connect_group: u16,
+    pub connect_mask4_tiles: Option<[UvRect; 16]>,
+    pub connect_edge_clip_uv: f32,
 }
 /// Represents reg lite used by the `generator::chunk::chunk_struct` module.
 #[derive(Clone)]
@@ -48,10 +51,30 @@ impl RegLite {
     /// Runs the `from_reg` routine for from reg in the `generator::chunk::chunk_struct` module.
     pub fn from_reg(reg: &BlockRegistry) -> Self {
         let mut map = HashMap::new();
+        let mut connect_groups: HashMap<String, u16> = HashMap::new();
+        let mut next_connect_group: u16 = 1;
         for &id in reg.name_to_id.values() {
             if id == 0 {
                 continue;
             }
+            let def = reg.def(id);
+            let (connect_group, connect_mask4_tiles, connect_edge_clip_uv) = if let Some(ctm) =
+                def.connected_texture.as_ref()
+            {
+                let gid = if let Some(existing) = connect_groups.get(ctm.group.as_str()) {
+                    *existing
+                } else {
+                    let created = next_connect_group;
+                    next_connect_group = next_connect_group.checked_add(1).unwrap_or_else(|| {
+                        panic!("too many connected texture groups (>{})", u16::MAX - 1)
+                    });
+                    connect_groups.insert(ctm.group.clone(), created);
+                    created
+                };
+                (gid, Some(ctm.mask4_tiles), ctm.edge_clip_uv)
+            } else {
+                (0, None, 0.0)
+            };
             map.insert(
                 id,
                 RegLiteEntry {
@@ -76,6 +99,9 @@ impl RegLite {
                     } else {
                         None
                     },
+                    connect_group,
+                    connect_mask4_tiles,
+                    connect_edge_clip_uv,
                 },
             );
         }
@@ -126,6 +152,34 @@ impl RegLite {
             .get(&id)
             .and_then(|entry| entry.custom_mesh_box.as_ref().copied())
     }
+    /// Returns connected-texture group id (0 = none).
+    #[inline]
+    pub fn connect_group(&self, id: BlockId) -> u16 {
+        self.map.get(&id).map(|e| e.connect_group).unwrap_or(0)
+    }
+    /// Returns connected-texture UV by 4-neighbor mask.
+    #[inline]
+    pub fn connected_mask4_uv(&self, id: BlockId, mask: u8) -> Option<UvRect> {
+        let entry = self.map.get(&id)?;
+        let tiles = entry.connect_mask4_tiles.as_ref()?;
+        tiles.get(mask as usize).copied()
+    }
+    /// Returns true when block id uses connected-texture mask4 mapping.
+    #[inline]
+    pub fn has_connected_mask4(&self, id: BlockId) -> bool {
+        self.map
+            .get(&id)
+            .map(|entry| entry.connect_mask4_tiles.is_some())
+            .unwrap_or(false)
+    }
+    /// Returns optional frame edge clip width in local UV-space (0 disables clip).
+    #[inline]
+    pub fn connected_edge_clip_uv(&self, id: BlockId) -> f32 {
+        self.map
+            .get(&id)
+            .map(|entry| entry.connect_edge_clip_uv)
+            .unwrap_or(0.0)
+    }
     /// Runs the `is_crossed_prop` routine for is crossed prop in the `generator::chunk::chunk_struct` module.
     #[inline]
     pub fn is_crossed_prop(&self, id: BlockId) -> bool {
@@ -140,6 +194,7 @@ pub struct MeshBuild {
     pub pos: Vec<[f32; 3]>,
     pub nrm: Vec<[f32; 3]>,
     pub uv: Vec<[f32; 2]>,
+    pub ctm: Vec<[f32; 2]>,
     pub tile_rect: Vec<[f32; 4]>,
     pub idx: Vec<u32>,
 }
@@ -151,16 +206,29 @@ impl MeshBuild {
             pos: vec![],
             nrm: vec![],
             uv: vec![],
+            ctm: vec![],
             tile_rect: vec![],
             idx: vec![],
         }
     }
     /// Runs the `quad` routine for quad in the `generator::chunk::chunk_struct` module.
     pub fn quad(&mut self, q: [[f32; 3]; 4], n: [f32; 3], uv: [[f32; 2]; 4], tile_rect: [f32; 4]) {
+        self.quad_with_ctm(q, n, uv, tile_rect, [-1.0, 0.0]);
+    }
+    /// Runs the `quad_with_ctm` routine for quad with ctm in the `generator::chunk::chunk_struct` module.
+    pub fn quad_with_ctm(
+        &mut self,
+        q: [[f32; 3]; 4],
+        n: [f32; 3],
+        uv: [[f32; 2]; 4],
+        tile_rect: [f32; 4],
+        ctm: [f32; 2],
+    ) {
         let base = self.pos.len() as u32;
         self.pos.extend_from_slice(&q);
         self.nrm.extend_from_slice(&[n; 4]);
         self.uv.extend_from_slice(&uv);
+        self.ctm.extend_from_slice(&[ctm; 4]);
         self.tile_rect.extend_from_slice(&[tile_rect; 4]);
         self.idx
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -174,6 +242,7 @@ impl MeshBuild {
         m.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.pos);
         m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.nrm);
         m.insert_attribute(Mesh::ATTRIBUTE_UV_0, self.uv);
+        m.insert_attribute(Mesh::ATTRIBUTE_UV_1, self.ctm);
         m.insert_attribute(Mesh::ATTRIBUTE_COLOR, self.tile_rect);
 
         // <= 65k Vertices? -> U16-Indices
@@ -207,4 +276,8 @@ pub struct BorderSnapshot {
     pub west: Option<Vec<BlockId>>,
     pub south: Option<Vec<BlockId>>,
     pub north: Option<Vec<BlockId>>,
+    pub east_stacked: Option<Vec<BlockId>>,
+    pub west_stacked: Option<Vec<BlockId>>,
+    pub south_stacked: Option<Vec<BlockId>>,
+    pub north_stacked: Option<Vec<BlockId>>,
 }

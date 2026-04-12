@@ -1,3 +1,4 @@
+use crate::core::config::GlobalConfig;
 use crate::core::entities::player::block_selection::SelectionState;
 use crate::core::entities::player::inventory::PlayerInventory;
 use crate::core::entities::player::{FpsController, GameMode, GameModeState, Player};
@@ -115,11 +116,9 @@ struct MultiplayerStructureReconcileQueue {
 
 const MULTIPLAYER_STRUCTURE_RECONCILE_CHUNKS_PER_FRAME: usize = 2;
 const MINING_PARTICLE_INTERVAL_SECS: f32 = 0.045;
-const MINING_PARTICLE_LIFETIME_MIN: f32 = 5.0;
-const MINING_PARTICLE_LIFETIME_MAX: f32 = 5.0;
-const MINING_RUBBLE_LIFETIME_MIN: f32 = 5.0;
-const MINING_RUBBLE_LIFETIME_MAX: f32 = 5.0;
 const MINING_RUBBLE_RADIUS_MAX_METERS: f32 = 1.0;
+const MINING_DEBRIS_FALLBACK_LIFETIME_SECS: f32 = 3.0;
+const MINING_DEBRIS_MIN_LIFETIME_SECS: f32 = 0.05;
 
 #[derive(Resource, Default)]
 struct MiningDebrisFxAssets {
@@ -179,6 +178,7 @@ struct ActiveStructureCancelState<'w> {
 struct BreakInputContext<'w> {
     multiplayer_connection: Option<Res<'w, MultiplayerConnectionState>>,
     ui_state: Option<Res<'w, UiInteractionState>>,
+    global_config: Res<'w, GlobalConfig>,
 }
 
 #[derive(SystemParam)]
@@ -301,6 +301,37 @@ fn ensure_mining_debris_fx_assets(
     fx_assets.initialized = true;
 }
 
+fn sanitize_mining_debris_lifetime_secs(seconds: f32) -> f32 {
+    if seconds.is_finite() {
+        seconds.max(MINING_DEBRIS_MIN_LIFETIME_SECS)
+    } else {
+        MINING_DEBRIS_FALLBACK_LIFETIME_SECS
+    }
+}
+
+fn mining_debris_half_extent(transform: &Transform) -> f32 {
+    transform.scale.max_element().max(0.01) * 0.5
+}
+
+fn mining_debris_ground_top(
+    transform: &Transform,
+    half_extent: f32,
+    registry: &BlockRegistry,
+    chunk_map: &ChunkMap,
+) -> Option<f32> {
+    let foot = transform.translation - Vec3::Y * (half_extent + 0.03);
+    let wx = foot.x.floor() as i32;
+    let wy = foot.y.floor() as i32;
+    let wz = foot.z.floor() as i32;
+    let below = get_block_world(chunk_map, IVec3::new(wx, wy, wz));
+    let below_is_support = below != 0 && !registry.is_fluid(below) && registry.stats(below).solid;
+    if below_is_support {
+        Some(wy as f32 + 1.0)
+    } else {
+        None
+    }
+}
+
 fn update_mining_debris_fx(
     mut commands: Commands,
     time: Res<Time>,
@@ -330,10 +361,19 @@ fn update_mining_debris_fx(
         }
 
         if let Some(mut motion) = maybe_motion {
+            let half = mining_debris_half_extent(&transform);
             if motion.resting {
                 motion.velocity = Vec3::ZERO;
                 motion.angular_velocity = Vec3::ZERO;
-                continue;
+                if let Some(ground_top) =
+                    mining_debris_ground_top(&transform, half, &registry, &chunk_map)
+                {
+                    if transform.translation.y - half <= ground_top + 0.001 {
+                        transform.translation.y = ground_top + half;
+                        continue;
+                    }
+                }
+                motion.resting = false;
             }
 
             motion.velocity.y -= 6.8 * dt;
@@ -354,17 +394,10 @@ fn update_mining_debris_fx(
                 }
             }
 
-            let half = transform.scale.max_element().max(0.01) * 0.5;
-            let foot = transform.translation - Vec3::Y * (half + 0.03);
-            let wx = foot.x.floor() as i32;
-            let wy = foot.y.floor() as i32;
-            let wz = foot.z.floor() as i32;
-            let below = get_block_world(&chunk_map, IVec3::new(wx, wy, wz));
-            let below_is_support =
-                below != 0 && !registry.is_fluid(below) && registry.stats(below).solid;
-            if below_is_support && motion.velocity.y <= 0.0 {
-                let ground_top = wy as f32 + 1.0;
-                if transform.translation.y - half <= ground_top {
+            if let Some(ground_top) =
+                mining_debris_ground_top(&transform, half, &registry, &chunk_map)
+            {
+                if motion.velocity.y <= 0.0 && transform.translation.y - half <= ground_top {
                     transform.translation.y = ground_top + half;
                     motion.velocity = Vec3::ZERO;
                     motion.angular_velocity = Vec3::ZERO;
@@ -416,7 +449,11 @@ fn block_break_handler(
     let BreakInputContext {
         multiplayer_connection,
         ui_state,
+        global_config,
     } = break_input_context;
+    let debris_lifetime_secs = sanitize_mining_debris_lifetime_secs(
+        global_config.interface.mining_debris_lifetime_seconds,
+    );
     let ActiveStructureCancelState {
         mut active_structure_recipe,
         mut active_structure_placement,
@@ -560,6 +597,7 @@ fn block_break_handler(
                     id_now,
                     now,
                     &mut emitter_state,
+                    debris_lifetime_secs,
                 );
                 return;
             }
@@ -634,6 +672,7 @@ fn block_break_handler(
             &registry,
             id_now,
             world_loc,
+            debris_lifetime_secs,
         );
     }
 
@@ -649,6 +688,7 @@ fn spawn_mining_hit_particles(
     block_id: BlockId,
     now: f32,
     emitter_state: &mut MiningDebrisEmitterState,
+    debris_lifetime_secs: f32,
 ) {
     if !fx_assets.initialized
         || block_id == 0
@@ -689,7 +729,7 @@ fn spawn_mining_hit_particles(
             + tangent * rand_range(0.08, 0.42)
             + Vec3::Y * rand_range(0.05, 0.34);
         let size = rand_range(0.028, 0.058) * s;
-        let lifetime = rand_range(MINING_PARTICLE_LIFETIME_MIN, MINING_PARTICLE_LIFETIME_MAX);
+        let lifetime = debris_lifetime_secs;
 
         commands.spawn((
             MiningDebrisVisual,
@@ -716,6 +756,7 @@ fn spawn_mining_rubble_pile(
     registry: &BlockRegistry,
     block_id: BlockId,
     world_loc: IVec3,
+    debris_lifetime_secs: f32,
 ) {
     if !fx_assets.initialized
         || block_id == 0
@@ -743,7 +784,7 @@ fn spawn_mining_rubble_pile(
             angle.sin() * radius,
         );
         let size = rand_range(0.045, 0.13) * s;
-        let lifetime = rand_range(MINING_RUBBLE_LIFETIME_MIN, MINING_RUBBLE_LIFETIME_MAX);
+        let lifetime = debris_lifetime_secs;
         let initial_velocity = Vec3::new(
             rand_range(-0.18, 0.18),
             rand_range(0.05, 0.42),

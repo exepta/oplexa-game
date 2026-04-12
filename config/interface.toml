@@ -3,3 +3,4 @@ locate-search-radius = 1000
 block-selection-border-color = "#111111"
 selection-line-width = 1.0
 language = "english"
+mining-debris-lifetime-seconds = 3.0
