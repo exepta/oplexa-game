@@ -49,6 +49,14 @@ pub struct UvRect {
     pub v1: f32,
 }
 
+/// Connected-texture runtime mapping (mask4 / 16 variants).
+#[derive(Clone)]
+pub struct ConnectedTextureDef {
+    pub group: String,
+    pub mask4_tiles: [UvRect; 16],
+    pub edge_clip_uv: f32,
+}
+
 /// Represents block def used by the `core::world::block` module.
 #[derive(Clone)]
 pub struct BlockDef {
@@ -66,6 +74,7 @@ pub struct BlockDef {
     pub uv_east: UvRect,
     pub uv_south: UvRect,
     pub uv_west: UvRect,
+    pub connected_texture: Option<ConnectedTextureDef>,
     pub image: Handle<Image>,
     pub material: Handle<StandardMaterial>,
 }
@@ -457,6 +466,7 @@ impl BlockRegistry {
             uv_east: Z,
             uv_south: Z,
             uv_west: Z,
+            connected_texture: None,
             image: Handle::default(),
             material: Handle::default(),
         });
@@ -504,6 +514,12 @@ impl BlockRegistry {
             .unwrap();
             let uv_west =
                 tile_uv(&tileset, require_face(&faces.west, "west", &localized_name)).unwrap();
+            let connected_texture = resolve_connected_texture(
+                block_json.connected_texture.as_ref(),
+                &tileset,
+                faces.north,
+                &localized_name,
+            );
 
             let (alpha_mode, base_color) = material_policy_from_stats(&block_json.stats);
 
@@ -535,6 +551,7 @@ impl BlockRegistry {
                 uv_east,
                 uv_south,
                 uv_west,
+                connected_texture,
                 image,
                 material,
             });
@@ -564,6 +581,7 @@ impl BlockRegistry {
             uv_east: Z,
             uv_south: Z,
             uv_west: Z,
+            connected_texture: None,
             image: Handle::default(),
             material: Handle::default(),
         });
@@ -592,6 +610,7 @@ impl BlockRegistry {
                 uv_east: Z,
                 uv_south: Z,
                 uv_west: Z,
+                connected_texture: None,
                 image: Handle::default(),
                 material: Handle::default(),
             });
@@ -663,6 +682,7 @@ impl BlockRegistry {
             uv_east: Z,
             uv_south: Z,
             uv_west: Z,
+            connected_texture: None,
             image,
             material,
         });
@@ -717,6 +737,7 @@ impl BlockRegistry {
             uv_east: Z,
             uv_south: Z,
             uv_west: Z,
+            connected_texture: None,
             image: Handle::default(),
             material: Handle::default(),
         });
@@ -1199,6 +1220,21 @@ struct BlockJson {
     pub prop: Option<PropDefinition>,
     #[serde(default)]
     pub collider: BlockColliderDefinition,
+    #[serde(default)]
+    pub connected_texture: Option<ConnectedTextureJson>,
+}
+
+/// Connected texture JSON schema for block defs.
+#[derive(Deserialize, Default)]
+struct ConnectedTextureJson {
+    #[serde(default)]
+    pub group: String,
+    #[serde(default = "default_connected_texture_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub mask_tiles: HashMap<String, String>,
+    #[serde(default)]
+    pub edge_clip_px: f32,
 }
 
 /// Represents texture faces json used by the `core::world::block` module.
@@ -1354,6 +1390,10 @@ fn default_mining_wobble_vertical_scale() -> f32 {
     0.35
 }
 
+fn default_connected_texture_mode() -> String {
+    "mask4".to_string()
+}
+
 /// Normalizes block identity fields loaded from JSON.
 ///
 /// Supports both schemas:
@@ -1444,6 +1484,69 @@ fn normalize_runtime_block_name_key(raw_name: &str, fallback_localized_name: &st
         return trimmed.to_string();
     }
     block_name_key_from_localized_name(fallback_localized_name)
+}
+
+fn normalize_connected_texture_group(raw: &str, fallback_block_name: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        fallback_block_name.to_string()
+    } else {
+        trimmed.to_ascii_lowercase()
+    }
+}
+
+fn parse_connected_texture_mask_index(raw_key: &str) -> Option<usize> {
+    let key = raw_key.trim().to_ascii_lowercase();
+    let numeric = key
+        .strip_prefix("mask_")
+        .or_else(|| key.strip_prefix('m'))
+        .unwrap_or(key.as_str());
+    let idx = numeric.parse::<usize>().ok()?;
+    (idx < 16).then_some(idx)
+}
+
+fn resolve_connected_texture(
+    cfg_opt: Option<&ConnectedTextureJson>,
+    tileset: &BlockTileset,
+    fallback_tile_name: &str,
+    block_name: &str,
+) -> Option<ConnectedTextureDef> {
+    let cfg = cfg_opt?;
+    if !cfg.mode.eq_ignore_ascii_case("mask4") {
+        panic!(
+            "block '{}': unsupported connected_texture.mode '{}', expected 'mask4'",
+            block_name, cfg.mode
+        );
+    }
+
+    let base_uv = tile_uv(tileset, fallback_tile_name).unwrap_or_else(|err| {
+        panic!(
+            "block '{}': invalid connected_texture fallback tile '{}': {}",
+            block_name, fallback_tile_name, err
+        )
+    });
+    let mut mask4_tiles = [base_uv; 16];
+    for (raw_key, tile_name) in &cfg.mask_tiles {
+        let idx = parse_connected_texture_mask_index(raw_key).unwrap_or_else(|| {
+            panic!(
+                "block '{}': invalid connected_texture.mask_tiles key '{}', expected 0..15, m0..m15 or mask_0..mask_15",
+                block_name, raw_key
+            )
+        });
+        let uv = tile_uv(tileset, tile_name).unwrap_or_else(|err| {
+            panic!(
+                "block '{}': invalid connected_texture tile '{}' for key '{}': {}",
+                block_name, tile_name, raw_key, err
+            )
+        });
+        mask4_tiles[idx] = uv;
+    }
+
+    Some(ConnectedTextureDef {
+        group: normalize_connected_texture_group(cfg.group.as_str(), block_name),
+        mask4_tiles,
+        edge_clip_uv: (cfg.edge_clip_px / tileset.tile_size.max(1) as f32).clamp(0.0, 0.45),
+    })
 }
 
 /* ---------------- uv helpers ---------------- */

@@ -295,6 +295,35 @@ Texture face keys:
 can replace this block directly (for example flowers/tall grass) without
 triggering a drop from the replaced block.
 
+`connected_texture` is optional and enables neighbor-aware atlas tile selection
+for cube faces (useful for glass-like seamless connections):
+
+```json
+"connected_texture": {
+  "group": "glass",
+  "mode": "mask4",
+  "edge_clip_px": 16.0,
+  "mask_tiles": {
+    "0": "glass_isolated",
+    "1": "glass_link_u_pos",
+    "2": "glass_link_u_neg",
+    "4": "glass_link_v_pos",
+    "8": "glass_link_v_neg",
+    "15": "glass_cross"
+  }
+}
+```
+
+Notes:
+
+- `group`: blocks with the same group are treated as connected.
+- `mode`: currently `mask4`.
+- `edge_clip_px`: optional edge-strip width in pixels to remove on connected edges.
+  Useful for framed-glass textures where inner frames should disappear.
+- `mask_tiles`: optional mapping for bitmasks `0..15` (`m0..m15` or
+  `mask_0..mask_15` also accepted). Missing masks fall back to the block's
+  regular face tile.
+
 ### 4.1.3 Atlas `data.json` format
 
 ```json
