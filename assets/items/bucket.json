@@ -1,0 +1,17 @@
+{
+  "localized_name": "oplexa:bucket",
+  "name": "KEY_BUCKET",
+  "max_stack_size": 1,
+  "category": "tool",
+  "block_item": false,
+  "placeable": false,
+  "tags": ["tool", "container"],
+  "rarity": "common",
+  "render": {
+    "type": "flat",
+    "texture": "textures/items/bucket.png"
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

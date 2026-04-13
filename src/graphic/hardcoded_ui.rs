@@ -47,9 +47,6 @@ use crate::generator::chunk::chunk_builder::{
     ChunkStageTelemetry, ColliderBacklog, PendingColliderBuild,
 };
 use crate::generator::chunk::chunk_struct::{MeshBacklog, PendingGen, PendingMesh};
-use crate::generator::chunk::water_builder::{
-    PendingWaterLoad, PendingWaterMesh, WaterMeshBacklog, WaterMeshingTodo, WaterReadySet,
-};
 use crate::utils::key_utils::convert;
 use api::core::network::config::NetworkSettings;
 use api::core::network::discovery::{LanDiscoveryClient, LanServerInfo};
@@ -956,7 +953,7 @@ impl Plugin for HardcodedUiPlugin {
                     .chain(),
             )
             .add_systems(
-                OnExit(AppState::Loading(LoadingStates::WaterGen)),
+                OnExit(AppState::Loading(LoadingStates::CaveGen)),
                 hide_world_gen_ui,
             )
             .add_systems(

@@ -1,7 +1,7 @@
 use crate::core::world::biome::BiomeVegetationSpawn;
 use crate::core::world::biome::func::{col_rand_f32, dominant_biome_at_p_chunks};
 use crate::core::world::biome::registry::BiomeRegistry;
-use crate::core::world::block::{BlockId, BlockRegistry};
+use crate::core::world::block::{BlockEnvironment, BlockId, BlockRegistry};
 use crate::core::world::chunk::{ChunkData, SEA_LEVEL};
 use crate::core::world::chunk_dimension::{CX, CY, CZ, Y_MIN};
 use bevy::prelude::*;
@@ -48,12 +48,25 @@ pub fn populate_vegetation_props_in_chunk(
                 continue;
             };
             let ground_world_y = Y_MIN + ground_ly as i32;
-            if ground_world_y < SEA_LEVEL - 1 {
+            let place_ly = ground_ly + 1;
+            let place_world_y = Y_MIN + place_ly as i32;
+            let allows_water_env = reg
+                .allowed_environments(prop_id)
+                .contains(&BlockEnvironment::Water);
+            if !allows_water_env && ground_world_y < SEA_LEVEL - 1 {
+                continue;
+            }
+            if !prop_environment_allows_spawn(chunk, reg, prop_id, lx, place_ly, lz, place_world_y)
+            {
                 continue;
             }
 
-            let place_ly = ground_ly + 1;
-            chunk.set(lx, place_ly, lz, prop_id);
+            let place_id = chunk.get(lx, place_ly, lz);
+            if reg.is_water_logged(prop_id) && place_id != 0 && reg.is_fluid(place_id) {
+                chunk.set_stacked(lx, place_ly, lz, prop_id);
+            } else {
+                chunk.set(lx, place_ly, lz, prop_id);
+            }
         }
     }
 }
@@ -76,7 +89,8 @@ fn find_spawn_ground_local_y(
         }
 
         let place_ly = ground_ly + 1;
-        if chunk.get(lx, place_ly, lz) != 0 {
+        let place_id = chunk.get(lx, place_ly, lz);
+        if place_id != 0 && !(reg.is_water_logged(prop_id) && reg.is_fluid(place_id)) {
             continue;
         }
 
@@ -142,4 +156,27 @@ fn is_valid_ground_for_prop(reg: &BlockRegistry, prop_id: BlockId, ground_id: Bl
         && !reg.is_prop(ground_id)
         && reg.stats(ground_id).solid
         && reg.prop_allows_ground(prop_id, ground_id)
+}
+
+#[inline]
+fn prop_environment_allows_spawn(
+    chunk: &ChunkData,
+    reg: &BlockRegistry,
+    prop_id: BlockId,
+    lx: usize,
+    place_ly: usize,
+    lz: usize,
+    place_world_y: i32,
+) -> bool {
+    let allowed = reg.allowed_environments(prop_id);
+    if allowed.is_empty() {
+        return true;
+    }
+
+    let place_id = chunk.get(lx, place_ly, lz);
+    allowed.iter().any(|env| match env {
+        BlockEnvironment::Water => place_id != 0 && reg.is_fluid(place_id),
+        BlockEnvironment::Overworld => place_world_y > 50,
+        BlockEnvironment::Cave => place_world_y <= 10,
+    })
 }

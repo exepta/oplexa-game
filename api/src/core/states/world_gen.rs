@@ -5,7 +5,6 @@ use bevy::prelude::*;
 pub enum LoadingPhase {
     #[default]
     BaseGen,
-    WaterGen,
     CaveGen,
     Done,
 }
@@ -25,7 +24,6 @@ pub struct PhaseDetail {
 pub struct LoadingProgress {
     pub phase: LoadingPhase,
     pub base: PhaseDetail,
-    pub water: PhaseDetail,
     pub cave: PhaseDetail,
     pub overall_pct: f32,
 }

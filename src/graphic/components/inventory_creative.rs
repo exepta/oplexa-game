@@ -32,17 +32,33 @@ fn sync_creative_panel_state_from_registry(
     mut creative_ui: ResMut<CreativePanelUiState>,
     mut creative_panel: ResMut<CreativePanelState>,
 ) {
-    let expected_items = item_registry
-        .defs
-        .len()
-        .saturating_sub(1)
-        .min(u16::MAX as usize);
+    let mut expected_items = 0usize;
+    for raw in 1..item_registry.defs.len() {
+        let Ok(item_id) = u16::try_from(raw) else {
+            break;
+        };
+        let Some(def) = item_registry.def_opt(item_id) else {
+            continue;
+        };
+        if def.block_item && is_creative_hidden_flow_variant_item(def.key.as_str()) {
+            continue;
+        }
+        expected_items += 1;
+    }
     if !creative_ui.synced_once || creative_panel.item_count() != expected_items {
         creative_panel.rebuild_from_registry(&item_registry);
         creative_ui.synced_once = true;
     }
 
     creative_panel.clamp_page();
+}
+
+#[inline]
+fn is_creative_hidden_flow_variant_item(key: &str) -> bool {
+    let Some((_, suffix)) = key.rsplit_once("_flow_") else {
+        return false;
+    };
+    !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit())
 }
 
 /// Handles creative panel navigation for the `graphic::components::inventory_creative` module.

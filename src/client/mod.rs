@@ -385,10 +385,8 @@ fn dedupe_remote_chunk_decode_queue(queue: &mut VecDeque<ServerChunkData>) {
 
 fn remap_server_chunk_payload_in_place(
     chunk: &mut crate::core::world::chunk::ChunkData,
-    fluid_chunk: &mut FluidChunk,
     block_remap: &BlockIdRemap,
     local_block_registry_len: usize,
-    water_local_id: u16,
 ) {
     let server_to_local = &block_remap.server_to_local;
     let remap = |server_id: u16| -> u16 {
@@ -407,15 +405,9 @@ fn remap_server_chunk_payload_in_place(
         }
     };
 
-    for (index, server_id) in chunk.blocks.iter_mut().enumerate() {
+    for server_id in &mut chunk.blocks {
         let local_id = remap(*server_id);
-        if water_local_id != 0 && local_id == water_local_id {
-            *server_id = 0;
-            let word = index >> 6;
-            fluid_chunk.bits[word] |= 1u64 << (index & 63);
-        } else {
-            *server_id = local_id;
-        }
+        *server_id = local_id;
     }
 
     for server_id in &mut chunk.stacked_blocks {
@@ -1383,10 +1375,6 @@ fn receive_world_messages(
 
     let mut dirty_coords = HashSet::new();
     if let Some(registry) = registry.as_ref() {
-        let water_local_id = registry
-            .id_opt("water_block")
-            .or_else(|| registry.id_opt("water"))
-            .unwrap_or(0);
         for _ in 0..decode_budget {
             let Some(message) = chunk_decode_queue.queued.pop_front() else {
                 break;
@@ -1399,18 +1387,11 @@ fn receive_world_messages(
                 continue;
             };
 
-            let mut fluid_chunk = FluidChunk::new(SEA_LEVEL);
-            remap_server_chunk_payload_in_place(
-                &mut chunk,
-                &mut fluid_chunk,
-                &block_remap,
-                registry.defs.len(),
-                water_local_id,
-            );
+            remap_server_chunk_payload_in_place(&mut chunk, &block_remap, registry.defs.len());
 
             chunk.mark_all_dirty();
             chunk_map.chunks.insert(coord, chunk);
-            fluids.0.insert(coord, fluid_chunk);
+            fluids.0.remove(&coord);
 
             dirty_coords.insert(coord);
 
@@ -2220,7 +2201,7 @@ fn apply_remote_block_place(
 
     if let Some(mut access) = world_access_mut(chunk_map, world_pos) {
         if is_fluid {
-            access.set(0);
+            access.set(block_id);
             access.set_stacked(0);
         } else {
             access.set(block_id);

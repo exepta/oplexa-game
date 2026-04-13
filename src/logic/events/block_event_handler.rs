@@ -23,7 +23,7 @@ use crate::core::ui::{HotbarSelectionState, UiInteractionState};
 use crate::core::world::block::*;
 use crate::core::world::chunk::*;
 use crate::core::world::chunk_dimension::*;
-use crate::core::world::fluid::FluidMap;
+use crate::core::world::fluid::{FluidChunk, FluidMap};
 use crate::core::world::save::{
     RegionCache, StructureRegionDropItem, StructureRegionEntry, TAG_STR1, WorldSave,
     container_find, container_upsert, decode_structure_entries, encode_structure_entries,
@@ -45,6 +45,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 #[derive(Component, Clone, Copy)]
 struct StructureStyleSourceItem {
@@ -119,6 +120,8 @@ const MINING_PARTICLE_INTERVAL_SECS: f32 = 0.045;
 const MINING_RUBBLE_RADIUS_MAX_METERS: f32 = 1.0;
 const MINING_DEBRIS_FALLBACK_LIFETIME_SECS: f32 = 3.0;
 const MINING_DEBRIS_MIN_LIFETIME_SECS: f32 = 0.05;
+const WATER_FLOW_SOURCE_LEVEL: u8 = 10;
+const WATER_FLOW_DEFAULT_STEP_MS: f32 = 750.0;
 
 #[derive(Resource, Default)]
 struct MiningDebrisFxAssets {
@@ -130,6 +133,70 @@ struct MiningDebrisFxAssets {
 struct MiningDebrisEmitterState {
     next_emit_at: f32,
     active_target: Option<(IVec3, BlockId)>,
+}
+
+#[derive(Resource, Default)]
+struct WaterFlowIds {
+    initialized: bool,
+    source_id: BlockId,
+    settled_id: BlockId,
+    by_level: [BlockId; 11],
+}
+
+impl WaterFlowIds {
+    #[inline]
+    fn contains(&self, id: BlockId) -> bool {
+        id != 0 && (id == self.settled_id || self.by_level.contains(&id))
+    }
+
+    #[inline]
+    fn id_for_level(&self, level: u8) -> BlockId {
+        self.by_level[level.clamp(1, WATER_FLOW_SOURCE_LEVEL) as usize]
+    }
+
+    #[inline]
+    fn level_for_id(&self, id: BlockId) -> u8 {
+        if id == 0 {
+            return 0;
+        }
+        if id == self.settled_id {
+            return WATER_FLOW_SOURCE_LEVEL;
+        }
+        if id == self.source_id {
+            return WATER_FLOW_SOURCE_LEVEL;
+        }
+        for level in 1..WATER_FLOW_SOURCE_LEVEL {
+            if self.by_level[level as usize] == id {
+                return level;
+            }
+        }
+        0
+    }
+}
+
+#[derive(Resource)]
+struct WaterFlowState {
+    sources: HashSet<IVec3>,
+    managed: HashSet<IVec3>,
+    reactivation: HashSet<IVec3>,
+    seeded_existing_sources: bool,
+    dirty: bool,
+    step_ms: f32,
+    timer: Timer,
+}
+
+impl Default for WaterFlowState {
+    fn default() -> Self {
+        Self {
+            sources: HashSet::new(),
+            managed: HashSet::new(),
+            reactivation: HashSet::new(),
+            seeded_existing_sources: false,
+            dirty: false,
+            step_ms: WATER_FLOW_DEFAULT_STEP_MS,
+            timer: Timer::from_seconds(WATER_FLOW_DEFAULT_STEP_MS / 1000.0, TimerMode::Repeating),
+        }
+    }
 }
 
 #[derive(Component)]
@@ -219,9 +286,12 @@ impl Plugin for BlockEventHandler {
         app.init_resource::<MultiplayerStructureReconcileQueue>();
         app.init_resource::<MiningDebrisFxAssets>();
         app.init_resource::<MiningDebrisEmitterState>();
+        app.init_resource::<WaterFlowIds>();
+        app.init_resource::<WaterFlowState>();
         app.add_systems(
             Update,
             (
+                init_water_flow_ids.in_set(VoxelStage::WorldEdit),
                 sync_structures_for_loaded_chunks.in_set(VoxelStage::WorldEdit),
                 enforce_block_texture_nearest_sampler_system.in_set(VoxelStage::WorldEdit),
                 ensure_mining_debris_fx_assets.in_set(VoxelStage::WorldEdit),
@@ -232,7 +302,13 @@ impl Plugin for BlockEventHandler {
                     .chain()
                     .in_set(VoxelStage::WorldEdit),
                 update_mining_debris_fx.in_set(VoxelStage::WorldEdit),
-                block_place_handler.in_set(VoxelStage::WorldEdit),
+                (
+                    block_place_handler,
+                    track_water_flow_sources_from_block_events,
+                    run_water_flow_simulation,
+                )
+                    .chain()
+                    .in_set(VoxelStage::WorldEdit),
                 (
                     collect_multiplayer_structure_reconcile_chunks,
                     reconcile_multiplayer_structure_visuals,
@@ -246,6 +322,495 @@ impl Plugin for BlockEventHandler {
             OnExit(AppState::InGame(InGameStates::Game)),
             (cleanup_structure_runtime_on_exit, cleanup_mining_debris_fx).chain(),
         );
+    }
+}
+
+fn init_water_flow_ids(registry: Res<BlockRegistry>, mut flow_ids: ResMut<WaterFlowIds>) {
+    if flow_ids.initialized {
+        return;
+    }
+
+    let source_id = id_any(&registry, &["water_block", "water"]);
+    if source_id == 0 {
+        return;
+    }
+
+    flow_ids.source_id = source_id;
+    flow_ids.settled_id = 0;
+    flow_ids.by_level = [0; 11];
+    flow_ids.by_level[WATER_FLOW_SOURCE_LEVEL as usize] = source_id;
+    let source_name = registry.def(source_id).localized_name.as_str();
+    let settled_name = format!("{source_name}_flow_{WATER_FLOW_SOURCE_LEVEL}");
+    let legacy_settled_name = format!("water_flow_{WATER_FLOW_SOURCE_LEVEL}");
+    flow_ids.settled_id = registry
+        .id_opt(settled_name.as_str())
+        .or_else(|| registry.id_opt(legacy_settled_name.as_str()))
+        .unwrap_or(0);
+    for level in 1..WATER_FLOW_SOURCE_LEVEL {
+        let generated_name = format!("{source_name}_flow_{level}");
+        let legacy_name = format!("water_flow_{level}");
+        flow_ids.by_level[level as usize] = registry
+            .id_opt(generated_name.as_str())
+            .or_else(|| registry.id_opt(legacy_name.as_str()))
+            .unwrap_or(0);
+    }
+    flow_ids.initialized = true;
+}
+
+fn track_water_flow_sources_from_block_events(
+    mut place_events: MessageReader<BlockPlaceByPlayerEvent>,
+    mut break_events: MessageReader<BlockBreakByPlayerEvent>,
+    chunk_map: Res<ChunkMap>,
+    flow_ids: Res<WaterFlowIds>,
+    mut flow_state: ResMut<WaterFlowState>,
+) {
+    if !flow_ids.initialized || flow_ids.source_id == 0 {
+        return;
+    }
+
+    let mut touched = false;
+    for event in place_events.read() {
+        if event.block_id == flow_ids.source_id {
+            touched |= flow_state.sources.insert(event.location);
+        } else {
+            touched |= flow_state.sources.remove(&event.location);
+        }
+        queue_water_reactivation_for_change(event.location, &chunk_map, &flow_ids, &mut flow_state);
+        flow_state.dirty = true;
+    }
+
+    for event in break_events.read() {
+        touched |= flow_state.sources.remove(&event.location);
+        queue_water_reactivation_for_change(event.location, &chunk_map, &flow_ids, &mut flow_state);
+        flow_state.dirty = true;
+    }
+
+    if touched {
+        flow_state.dirty = true;
+    }
+}
+
+#[inline]
+fn queue_water_reactivation_for_change(
+    center: IVec3,
+    chunk_map: &ChunkMap,
+    flow_ids: &WaterFlowIds,
+    flow_state: &mut WaterFlowState,
+) {
+    let mut water_nearby = false;
+    for off in [
+        IVec3::ZERO,
+        IVec3::X,
+        IVec3::NEG_X,
+        IVec3::Y,
+        IVec3::NEG_Y,
+        IVec3::Z,
+        IVec3::NEG_Z,
+    ] {
+        if water_level_at_world(center + off, chunk_map, flow_ids) > 0 {
+            water_nearby = true;
+            break;
+        }
+    }
+    if !water_nearby {
+        return;
+    }
+
+    flow_state.reactivation.insert(center);
+    for off in [
+        IVec3::X,
+        IVec3::NEG_X,
+        IVec3::Y,
+        IVec3::NEG_Y,
+        IVec3::Z,
+        IVec3::NEG_Z,
+    ] {
+        flow_state.reactivation.insert(center + off);
+    }
+    flow_state.dirty = true;
+}
+
+fn run_water_flow_simulation(
+    time: Res<Time>,
+    registry: Res<BlockRegistry>,
+    flow_ids: Res<WaterFlowIds>,
+    mut flow_state: ResMut<WaterFlowState>,
+    mut chunk_map: ResMut<ChunkMap>,
+    mut fluids: ResMut<FluidMap>,
+    mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
+) {
+    if !flow_ids.initialized || flow_ids.source_id == 0 {
+        return;
+    }
+
+    let configured_step_ms = registry
+        .fluid_flow(flow_ids.source_id)
+        .map(|cfg| cfg.step_ms)
+        .unwrap_or(WATER_FLOW_DEFAULT_STEP_MS)
+        .clamp(50.0, 60_000.0);
+    if (flow_state.step_ms - configured_step_ms).abs() > 0.5 {
+        flow_state.step_ms = configured_step_ms;
+        flow_state
+            .timer
+            .set_duration(Duration::from_secs_f32(configured_step_ms / 1000.0));
+        flow_state.timer.reset();
+    }
+
+    flow_state.timer.tick(time.delta());
+    if !flow_state.timer.just_finished() {
+        return;
+    }
+
+    if !flow_state.seeded_existing_sources {
+        for (coord, chunk) in chunk_map.chunks.iter() {
+            for ly in 0..CY {
+                for lz in 0..CZ {
+                    for lx in 0..CX {
+                        if chunk.get(lx, ly, lz) != flow_ids.source_id {
+                            continue;
+                        }
+                        let wx = coord.x * CX as i32 + lx as i32;
+                        let wz = coord.y * CZ as i32 + lz as i32;
+                        let wy = Y_MIN + ly as i32;
+                        flow_state.sources.insert(IVec3::new(wx, wy, wz));
+                    }
+                }
+            }
+        }
+        flow_state.seeded_existing_sources = true;
+        flow_state.dirty = true;
+    }
+
+    // Keep only currently valid source blocks.
+    let mut removed_any_source = false;
+    flow_state.sources.retain(|pos| {
+        let keep = get_block_world(&chunk_map, *pos) == flow_ids.source_id;
+        if !keep {
+            removed_any_source = true;
+        }
+        keep
+    });
+    if removed_any_source {
+        flow_state.dirty = true;
+    }
+
+    if !flow_state.dirty
+        && flow_state.sources.is_empty()
+        && flow_state.managed.is_empty()
+        && flow_state.reactivation.is_empty()
+    {
+        return;
+    }
+
+    if flow_state.sources.is_empty()
+        && flow_state.managed.is_empty()
+        && flow_state.reactivation.is_empty()
+    {
+        flow_state.dirty = false;
+        return;
+    }
+
+    let mut candidates: HashSet<IVec3> = HashSet::new();
+    for pos in flow_state
+        .sources
+        .iter()
+        .copied()
+        .chain(flow_state.managed.iter().copied())
+        .chain(flow_state.reactivation.iter().copied())
+    {
+        candidates.insert(pos);
+        for off in [
+            IVec3::X,
+            IVec3::NEG_X,
+            IVec3::Y,
+            IVec3::NEG_Y,
+            IVec3::Z,
+            IVec3::NEG_Z,
+        ] {
+            candidates.insert(pos + off);
+        }
+    }
+
+    let mut desired_levels: HashMap<IVec3, u8> = HashMap::new();
+    for pos in candidates {
+        if pos.y < Y_MIN || pos.y > Y_MAX {
+            continue;
+        }
+
+        if get_block_world(&chunk_map, pos) == flow_ids.settled_id {
+            // Keep settled worldgen water inert unless runtime creates explicit flow cells nearby.
+            continue;
+        }
+
+        if flow_state.sources.contains(&pos) {
+            desired_levels.insert(pos, WATER_FLOW_SOURCE_LEVEL);
+            continue;
+        }
+
+        if !water_can_flow_into(pos, &chunk_map, &registry, &flow_ids) {
+            continue;
+        }
+
+        let above_level = water_level_at_world(pos + IVec3::Y, &chunk_map, &flow_ids);
+        let mut target_level = if above_level > 0 {
+            // Vertical drop restarts flow strength on the new height level.
+            WATER_FLOW_SOURCE_LEVEL - 1
+        } else {
+            0
+        };
+        for off in [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z] {
+            let neigh_pos = pos + off;
+            let neigh_level = water_level_at_world(neigh_pos, &chunk_map, &flow_ids);
+            let neigh_is_source =
+                water_is_source_like(neigh_pos, &chunk_map, &flow_ids, &flow_state);
+            let neigh_supported_from_below =
+                water_has_horizontal_spread_support(neigh_pos, &chunk_map, &registry);
+            if !neigh_is_source && !neigh_supported_from_below {
+                // Downflow always wins for unsupported non-source cells:
+                // no horizontal spread through air.
+                continue;
+            }
+            if neigh_level > 1 {
+                target_level = target_level.max(neigh_level - 1);
+            }
+        }
+        if target_level == 0 && water_has_horizontal_spread_support(pos, &chunk_map, &registry) {
+            target_level = target_level.max(water_bridge_seed_level(
+                pos, &chunk_map, &flow_ids, &registry,
+            ));
+        }
+        if water_should_promote_to_source(pos, &chunk_map, &flow_state, &registry) {
+            target_level = WATER_FLOW_SOURCE_LEVEL;
+        }
+        if target_level > 0 {
+            let clamped = target_level.clamp(1, WATER_FLOW_SOURCE_LEVEL);
+            desired_levels.insert(pos, clamped);
+        }
+    }
+
+    let mut changed_positions: HashSet<IVec3> = HashSet::new();
+    let old_managed: Vec<IVec3> = flow_state.managed.iter().copied().collect();
+    for pos in old_managed {
+        if desired_levels.contains_key(&pos) {
+            continue;
+        }
+        let current = get_block_world(&chunk_map, pos);
+        if !flow_ids.contains(current)
+            || current == flow_ids.source_id
+            || current == flow_ids.settled_id
+        {
+            continue;
+        }
+        let current_stacked = get_stacked_block_world(&chunk_map, pos);
+        if let Some(mut access) = world_access_mut(&mut chunk_map, pos) {
+            if current_stacked != 0 && !registry.is_water_logged(current_stacked) {
+                access.set(current_stacked);
+                access.set_stacked(0);
+            } else {
+                access.set(0);
+                access.set_stacked(0);
+            }
+            set_fluid_bit_for_world_pos(&mut fluids, pos, false);
+            changed_positions.insert(pos);
+        }
+    }
+
+    for (pos, level) in desired_levels.iter() {
+        let target_id = flow_ids.id_for_level(*level);
+        if target_id == 0 {
+            continue;
+        }
+
+        let current = get_block_world(&chunk_map, *pos);
+        let current_stacked = get_stacked_block_world(&chunk_map, *pos);
+        let keep_stacked = current_stacked != 0 && registry.is_water_logged(current_stacked);
+        if current != target_id || (current_stacked != 0 && !keep_stacked) {
+            if let Some(mut access) = world_access_mut(&mut chunk_map, *pos) {
+                access.set(target_id);
+                if !keep_stacked {
+                    access.set_stacked(0);
+                }
+                changed_positions.insert(*pos);
+            }
+        }
+        set_fluid_bit_for_world_pos(&mut fluids, *pos, true);
+    }
+
+    flow_state.managed = desired_levels
+        .keys()
+        .copied()
+        .filter(|pos| !flow_state.sources.contains(pos))
+        .collect();
+    for pos in changed_positions {
+        mark_dirty_block_and_neighbors(&mut chunk_map, pos, &mut ev_dirty);
+    }
+    flow_state.reactivation.clear();
+    flow_state.dirty = false;
+}
+
+#[inline]
+fn water_level_at_world(pos: IVec3, chunk_map: &ChunkMap, flow_ids: &WaterFlowIds) -> u8 {
+    flow_ids.level_for_id(get_block_world(chunk_map, pos))
+}
+
+#[inline]
+fn water_is_source_like(
+    pos: IVec3,
+    chunk_map: &ChunkMap,
+    flow_ids: &WaterFlowIds,
+    flow_state: &WaterFlowState,
+) -> bool {
+    if flow_state.sources.contains(&pos) {
+        return true;
+    }
+    let id = get_block_world(chunk_map, pos);
+    id != 0 && (id == flow_ids.source_id || id == flow_ids.settled_id)
+}
+
+#[inline]
+fn water_can_flow_into(
+    pos: IVec3,
+    chunk_map: &ChunkMap,
+    registry: &BlockRegistry,
+    flow_ids: &WaterFlowIds,
+) -> bool {
+    if pos.y < Y_MIN || pos.y > Y_MAX {
+        return false;
+    }
+    let (chunk_coord, _) = world_to_chunk_xz(pos.x, pos.z);
+    if !chunk_map.chunks.contains_key(&chunk_coord) {
+        return false;
+    }
+
+    let id = get_block_world(chunk_map, pos);
+    if id == 0 || flow_ids.contains(id) || registry.is_overridable(id) {
+        let stacked = get_stacked_block_world(chunk_map, pos);
+        return stacked == 0 || flow_ids.contains(stacked) || registry.is_overridable(stacked);
+    }
+    false
+}
+
+#[inline]
+fn water_has_horizontal_spread_support(
+    pos: IVec3,
+    chunk_map: &ChunkMap,
+    registry: &BlockRegistry,
+) -> bool {
+    if pos.y <= Y_MIN {
+        return true;
+    }
+    let below_pos = pos + IVec3::NEG_Y;
+    let below = get_block_world(chunk_map, below_pos);
+    if below != 0 && !registry.is_fluid(below) && registry.stats(below).solid {
+        return true;
+    }
+    let below_stacked = get_stacked_block_world(chunk_map, below_pos);
+    below_stacked != 0 && !registry.is_fluid(below_stacked) && registry.stats(below_stacked).solid
+}
+
+#[inline]
+fn water_bridge_seed_level(
+    pos: IVec3,
+    chunk_map: &ChunkMap,
+    flow_ids: &WaterFlowIds,
+    registry: &BlockRegistry,
+) -> u8 {
+    let axis_bridge_level = |dir: IVec3| -> u8 {
+        let has_adjacent_water = water_level_at_world(pos - dir, chunk_map, flow_ids) > 0
+            || water_level_at_world(pos + dir, chunk_map, flow_ids) > 0;
+        if !has_adjacent_water {
+            return 0;
+        }
+
+        let mut neg = 0u8;
+        let mut posi = 0u8;
+        for dist in 1..=3 {
+            let neg_pos = pos - dir * dist;
+            let pos_pos = pos + dir * dist;
+            if water_has_horizontal_spread_support(neg_pos, chunk_map, registry) {
+                neg = neg.max(water_level_at_world(neg_pos, chunk_map, flow_ids));
+            }
+            if water_has_horizontal_spread_support(pos_pos, chunk_map, registry) {
+                posi = posi.max(water_level_at_world(pos_pos, chunk_map, flow_ids));
+            }
+        }
+        if neg > 0 && posi > 0 {
+            neg.max(posi).saturating_sub(1).max(1)
+        } else {
+            0
+        }
+    };
+    axis_bridge_level(IVec3::X).max(axis_bridge_level(IVec3::Z))
+}
+
+#[inline]
+fn water_should_promote_to_source(
+    pos: IVec3,
+    chunk_map: &ChunkMap,
+    flow_state: &WaterFlowState,
+    registry: &BlockRegistry,
+) -> bool {
+    if !water_has_horizontal_spread_support(pos, chunk_map, registry) {
+        return false;
+    }
+    let mut source_neighbors = 0u8;
+    for off in [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z] {
+        if flow_state.sources.contains(&(pos + off)) {
+            source_neighbors += 1;
+        }
+    }
+    source_neighbors >= 2
+}
+
+#[inline]
+fn set_fluid_bit_for_world_pos(fluids: &mut FluidMap, world_pos: IVec3, on: bool) {
+    if world_pos.y < Y_MIN || world_pos.y > Y_MAX {
+        return;
+    }
+    let (chunk_coord, local) = world_to_chunk_xz(world_pos.x, world_pos.z);
+    let lx = local.x as usize;
+    let lz = local.y as usize;
+    let ly = world_y_to_local(world_pos.y);
+    let fluid_chunk = fluids
+        .0
+        .entry(chunk_coord)
+        .or_insert_with(|| FluidChunk::new(SEA_LEVEL));
+    fluid_chunk.set(lx, ly, lz, on);
+}
+
+#[inline]
+fn block_allows_environment_at(
+    block_id: BlockId,
+    world_pos: IVec3,
+    chunk_map: &ChunkMap,
+    registry: &BlockRegistry,
+    fluids: &FluidMap,
+) -> bool {
+    let allowed = registry.allowed_environments(block_id);
+    if allowed.is_empty() {
+        return true;
+    }
+    allowed
+        .iter()
+        .any(|env| environment_matches(*env, world_pos, chunk_map, registry, fluids))
+}
+
+#[inline]
+fn environment_matches(
+    env: BlockEnvironment,
+    world_pos: IVec3,
+    chunk_map: &ChunkMap,
+    registry: &BlockRegistry,
+    fluids: &FluidMap,
+) -> bool {
+    match env {
+        BlockEnvironment::Water => {
+            let primary = get_block_world(chunk_map, world_pos);
+            (primary != 0 && registry.is_fluid(primary))
+                || fluid_at_world(fluids, world_pos.x, world_pos.y, world_pos.z)
+        }
+        BlockEnvironment::Overworld => world_pos.y > 50,
+        BlockEnvironment::Cave => world_pos.y <= 10,
     }
 }
 
@@ -965,10 +1530,16 @@ fn remove_unsupported_props_above(
 ) {
     let mut world_loc = support_loc + IVec3::Y;
     while world_loc.y <= Y_MAX {
-        let prop_id = get_block_world(chunk_map, world_loc);
-        if prop_id == 0 || !registry.is_prop(prop_id) {
+        let primary_id = get_block_world(chunk_map, world_loc);
+        let stacked_id = get_stacked_block_world(chunk_map, world_loc);
+
+        let (prop_id, remove_stacked) = if stacked_id != 0 && registry.is_prop(stacked_id) {
+            (stacked_id, true)
+        } else if primary_id != 0 && registry.is_prop(primary_id) {
+            (primary_id, false)
+        } else {
             break;
-        }
+        };
 
         let below_id = get_block_world(chunk_map, world_loc + IVec3::NEG_Y);
         if registry.prop_allows_ground(prop_id, below_id) {
@@ -976,7 +1547,11 @@ fn remove_unsupported_props_above(
         }
 
         if let Some(mut access) = world_access_mut(chunk_map, world_loc) {
-            access.set(0);
+            if remove_stacked {
+                access.set_stacked(0);
+            } else {
+                access.set(0);
+            }
         }
         mark_dirty_block_and_neighbors(chunk_map, world_loc, ev_dirty);
 
@@ -1283,19 +1858,32 @@ fn block_place_handler(
     let lx = l.x.clamp(0, (CX as i32 - 1) as u32) as usize;
     let lz = l.y.clamp(0, (CZ as i32 - 1) as u32) as usize;
     let ly = (world_pos.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+    let Some(chunk) = chunk_map.chunks.get(&chunk_coord) else {
+        return;
+    };
+    let existing_primary_id = chunk.get(lx, ly, lz);
+    let existing_stacked_id = chunk.get_stacked(lx, ly, lz);
 
-    let can_place = chunk_map
-        .chunks
-        .get(&chunk_coord)
-        .map(|ch| {
-            let current = ch.get(lx, ly, lz);
-            if place_into_stacked {
-                current != 0 && !registry.is_overridable(current) && ch.get_stacked(lx, ly, lz) == 0
-            } else {
-                current == 0 || registry.is_overridable(current)
-            }
-        })
-        .unwrap_or(false);
+    if !place_into_stacked
+        && registry.is_water_logged(place_id)
+        && existing_primary_id != 0
+        && registry.is_fluid(existing_primary_id)
+        && existing_stacked_id == 0
+    {
+        place_into_stacked = true;
+    }
+
+    let can_place = if place_into_stacked {
+        if existing_primary_id == 0 || existing_stacked_id != 0 {
+            false
+        } else if registry.is_fluid(existing_primary_id) {
+            registry.is_water_logged(place_id)
+        } else {
+            !registry.is_overridable(existing_primary_id)
+        }
+    } else {
+        existing_primary_id == 0 || registry.is_overridable(existing_primary_id)
+    };
     if !can_place {
         return;
     }
@@ -1308,6 +1896,10 @@ fn block_place_handler(
         return;
     }
 
+    if !block_allows_environment_at(place_id, world_pos, &chunk_map, &registry, &fluids) {
+        return;
+    }
+
     if registry.is_prop(place_id) {
         let ground_pos = world_pos + IVec3::NEG_Y;
         let ground_id = get_block_world(&chunk_map, ground_pos);
@@ -1316,11 +1908,14 @@ fn block_place_handler(
         }
     }
 
+    let keep_cell_water = place_into_stacked
+        && registry.is_water_logged(place_id)
+        && existing_primary_id != 0
+        && registry.is_fluid(existing_primary_id);
     if let Some(fc) = fluids.0.get_mut(&chunk_coord) {
-        fc.set(lx, ly, lz, false);
+        fc.set(lx, ly, lz, keep_cell_water);
     }
 
-    let existing_primary_id = get_block_world(&chunk_map, world_pos);
     let (network_block_id, network_stacked_block_id) = if place_into_stacked {
         (existing_primary_id, place_id)
     } else {

@@ -9,8 +9,21 @@
     "hardness": 0.0,
     "blast_resistance": 0.0,
     "level": "0",
+    "fluid_level": 10,
     "opaque": false,
     "fluid": true,
+    "solid": false,
     "emissive": 0.0
+  },
+  "overridable": true,
+  "collider": {
+    "kind": "box",
+    "block_entities": false,
+    "size_m": [1.0, 1.0, 1.0],
+    "offset_m": [0.0, 0.0, 0.0]
+  },
+  "fluid_flow": {
+    "enabled": true,
+    "step_ms": 150
   }
 }

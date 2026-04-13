@@ -68,9 +68,6 @@ pub enum FetchState {
 pub enum LoadingStates {
     #[default]
     BaseGen,
-
-    WaterGen,
-
     CaveGen,
 }
 

@@ -6,6 +6,7 @@ use crate::core::world::chunk::{ChunkData, SEA_LEVEL};
 use crate::core::world::chunk_dimension::{CX, CY, CZ, Y_MAX, Y_MIN};
 use crate::generator::chunk::cave_utils::{CaveParams, worm_edits_for_chunk};
 use crate::generator::chunk::chunk_utils::map01;
+use crate::generator::chunk::fluid::fluid_gen::apply_settled_water_worldgen;
 use crate::generator::chunk::river_utils::RiverSystem;
 use crate::generator::chunk::trees::registry::TreeRegistry;
 use crate::generator::chunk::trees::tree_gen::populate_trees_in_chunk;
@@ -48,6 +49,7 @@ pub(crate) async fn generate_chunk_async_biome(
 
     let pick_seed: u32 = (cfg_seed as u32) ^ 0x0CE4_11CE;
     let mut chunk = ChunkData::new();
+    let mut ocean_like_columns = 0usize;
 
     // --- Rivers: init once per chunk -------------------------------------
     // Deterministic river system, fed by world seed.
@@ -313,6 +315,9 @@ pub(crate) async fn generate_chunk_async_biome(
                 1.0 + COAST_BAND_SCORE + coast_offset,
                 s_for_coast,
             );
+            if t_ocean >= 0.58 {
+                ocean_like_columns += 1;
+            }
             let t_land = 1.0 - t_ocean;
 
             // Final height with optional sea floor clamp near open ocean
@@ -703,7 +708,17 @@ pub(crate) async fn generate_chunk_async_biome(
         }
     }
 
-    carve_caves_into_chunk(&mut chunk, coord, cfg_seed, id_air, id_water, id_border);
+    let ocean_ratio = ocean_like_columns as f32 / (CX * CZ) as f32;
+    carve_caves_into_chunk(
+        &mut chunk,
+        coord,
+        cfg_seed,
+        id_air,
+        id_water,
+        id_border,
+        ocean_ratio,
+    );
+    apply_settled_water_worldgen(&mut chunk, reg);
     populate_trees_in_chunk(&mut chunk, coord, reg, biomes, trees, cfg_seed);
     populate_vegetation_props_in_chunk(&mut chunk, coord, reg, biomes, cfg_seed);
     chunk
@@ -753,6 +768,25 @@ fn default_cave_params(seed: i32) -> CaveParams {
 }
 
 #[inline]
+fn ocean_tuned_cave_params(seed: i32, ocean_ratio: f32) -> CaveParams {
+    let mut params = default_cave_params(seed);
+    let t = smoothstep(0.52, 0.90, ocean_ratio.clamp(0.0, 1.0));
+    if t <= 0.0 {
+        return params;
+    }
+
+    let lerp_i = |a: i32, b: i32| -> i32 { (a as f32 + (b - a) as f32 * t).round() as i32 };
+
+    // Ocean chunks: drive caves deeper and drastically reduce near-surface entries.
+    params.y_top = lerp_i(params.y_top, 26);
+    params.cavern_y_top = lerp_i(params.cavern_y_top, -28);
+    params.mega_y_top = lerp_i(params.mega_y_top, -44);
+    params.entrance_chance = (params.entrance_chance * (1.0 - 0.82 * t)).clamp(0.02, 1.0);
+    params.worms_per_region *= 1.0 - 0.18 * t;
+    params
+}
+
+#[inline]
 fn carve_caves_into_chunk(
     chunk: &mut ChunkData,
     coord: IVec2,
@@ -760,8 +794,9 @@ fn carve_caves_into_chunk(
     id_air: BlockId,
     id_water: BlockId,
     id_border: BlockId,
+    ocean_ratio: f32,
 ) {
-    let params = default_cave_params(seed);
+    let params = ocean_tuned_cave_params(seed, ocean_ratio);
     let edits = worm_edits_for_chunk(
         &params,
         coord,

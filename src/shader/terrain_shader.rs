@@ -109,9 +109,7 @@ fn ensure_chunk_terrain_materials(
 ) {
     if !matches!(
         app_state.get(),
-        AppState::Loading(LoadingStates::BaseGen)
-            | AppState::Loading(LoadingStates::WaterGen)
-            | AppState::InGame(_)
+        AppState::Loading(LoadingStates::BaseGen) | AppState::InGame(_)
     ) {
         return;
     }

@@ -1030,12 +1030,26 @@ pub fn parse_block_icon_cache_key(path: &str) -> Option<BlockId> {
 #[inline]
 fn canonical_block_item_id(block_registry: &BlockRegistry, block_id: BlockId) -> BlockId {
     let name = block_registry.def(block_id).localized_name.as_str();
+    if let Some(base_name) = flow_base_name_for_variant(name) {
+        return block_registry
+            .id_opt(base_name.as_str())
+            .unwrap_or(block_id);
+    }
     let Some(base_name) = slab_base_name_for_variant(name) else {
         return block_id;
     };
     block_registry
         .id_opt(base_name.as_str())
         .unwrap_or(block_id)
+}
+
+#[inline]
+fn flow_base_name_for_variant(name: &str) -> Option<String> {
+    let (base, suffix) = name.rsplit_once("_flow_")?;
+    if suffix.is_empty() || !suffix.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(base.to_string())
 }
 
 #[inline]

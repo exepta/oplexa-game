@@ -1,0 +1,49 @@
+{
+  "localized_name": "sea_grass_block",
+  "name": "KEY_SEA_GRASS_BLOCK",
+  "texture_dir": "textures/blocks/sea_grass",
+  "texture": {
+    "all": "sea_grass"
+  },
+  "stats": {
+    "hardness": 0.0,
+    "blast_resistance": 0.0,
+    "level": "0",
+    "opaque": false,
+    "foliage": true,
+    "solid": false,
+    "emissive": 0.0
+  },
+  "water_logged": true,
+  "allowed_environments": [
+    "water"
+  ],
+  "overridable": true,
+  "prop": {
+    "render": "crossed_planes",
+    "height_m": 0.82,
+    "width_m": 0.92,
+    "plane_count": 2,
+    "tilt_deg": 4.0,
+    "allowed_ground": [
+      "gravel_block",
+      "sand_block",
+      "dirt_block",
+      "clay_block"
+    ]
+  },
+  "collider": {
+    "kind": "box",
+    "block_entities": false,
+    "size_m": [
+      0.92,
+      0.82,
+      0.92
+    ],
+    "offset_m": [
+      0.0,
+      -0.09,
+      0.0
+    ]
+  }
+}

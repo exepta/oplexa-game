@@ -59,7 +59,7 @@ impl Material for WaterMaterial {
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_write_enabled = false;
         }
-        descriptor.primitive.cull_mode = None;
+        descriptor.primitive.cull_mode = Some(Face::Back);
         if let Some(fragment) = descriptor.fragment.as_mut() {
             if let Some(Some(tgt)) = fragment.targets.get_mut(0) {
                 tgt.blend = Some(BlendState::ALPHA_BLENDING);

@@ -33,7 +33,9 @@ pub struct RegLiteEntry {
     pub west: UvRect,
     pub mesh_visible: bool,
     pub opaque: bool,
+    pub solid: bool,
     pub fluid: bool,
+    pub fluid_level: u8,
     pub foliage: bool,
     pub prop: Option<PropDefinition>,
     pub custom_mesh_box: Option<([f32; 3], [f32; 3])>,
@@ -86,7 +88,9 @@ impl RegLite {
                     west: reg.uv(id, Face::West),
                     mesh_visible: reg.def(id).mesh_visible,
                     opaque: reg.def(id).stats.opaque,
+                    solid: reg.def(id).stats.solid,
                     fluid: reg.def(id).stats.fluid,
+                    fluid_level: reg.def(id).stats.fluid_level,
                     foliage: reg.def(id).stats.foliage,
                     prop: reg.def(id).prop.clone(),
                     custom_mesh_box: if reg.def(id).prop.is_none() {
@@ -130,10 +134,20 @@ impl RegLite {
     pub fn opaque(&self, id: BlockId) -> bool {
         self.map.get(&id).map(|e| e.opaque).unwrap_or(false)
     }
+    /// Runs the `solid` routine for solid in the `generator::chunk::chunk_struct` module.
+    #[inline]
+    pub fn solid(&self, id: BlockId) -> bool {
+        self.map.get(&id).map(|e| e.solid).unwrap_or(false)
+    }
     /// Runs the `fluid` routine for fluid in the `generator::chunk::chunk_struct` module.
     #[inline]
     pub fn fluid(&self, id: BlockId) -> bool {
         self.map.get(&id).map(|e| e.fluid).unwrap_or(false)
+    }
+    /// Runs the `fluid_level` routine for fluid level in the `generator::chunk::chunk_struct` module.
+    #[inline]
+    pub fn fluid_level(&self, id: BlockId) -> u8 {
+        self.map.get(&id).map(|e| e.fluid_level).unwrap_or(0)
     }
     /// Runs the `foliage` routine for foliage in the `generator::chunk::chunk_struct` module.
     #[inline]

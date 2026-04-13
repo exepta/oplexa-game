@@ -1,0 +1,9 @@
+{
+  "image": "sea_grass.png",
+  "tile_size": 128,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "sea_grass": [0, 0]
+  }
+}

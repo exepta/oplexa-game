@@ -3,6 +3,7 @@ use crate::core::entities::player::Player;
 use crate::core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent};
 use crate::core::multiplayer::MultiplayerConnectionState;
 use crate::core::shader::terrain_shader::{TerrainChunkMatIndex, TerrainChunkMaterial};
+use crate::core::shader::water_shader::{WaterMatHandle, WaterMaterial};
 use crate::core::states::states::{AppState, InGameStates, LoadingStates};
 use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::*;
@@ -12,7 +13,6 @@ use crate::core::world::save::WorldSave;
 use crate::generator::chunk::chunk_struct::*;
 use crate::generator::chunk::chunk_utils::*;
 use crate::generator::chunk::trees::registry::TreeRegistry;
-use crate::generator::chunk::water_builder::WaterReadySet;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
@@ -265,7 +265,6 @@ impl Plugin for ChunkBuilder {
                         .run_if(
                             in_state(AppState::Loading(LoadingStates::BaseGen))
                                 .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
-                                .or(in_state(AppState::Loading(LoadingStates::WaterGen)))
                                 .or(in_state(AppState::InGame(InGameStates::Game))),
                         ),
                     (
@@ -277,13 +276,11 @@ impl Plugin for ChunkBuilder {
                         .run_if(
                             in_state(AppState::Loading(LoadingStates::BaseGen))
                                 .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
-                                .or(in_state(AppState::Loading(LoadingStates::WaterGen)))
                                 .or(in_state(AppState::InGame(InGameStates::Game))),
                         ),
                     drain_mesh_backlog.run_if(
                         in_state(AppState::Loading(LoadingStates::BaseGen))
                             .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
-                            .or(in_state(AppState::Loading(LoadingStates::WaterGen)))
                             .or(in_state(AppState::InGame(InGameStates::Game))),
                     ),
                     (
@@ -294,7 +291,6 @@ impl Plugin for ChunkBuilder {
                         .run_if(
                             in_state(AppState::Loading(LoadingStates::BaseGen))
                                 .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
-                                .or(in_state(AppState::Loading(LoadingStates::WaterGen)))
                                 .or(in_state(AppState::InGame(InGameStates::Game))),
                         ),
                     update_chunk_collider_activation
@@ -322,7 +318,6 @@ impl Plugin for ChunkBuilder {
                 sync_chunk_mesh_visibility.run_if(
                     in_state(AppState::Loading(LoadingStates::BaseGen))
                         .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
-                        .or(in_state(AppState::Loading(LoadingStates::WaterGen)))
                         .or(in_state(AppState::InGame(InGameStates::Game))),
                 ),
             )
@@ -469,11 +464,7 @@ fn check_base_gen_world_ready(
 
     if ready {
         commands.remove_resource::<LoadCenter>();
-        if multiplayer_connection.uses_local_save_data() {
-            next.set(AppState::Loading(LoadingStates::WaterGen));
-        } else {
-            next.set(AppState::InGame(InGameStates::Game));
-        }
+        next.set(AppState::InGame(InGameStates::Game));
     }
 }
 
@@ -1161,6 +1152,7 @@ fn collect_meshed_subchunks(
     mut immediate_ready: ResMut<ImmediateMeshReadyQueue>,
     reg: Res<BlockRegistry>,
     terrain_mats: Res<TerrainChunkMatIndex>,
+    water_mat: Option<Res<WaterMatHandle>>,
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
     load_center: Option<Res<LoadCenter>>,
@@ -1304,8 +1296,31 @@ fn collect_meshed_subchunks(
         // Build, render meshes, collect physics arrays.
         let mut phys_positions: Vec<[f32; 3]> = Vec::new();
         let mut phys_indices: Vec<u32> = Vec::new();
-
+        let mut combined_builds: Vec<(BlockId, MeshBuild)> = Vec::with_capacity(builds.len());
+        let mut merged_fluid: Option<(BlockId, MeshBuild)> = None;
         for (bid, mb) in builds {
+            if reg.is_fluid(bid) {
+                if let Some((_, fluid_build)) = merged_fluid.as_mut() {
+                    let base = fluid_build.pos.len() as u32;
+                    let mut mb = mb;
+                    fluid_build.pos.append(&mut mb.pos);
+                    fluid_build.nrm.append(&mut mb.nrm);
+                    fluid_build.uv.append(&mut mb.uv);
+                    fluid_build.ctm.append(&mut mb.ctm);
+                    fluid_build.tile_rect.append(&mut mb.tile_rect);
+                    fluid_build.idx.extend(mb.idx.into_iter().map(|i| base + i));
+                } else {
+                    merged_fluid = Some((bid, mb));
+                }
+            } else {
+                combined_builds.push((bid, mb));
+            }
+        }
+        if let Some(fluid_build) = merged_fluid.take() {
+            combined_builds.push(fluid_build);
+        }
+
+        for (bid, mb) in combined_builds {
             if mb.pos.is_empty() {
                 continue;
             }
@@ -1318,25 +1333,67 @@ fn collect_meshed_subchunks(
 
             let mesh = mb.into_mesh();
 
-            let Some(handle) = terrain_mats.0.get(&bid).cloned() else {
-                continue;
+            let mesh_handle = apply_state.meshes.add(mesh);
+            let ent = if reg.is_fluid(bid) {
+                if let Some(water_mat) = water_mat.as_ref() {
+                    commands
+                        .spawn((
+                            Mesh3d(mesh_handle),
+                            MeshMaterial3d::<WaterMaterial>(water_mat.0.clone()),
+                            Transform::from_translation(origin),
+                            SubchunkMesh {
+                                coord,
+                                sub: sub as u8,
+                                block: bid,
+                            },
+                            Name::new(format!(
+                                "chunk({},{}) sub{} water{}",
+                                coord.x, coord.y, sub, bid
+                            )),
+                        ))
+                        .id()
+                } else {
+                    let Some(handle) = terrain_mats.0.get(&bid).cloned() else {
+                        continue;
+                    };
+                    commands
+                        .spawn((
+                            Mesh3d(mesh_handle),
+                            MeshMaterial3d::<TerrainChunkMaterial>(handle),
+                            Transform::from_translation(origin),
+                            SubchunkMesh {
+                                coord,
+                                sub: sub as u8,
+                                block: bid,
+                            },
+                            Name::new(format!(
+                                "chunk({},{}) sub{} block{}",
+                                coord.x, coord.y, sub, bid
+                            )),
+                        ))
+                        .id()
+                }
+            } else {
+                let Some(handle) = terrain_mats.0.get(&bid).cloned() else {
+                    continue;
+                };
+                commands
+                    .spawn((
+                        Mesh3d(mesh_handle),
+                        MeshMaterial3d::<TerrainChunkMaterial>(handle),
+                        Transform::from_translation(origin),
+                        SubchunkMesh {
+                            coord,
+                            sub: sub as u8,
+                            block: bid,
+                        },
+                        Name::new(format!(
+                            "chunk({},{}) sub{} block{}",
+                            coord.x, coord.y, sub, bid
+                        )),
+                    ))
+                    .id()
             };
-            let ent = commands
-                .spawn((
-                    Mesh3d(apply_state.meshes.add(mesh)),
-                    MeshMaterial3d::<TerrainChunkMaterial>(handle),
-                    Transform::from_translation(origin),
-                    SubchunkMesh {
-                        coord,
-                        sub: sub as u8,
-                        block: bid,
-                    },
-                    Name::new(format!(
-                        "chunk({},{}) sub{} block{}",
-                        coord.x, coord.y, sub, bid
-                    )),
-                ))
-                .id();
             apply_state
                 .mesh_index
                 .map
@@ -2488,8 +2545,6 @@ fn sync_chunk_mesh_visibility(
     load_center: Option<Res<LoadCenter>>,
     game_config: Res<GlobalConfig>,
     ready_set: Res<ChunkReadySet>,
-    water_ready_set: Option<Res<WaterReadySet>>,
-    multiplayer_connection: Res<MultiplayerConnectionState>,
     app_state: Res<State<AppState>>,
 ) {
     let center_c = if let Ok(t) = q_cam.single() {
@@ -2506,8 +2561,6 @@ fn sync_chunk_mesh_visibility(
 
     let visible = visible_radius(game_config.graphics.chunk_range);
     let require_chunk_ready = !matches!(app_state.get(), AppState::InGame(InGameStates::Game));
-    let require_water_ready = multiplayer_connection.uses_local_save_data()
-        && matches!(app_state.get(), AppState::Loading(LoadingStates::WaterGen));
     for (mesh, mut vis) in &mut q_mesh {
         let in_visible = (mesh.coord.x - center_c.x).abs() <= visible
             && (mesh.coord.y - center_c.y).abs() <= visible;
@@ -2516,15 +2569,7 @@ fn sync_chunk_mesh_visibility(
         } else {
             true
         };
-        let water_ready = if require_water_ready {
-            water_ready_set
-                .as_ref()
-                .map(|set| set.0.contains(&mesh.coord))
-                .unwrap_or(false)
-        } else {
-            true
-        };
-        let desired = if in_visible && ready && water_ready {
+        let desired = if in_visible && ready {
             Visibility::Inherited
         } else {
             Visibility::Hidden

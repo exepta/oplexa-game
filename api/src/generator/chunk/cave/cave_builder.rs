@@ -140,7 +140,7 @@ fn carve_caves_step(
     // If nothing to do, exit CaveGen (or no-op in InGame).
     if tracker.pending.is_empty() && jobs.running.is_empty() {
         if matches!(app_state.get(), AppState::Loading(LoadingStates::CaveGen)) {
-            next_state.set(AppState::Loading(LoadingStates::WaterGen));
+            next_state.set(AppState::InGame(InGameStates::Game));
         }
         return;
     }
@@ -288,7 +288,7 @@ fn carve_caves_step(
     // If nothing is left, we can leave CaveGen.
     if tracker.pending.is_empty() && jobs.running.is_empty() {
         if matches!(app_state.get(), AppState::Loading(LoadingStates::CaveGen)) {
-            next_state.set(AppState::Loading(LoadingStates::WaterGen));
+            next_state.set(AppState::InGame(InGameStates::Game));
         }
     }
 }

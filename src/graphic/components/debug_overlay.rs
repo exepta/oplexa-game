@@ -136,9 +136,6 @@ fn sample_chunk_debug_stats(
     mesh_backlog: Res<MeshBacklog>,
     pending_collider: Option<Res<PendingColliderBuild>>,
     collider_backlog: Option<Res<ColliderBacklog>>,
-    pending_water_load: Option<Res<PendingWaterLoad>>,
-    pending_water_mesh: Option<Res<PendingWaterMesh>>,
-    water_backlog: Option<Res<WaterMeshBacklog>>,
     stage_telemetry: Option<Res<ChunkStageTelemetry>>,
     mut chunk_debug: ResMut<ChunkDebugStats>,
 ) {
@@ -154,22 +151,13 @@ fn sample_chunk_debug_stats(
     let collider_backlog_chunks = collider_backlog
         .as_ref()
         .map_or(0, |b| b.len().div_ceil(sub_per_chunk));
-    let pending_water_mesh_chunks = pending_water_mesh
-        .as_ref()
-        .map_or(0, |p| p.0.len().div_ceil(sub_per_chunk));
-    let water_backlog_chunks = water_backlog
-        .as_ref()
-        .map_or(0, |b| b.0.len().div_ceil(sub_per_chunk));
 
     chunk_debug.loaded_chunks = chunk_map.chunks.len();
     chunk_debug.queue_chunks = pending_gen.0.len()
         + pending_mesh_chunks
         + mesh_backlog_chunks
         + pending_collider_chunks
-        + collider_backlog_chunks
-        + pending_water_load.as_ref().map_or(0, |p| p.0.len())
-        + pending_water_mesh_chunks
-        + water_backlog_chunks;
+        + collider_backlog_chunks;
     chunk_debug.dirty_chunks = 0;
     chunk_debug.dirty_subchunks = 0;
     chunk_debug.base_gen_inflight = pending_gen.0.len();
@@ -177,9 +165,9 @@ fn sample_chunk_debug_stats(
     chunk_debug.base_mesh_queue = mesh_backlog.0.len();
     chunk_debug.collider_inflight = pending_collider.as_ref().map_or(0, |p| p.len());
     chunk_debug.collider_queue = collider_backlog.as_ref().map_or(0, |b| b.len());
-    chunk_debug.water_gen_inflight = pending_water_load.as_ref().map_or(0, |p| p.0.len());
-    chunk_debug.water_mesh_inflight = pending_water_mesh.as_ref().map_or(0, |p| p.0.len());
-    chunk_debug.water_mesh_queue = water_backlog.as_ref().map_or(0, |b| b.0.len());
+    chunk_debug.water_gen_inflight = 0;
+    chunk_debug.water_mesh_inflight = 0;
+    chunk_debug.water_mesh_queue = 0;
     chunk_debug.stage_gen_collect_ms = stage_telemetry
         .as_ref()
         .map_or(0.0, |t| t.stage_gen_collect_ms);

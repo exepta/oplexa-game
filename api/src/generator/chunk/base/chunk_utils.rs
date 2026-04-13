@@ -95,7 +95,7 @@ pub async fn mesh_subchunk_async(
         south_stacked,
         north_stacked,
         snap_y0,
-        _snap_y1,
+        snap_y1,
     ) = if let Some(b) = borders {
         debug_assert_eq!(b.y0, y0, "BorderSnapshot.y0 != sub y0");
         debug_assert_eq!(b.y1, y1, "BorderSnapshot.y1 != sub y1");
@@ -117,6 +117,9 @@ pub async fn mesh_subchunk_async(
 
     let sample_opt =
         |opt: &Option<Vec<BlockId>>, y: usize, i: usize, stride: usize| -> Option<BlockId> {
+            if y < snap_y0 || y >= snap_y1 {
+                return None;
+            }
             opt.as_ref().map(|v| {
                 let iy = y - snap_y0;
                 v[iy * stride + i]
@@ -177,8 +180,9 @@ pub async fn mesh_subchunk_async(
         if neigh_id == 0 {
             return true;
         }
-        if reg.custom_mesh_box(neigh_id).is_some() {
-            return true;
+        // Connected transparent blocks (e.g. water/glass) should not render inner faces.
+        if self_id == neigh_id && !reg.opaque(self_id) {
+            return false;
         }
 
         // Treat neighboring foliage blocks as connected canopy: don't render inner faces.
@@ -196,6 +200,16 @@ pub async fn mesh_subchunk_async(
 
         if self_fluid && neigh_fluid {
             return false;
+        }
+
+        // Fluids should not render side planes against opaque solids.
+        // This avoids coplanar transparent-vs-solid overlap (z-fighting/flicker).
+        if self_fluid && !neigh_fluid {
+            return !reg.opaque(neigh_id);
+        }
+
+        if reg.custom_mesh_box(neigh_id).is_some() {
+            return true;
         }
 
         !reg.opaque(neigh_id)
@@ -951,7 +965,23 @@ pub async fn mesh_subchunk_async(
                 let max_y = cy + half_y;
                 let min_z = cz - half_z;
                 let max_z = cz + half_z;
+                let is_fluid_box = reg.fluid(id);
+                let fluid_base_y = y as f32 * s;
+                let fluid_top_from_level =
+                    |level: u8| fluid_base_y + (level as f32 / 10.0).clamp(0.0, 1.0) * s;
+                // Small inset against non-fluid neighbors to avoid coplanar transparency flicker.
+                let side_plane_inset = 0.003 * s;
+                // Stronger inset for transparent-solid neighbors (e.g. glass) so water
+                // stays visible behind glass without coplanar flicker.
+                let side_plane_inset_transparent_solid = 0.04 * s;
+                // Lift bottom face of water slightly to reduce transparent depth fighting.
+                let fluid_bottom_face_lift = 0.1 * s;
+                let top_neigh = face_neighbor(Face::Top, x, y, z);
+                let bottom_neigh = face_neighbor(Face::Bottom, x, y, z);
+                let fluid_above = is_fluid_box && reg.fluid(top_neigh);
+                let fluid_below = is_fluid_box && reg.fluid(bottom_neigh);
                 let connected = reg.has_connected_mask4(id);
+                let requires_face_visibility = connected || is_fluid_box;
                 let framed_slab = connected
                     && reg.connected_edge_clip_uv(id) > 0.0
                     && (size_m[0] < 0.999 || size_m[1] < 0.999 || size_m[2] < 0.999);
@@ -965,8 +995,145 @@ pub async fn mesh_subchunk_async(
                         same_cell_connected_edge_mask(id, size_m, offset_m, same_cell_other, face);
                     neighbor_mask | same_cell_mask
                 };
+                let water_flow_vec = if is_fluid_box {
+                    let xi = x as i32;
+                    let yi = y as i32;
+                    let zi = z as i32;
+                    let self_level = reg.fluid_level(id) as f32;
+                    let flow_weight = |neigh_id: BlockId| -> f32 {
+                        if reg.fluid(neigh_id) {
+                            (self_level - reg.fluid_level(neigh_id) as f32).max(0.0)
+                        } else if neigh_id == 0 || !reg.opaque(neigh_id) {
+                            (self_level * 0.35).max(0.5)
+                        } else {
+                            0.0
+                        }
+                    };
+                    let w_e = flow_weight(sample_with_borders(xi + 1, yi, zi));
+                    let w_w = flow_weight(sample_with_borders(xi - 1, yi, zi));
+                    let w_s = flow_weight(sample_with_borders(xi, yi, zi + 1));
+                    let w_n = flow_weight(sample_with_borders(xi, yi, zi - 1));
+                    if fluid_above || fluid_below {
+                        // Falling columns should use stable vertical shader flow.
+                        [0.0, 0.0]
+                    } else {
+                        let mut dir = Vec2::new(w_e - w_w, w_s - w_n);
+                        if dir.length_squared() > 1e-8 {
+                            dir = dir.normalize();
+                            [dir.x, dir.y]
+                        } else {
+                            [0.0, 0.0]
+                        }
+                    }
+                } else {
+                    [-1.0, 0.0]
+                };
+                let face_ctm = |mask: u8| -> [f32; 2] {
+                    if connected {
+                        [mask as f32, reg.connected_edge_clip_uv(id)]
+                    } else if is_fluid_box {
+                        water_flow_vec
+                    } else {
+                        [-1.0, 0.0]
+                    }
+                };
+                let mut top_nw = max_y;
+                let mut top_ne = max_y;
+                let mut top_sw = max_y;
+                let mut top_se = max_y;
+                if is_fluid_box {
+                    if fluid_above {
+                        // Falling columns should be visually continuous without top-edge gaps.
+                        let full_top = fluid_base_y + s;
+                        top_nw = full_top;
+                        top_ne = full_top;
+                        top_sw = full_top;
+                        top_se = full_top;
+                    } else {
+                        let yi = y as i32;
+                        let fluid_height_from_pos = |sx: i32, sz: i32| -> Option<f32> {
+                            let nid = sample_with_borders(sx, yi, sz);
+                            if reg.fluid(nid) {
+                                Some(fluid_top_from_level(reg.fluid_level(nid)))
+                            } else if reg.fluid(sample_with_borders(sx, yi + 1, sz)) {
+                                Some((yi as f32 + 1.0) * s)
+                            } else {
+                                None
+                            }
+                        };
+                        // Weighted corner sampling keeps diagonals smooth while preserving local level.
+                        // Weight current cell stronger than cardinal/diagonal neighbors.
+                        let fluid_corner_height = |samples: [(i32, i32, f32); 4]| -> f32 {
+                            let mut sum = 0.0f32;
+                            let mut count = 0.0f32;
+                            for (sx, sz, w) in samples {
+                                if let Some(h) = fluid_height_from_pos(sx, sz) {
+                                    sum += h * w;
+                                    count += w;
+                                }
+                            }
+                            if count <= 0.0 {
+                                max_y
+                            } else {
+                                (sum / count).clamp(min_y, fluid_base_y + s)
+                            }
+                        };
+                        let xi = x as i32;
+                        let zi = z as i32;
+                        top_nw = fluid_corner_height([
+                            (xi, zi, 1.0),
+                            (xi - 1, zi, 1.0),
+                            (xi, zi - 1, 1.0),
+                            (xi - 1, zi - 1, 1.0),
+                        ]);
+                        top_ne = fluid_corner_height([
+                            (xi, zi, 1.0),
+                            (xi + 1, zi, 1.0),
+                            (xi, zi - 1, 1.0),
+                            (xi + 1, zi - 1, 1.0),
+                        ]);
+                        top_sw = fluid_corner_height([
+                            (xi, zi, 1.0),
+                            (xi - 1, zi, 1.0),
+                            (xi, zi + 1, 1.0),
+                            (xi - 1, zi + 1, 1.0),
+                        ]);
+                        top_se = fluid_corner_height([
+                            (xi, zi, 1.0),
+                            (xi + 1, zi, 1.0),
+                            (xi, zi + 1, 1.0),
+                            (xi + 1, zi + 1, 1.0),
+                        ]);
+                    }
+                }
+                let top_y_min = top_nw.min(top_ne).min(top_sw).min(top_se);
+                let bottom_y = if is_fluid_box {
+                    let lift = if bottom_neigh != 0 && !reg.fluid(bottom_neigh) {
+                        fluid_bottom_face_lift
+                    } else {
+                        0.0
+                    };
+                    (min_y + lift).min(top_y_min - 0.0001).max(min_y)
+                } else {
+                    min_y
+                };
+                let top_normal = if is_fluid_box {
+                    let e1 = Vec3::new(max_x - min_x, top_se - top_sw, 0.0);
+                    let e2 = Vec3::new(0.0, top_nw - top_sw, min_z - max_z);
+                    let n = e1.cross(e2);
+                    if n.length_squared() > 1e-8 {
+                        let nn = n.normalize();
+                        [nn.x, nn.y, nn.z]
+                    } else {
+                        [0.0, 1.0, 0.0]
+                    }
+                } else {
+                    [0.0, 1.0, 0.0]
+                };
 
-                if (!connected || face_visible(id, face_neighbor(Face::Top, x, y, z)))
+                if (!is_fluid_box || !reg.fluid(top_neigh))
+                    && (!requires_face_visibility
+                        || face_visible(id, face_neighbor(Face::Top, x, y, z)))
                     && !(connected
                         && connected_neighbor_occludes_face(
                             id,
@@ -988,12 +1155,12 @@ pub async fn mesh_subchunk_async(
                     let mask = connected_mask_for_face(Face::Top);
                     b.quad_with_ctm(
                         [
-                            [min_x, max_y, max_z],
-                            [max_x, max_y, max_z],
-                            [max_x, max_y, min_z],
-                            [min_x, max_y, min_z],
+                            [min_x, top_sw, max_z],
+                            [max_x, top_se, max_z],
+                            [max_x, top_ne, min_z],
+                            [min_x, top_nw, min_z],
                         ],
-                        [0.0, 1.0, 0.0],
+                        top_normal,
                         uvq_tiled(uv_span(size_m[0]), uv_span(size_m[2]), false),
                         if connected {
                             let uv = reg
@@ -1003,14 +1170,12 @@ pub async fn mesh_subchunk_async(
                         } else {
                             [u_top.u0, u_top.v0, u_top.u1, u_top.v1]
                         },
-                        if connected {
-                            [mask as f32, reg.connected_edge_clip_uv(id)]
-                        } else {
-                            [-1.0, 0.0]
-                        },
+                        face_ctm(mask),
                     );
                 }
-                if (!connected || face_visible(id, face_neighbor(Face::Bottom, x, y, z)))
+                if (!is_fluid_box || (!fluid_below && !fluid_above))
+                    && (!requires_face_visibility
+                        || face_visible(id, face_neighbor(Face::Bottom, x, y, z)))
                     && !(connected
                         && connected_neighbor_occludes_face(
                             id,
@@ -1032,10 +1197,10 @@ pub async fn mesh_subchunk_async(
                     let mask = connected_mask_for_face(Face::Bottom);
                     b.quad_with_ctm(
                         [
-                            [min_x, min_y, min_z],
-                            [max_x, min_y, min_z],
-                            [max_x, min_y, max_z],
-                            [min_x, min_y, max_z],
+                            [min_x, bottom_y, min_z],
+                            [max_x, bottom_y, min_z],
+                            [max_x, bottom_y, max_z],
+                            [min_x, bottom_y, max_z],
                         ],
                         [0.0, -1.0, 0.0],
                         uvq_tiled(uv_span(size_m[0]), uv_span(size_m[2]), false),
@@ -1047,14 +1212,11 @@ pub async fn mesh_subchunk_async(
                         } else {
                             [u_bottom.u0, u_bottom.v0, u_bottom.u1, u_bottom.v1]
                         },
-                        if connected {
-                            [mask as f32, reg.connected_edge_clip_uv(id)]
-                        } else {
-                            [-1.0, 0.0]
-                        },
+                        face_ctm(mask),
                     );
                 }
-                if (!connected || face_visible(id, face_neighbor(Face::East, x, y, z)))
+                let east_neigh = face_neighbor(Face::East, x, y, z);
+                if (!requires_face_visibility || face_visible(id, east_neigh))
                     && !(connected
                         && connected_neighbor_occludes_face(
                             id,
@@ -1074,31 +1236,47 @@ pub async fn mesh_subchunk_async(
                     )
                 {
                     let mask = connected_mask_for_face(Face::East);
-                    b.quad_with_ctm(
-                        [
-                            [max_x, min_y, max_z],
-                            [max_x, min_y, min_z],
-                            [max_x, max_y, min_z],
-                            [max_x, max_y, max_z],
-                        ],
-                        [1.0, 0.0, 0.0],
-                        uvq_tiled(uv_span(size_m[2]), uv_span(size_m[1]), true),
-                        if connected {
-                            let uv = reg
-                                .connected_mask4_uv(id, mask)
-                                .unwrap_or_else(|| reg.uv(id, Face::East));
-                            [uv.u0, uv.v0, uv.u1, uv.v1]
-                        } else {
-                            [u_east.u0, u_east.v0, u_east.u1, u_east.v1]
-                        },
-                        if connected {
-                            [mask as f32, reg.connected_edge_clip_uv(id)]
-                        } else {
-                            [-1.0, 0.0]
-                        },
-                    );
+                    let mut east_x = max_x;
+                    let mut east_y0 = min_y;
+                    let east_top_n = top_ne;
+                    let east_top_s = top_se;
+                    if is_fluid_box {
+                        if reg.fluid(east_neigh) {
+                            east_y0 =
+                                east_y0.max(fluid_top_from_level(reg.fluid_level(east_neigh)));
+                        } else if east_neigh != 0 {
+                            let inset = if reg.solid(east_neigh) && !reg.opaque(east_neigh) {
+                                side_plane_inset_transparent_solid
+                            } else {
+                                side_plane_inset
+                            };
+                            east_x -= inset;
+                        }
+                    }
+                    if east_y0 < east_top_n.max(east_top_s) - 0.0001 {
+                        b.quad_with_ctm(
+                            [
+                                [east_x, east_y0, max_z],
+                                [east_x, east_y0, min_z],
+                                [east_x, east_top_n, min_z],
+                                [east_x, east_top_s, max_z],
+                            ],
+                            [1.0, 0.0, 0.0],
+                            uvq_tiled(uv_span(size_m[2]), uv_span(size_m[1]), true),
+                            if connected {
+                                let uv = reg
+                                    .connected_mask4_uv(id, mask)
+                                    .unwrap_or_else(|| reg.uv(id, Face::East));
+                                [uv.u0, uv.v0, uv.u1, uv.v1]
+                            } else {
+                                [u_east.u0, u_east.v0, u_east.u1, u_east.v1]
+                            },
+                            face_ctm(mask),
+                        );
+                    }
                 }
-                if (!connected || face_visible(id, face_neighbor(Face::West, x, y, z)))
+                let west_neigh = face_neighbor(Face::West, x, y, z);
+                if (!requires_face_visibility || face_visible(id, west_neigh))
                     && !(connected
                         && connected_neighbor_occludes_face(
                             id,
@@ -1118,31 +1296,47 @@ pub async fn mesh_subchunk_async(
                     )
                 {
                     let mask = connected_mask_for_face(Face::West);
-                    b.quad_with_ctm(
-                        [
-                            [min_x, min_y, min_z],
-                            [min_x, min_y, max_z],
-                            [min_x, max_y, max_z],
-                            [min_x, max_y, min_z],
-                        ],
-                        [-1.0, 0.0, 0.0],
-                        uvq_tiled(uv_span(size_m[2]), uv_span(size_m[1]), true),
-                        if connected {
-                            let uv = reg
-                                .connected_mask4_uv(id, mask)
-                                .unwrap_or_else(|| reg.uv(id, Face::West));
-                            [uv.u0, uv.v0, uv.u1, uv.v1]
-                        } else {
-                            [u_west.u0, u_west.v0, u_west.u1, u_west.v1]
-                        },
-                        if connected {
-                            [mask as f32, reg.connected_edge_clip_uv(id)]
-                        } else {
-                            [-1.0, 0.0]
-                        },
-                    );
+                    let mut west_x = min_x;
+                    let mut west_y0 = min_y;
+                    let west_top_n = top_nw;
+                    let west_top_s = top_sw;
+                    if is_fluid_box {
+                        if reg.fluid(west_neigh) {
+                            west_y0 =
+                                west_y0.max(fluid_top_from_level(reg.fluid_level(west_neigh)));
+                        } else if west_neigh != 0 {
+                            let inset = if reg.solid(west_neigh) && !reg.opaque(west_neigh) {
+                                side_plane_inset_transparent_solid
+                            } else {
+                                side_plane_inset
+                            };
+                            west_x += inset;
+                        }
+                    }
+                    if west_y0 < west_top_n.max(west_top_s) - 0.0001 {
+                        b.quad_with_ctm(
+                            [
+                                [west_x, west_y0, min_z],
+                                [west_x, west_y0, max_z],
+                                [west_x, west_top_s, max_z],
+                                [west_x, west_top_n, min_z],
+                            ],
+                            [-1.0, 0.0, 0.0],
+                            uvq_tiled(uv_span(size_m[2]), uv_span(size_m[1]), true),
+                            if connected {
+                                let uv = reg
+                                    .connected_mask4_uv(id, mask)
+                                    .unwrap_or_else(|| reg.uv(id, Face::West));
+                                [uv.u0, uv.v0, uv.u1, uv.v1]
+                            } else {
+                                [u_west.u0, u_west.v0, u_west.u1, u_west.v1]
+                            },
+                            face_ctm(mask),
+                        );
+                    }
                 }
-                if (!connected || face_visible(id, face_neighbor(Face::South, x, y, z)))
+                let south_neigh = face_neighbor(Face::South, x, y, z);
+                if (!requires_face_visibility || face_visible(id, south_neigh))
                     && !(connected
                         && connected_neighbor_occludes_face(
                             id,
@@ -1162,31 +1356,47 @@ pub async fn mesh_subchunk_async(
                     )
                 {
                     let mask = connected_mask_for_face(Face::South);
-                    b.quad_with_ctm(
-                        [
-                            [min_x, min_y, max_z],
-                            [max_x, min_y, max_z],
-                            [max_x, max_y, max_z],
-                            [min_x, max_y, max_z],
-                        ],
-                        [0.0, 0.0, 1.0],
-                        uvq_tiled(uv_span(size_m[0]), uv_span(size_m[1]), true),
-                        if connected {
-                            let uv = reg
-                                .connected_mask4_uv(id, mask)
-                                .unwrap_or_else(|| reg.uv(id, Face::South));
-                            [uv.u0, uv.v0, uv.u1, uv.v1]
-                        } else {
-                            [u_south.u0, u_south.v0, u_south.u1, u_south.v1]
-                        },
-                        if connected {
-                            [mask as f32, reg.connected_edge_clip_uv(id)]
-                        } else {
-                            [-1.0, 0.0]
-                        },
-                    );
+                    let mut south_z = max_z;
+                    let mut south_y0 = min_y;
+                    let south_top_w = top_sw;
+                    let south_top_e = top_se;
+                    if is_fluid_box {
+                        if reg.fluid(south_neigh) {
+                            south_y0 =
+                                south_y0.max(fluid_top_from_level(reg.fluid_level(south_neigh)));
+                        } else if south_neigh != 0 {
+                            let inset = if reg.solid(south_neigh) && !reg.opaque(south_neigh) {
+                                side_plane_inset_transparent_solid
+                            } else {
+                                side_plane_inset
+                            };
+                            south_z -= inset;
+                        }
+                    }
+                    if south_y0 < south_top_w.max(south_top_e) - 0.0001 {
+                        b.quad_with_ctm(
+                            [
+                                [min_x, south_y0, south_z],
+                                [max_x, south_y0, south_z],
+                                [max_x, south_top_e, south_z],
+                                [min_x, south_top_w, south_z],
+                            ],
+                            [0.0, 0.0, 1.0],
+                            uvq_tiled(uv_span(size_m[0]), uv_span(size_m[1]), true),
+                            if connected {
+                                let uv = reg
+                                    .connected_mask4_uv(id, mask)
+                                    .unwrap_or_else(|| reg.uv(id, Face::South));
+                                [uv.u0, uv.v0, uv.u1, uv.v1]
+                            } else {
+                                [u_south.u0, u_south.v0, u_south.u1, u_south.v1]
+                            },
+                            face_ctm(mask),
+                        );
+                    }
                 }
-                if (!connected || face_visible(id, face_neighbor(Face::North, x, y, z)))
+                let north_neigh = face_neighbor(Face::North, x, y, z);
+                if (!requires_face_visibility || face_visible(id, north_neigh))
                     && !(connected
                         && connected_neighbor_occludes_face(
                             id,
@@ -1206,29 +1416,44 @@ pub async fn mesh_subchunk_async(
                     )
                 {
                     let mask = connected_mask_for_face(Face::North);
-                    b.quad_with_ctm(
-                        [
-                            [max_x, min_y, min_z],
-                            [min_x, min_y, min_z],
-                            [min_x, max_y, min_z],
-                            [max_x, max_y, min_z],
-                        ],
-                        [0.0, 0.0, -1.0],
-                        uvq_tiled(uv_span(size_m[0]), uv_span(size_m[1]), true),
-                        if connected {
-                            let uv = reg
-                                .connected_mask4_uv(id, mask)
-                                .unwrap_or_else(|| reg.uv(id, Face::North));
-                            [uv.u0, uv.v0, uv.u1, uv.v1]
-                        } else {
-                            [u_north.u0, u_north.v0, u_north.u1, u_north.v1]
-                        },
-                        if connected {
-                            [mask as f32, reg.connected_edge_clip_uv(id)]
-                        } else {
-                            [-1.0, 0.0]
-                        },
-                    );
+                    let mut north_z = min_z;
+                    let mut north_y0 = min_y;
+                    let north_top_e = top_ne;
+                    let north_top_w = top_nw;
+                    if is_fluid_box {
+                        if reg.fluid(north_neigh) {
+                            north_y0 =
+                                north_y0.max(fluid_top_from_level(reg.fluid_level(north_neigh)));
+                        } else if north_neigh != 0 {
+                            let inset = if reg.solid(north_neigh) && !reg.opaque(north_neigh) {
+                                side_plane_inset_transparent_solid
+                            } else {
+                                side_plane_inset
+                            };
+                            north_z += inset;
+                        }
+                    }
+                    if north_y0 < north_top_e.max(north_top_w) - 0.0001 {
+                        b.quad_with_ctm(
+                            [
+                                [max_x, north_y0, north_z],
+                                [min_x, north_y0, north_z],
+                                [min_x, north_top_w, north_z],
+                                [max_x, north_top_e, north_z],
+                            ],
+                            [0.0, 0.0, -1.0],
+                            uvq_tiled(uv_span(size_m[0]), uv_span(size_m[1]), true),
+                            if connected {
+                                let uv = reg
+                                    .connected_mask4_uv(id, mask)
+                                    .unwrap_or_else(|| reg.uv(id, Face::North));
+                                [uv.u0, uv.v0, uv.u1, uv.v1]
+                            } else {
+                                [u_north.u0, u_north.v0, u_north.u1, u_north.v1]
+                            },
+                            face_ctm(mask),
+                        );
+                    }
                 }
             }
         }
@@ -1240,6 +1465,11 @@ pub async fn mesh_subchunk_async(
             for x in 0..CX {
                 let id = chunk.get_stacked(x, y, z);
                 if !reg.mesh_visible(id) {
+                    continue;
+                }
+                if reg.fluid(id) {
+                    // Fluids are rendered from the primary occupant pass.
+                    // Skipping here prevents duplicate transparent geometry.
                     continue;
                 }
                 let Some((size_m, offset_m)) = reg.custom_mesh_box(id) else {
@@ -1554,6 +1784,76 @@ pub async fn mesh_subchunk_async(
         for z in 0..CZ {
             for x in 0..CX {
                 let id = chunk.get(x, y, z);
+                if !reg.mesh_visible(id) {
+                    continue;
+                }
+                let Some(prop) = reg.prop(id) else {
+                    continue;
+                };
+                if !prop.is_crossed_planes() {
+                    continue;
+                }
+
+                let u = reg.uv(id, Face::North);
+                let tile_rect = [u.u0, u.v0, u.u1, u.v1];
+                let b = by_block.entry(id).or_insert_with(MeshBuild::new);
+
+                let cx = (x as f32 + 0.5) * s;
+                let cy0 = y as f32 * s;
+                let cy1 = cy0 + prop.height_m * s;
+                let cz = (z as f32 + 0.5) * s;
+                let half_w = 0.5 * prop.width_m * s;
+                let plane_count = prop.plane_count.max(2) as usize;
+                let uv = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+                let seed = ((y as u32) << 16) ^ (id as u32).wrapping_mul(1_315_423_911);
+                let h0 = col_rand_u32(x as i32, z as i32, seed);
+                let h1 = col_rand_u32(z as i32, x as i32, seed ^ 0xA511_E9B3);
+                let base_angle = (h0 as f32 / u32::MAX as f32) * std::f32::consts::PI;
+                let lean_angle = (h1 as f32 / u32::MAX as f32) * std::f32::consts::TAU;
+                let lean_len = (prop.height_m * s) * prop.tilt_deg.to_radians().tan();
+                let lean = Vec2::new(lean_angle.cos(), lean_angle.sin()) * lean_len;
+
+                for i in 0..plane_count {
+                    let angle =
+                        base_angle + (i as f32) * std::f32::consts::PI / (plane_count as f32);
+                    let dir = Vec2::new(angle.cos(), angle.sin());
+
+                    let p0 = [cx - dir.x * half_w, cy0, cz - dir.y * half_w];
+                    let p1 = [cx + dir.x * half_w, cy0, cz + dir.y * half_w];
+                    let p2 = [
+                        cx + dir.x * half_w + lean.x,
+                        cy1,
+                        cz + dir.y * half_w + lean.y,
+                    ];
+                    let p3 = [
+                        cx - dir.x * half_w + lean.x,
+                        cy1,
+                        cz - dir.y * half_w + lean.y,
+                    ];
+
+                    let p0v = Vec3::from(p0);
+                    let p1v = Vec3::from(p1);
+                    let p3v = Vec3::from(p3);
+                    let fallback_normal = Vec3::new(dir.y, 0.0, -dir.x);
+                    let mut normal = (p3v - p0v).cross(p1v - p0v);
+                    if normal.length_squared() > 1e-6 {
+                        normal = normal.normalize();
+                    } else {
+                        normal = fallback_normal;
+                    }
+
+                    b.quad([p0, p1, p2, p3], normal.to_array(), uv, tile_rect);
+                    b.quad([p1, p0, p3, p2], (-normal).to_array(), uv, tile_rect);
+                }
+            }
+        }
+    }
+
+    // Secondary stacked prop pass (water-logged plants etc.).
+    for y in y0..y1 {
+        for z in 0..CZ {
+            for x in 0..CX {
+                let id = chunk.get_stacked(x, y, z);
                 if !reg.mesh_visible(id) {
                     continue;
                 }
