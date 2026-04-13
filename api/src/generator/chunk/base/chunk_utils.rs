@@ -199,12 +199,24 @@ pub async fn mesh_subchunk_async(
         let neigh_fluid = reg.fluid(neigh_id);
 
         if self_fluid && neigh_fluid {
-            return false;
+            // Keep fluid-fluid side tests enabled so the custom fluid-box pass can
+            // render vertical transition walls between different water heights.
+            return true;
         }
 
         // Fluids should not render side planes against opaque solids.
         // This avoids coplanar transparent-vs-solid overlap (z-fighting/flicker).
         if self_fluid && !neigh_fluid {
+            if let Some((size_m, _)) = reg.custom_mesh_box(neigh_id) {
+                // Partial voxel colliders (e.g. slabs) should not fully hide water sides.
+                // Keep side faces so the uncovered water surface remains visible.
+                let near_full = |v: f32| (v - 1.0).abs() <= 0.001;
+                let blocks_full_voxel =
+                    near_full(size_m[0]) && near_full(size_m[1]) && near_full(size_m[2]);
+                if !blocks_full_voxel {
+                    return true;
+                }
+            }
             return !reg.opaque(neigh_id);
         }
 
@@ -970,16 +982,23 @@ pub async fn mesh_subchunk_async(
                 let fluid_top_from_level =
                     |level: u8| fluid_base_y + (level as f32 / 10.0).clamp(0.0, 1.0) * s;
                 // Small inset against non-fluid neighbors to avoid coplanar transparency flicker.
-                let side_plane_inset = 0.003 * s;
+                let side_plane_inset_non_opaque = 0.003 * s;
+                // Opaque neighbors can use a much smaller inset to avoid visible edge gaps.
+                let side_plane_inset_opaque = 0.0;
+                // Small inset for partial solid colliders (e.g. slabs) to reduce side flicker.
+                let side_plane_inset_partial_solid = 0.1 * s;
                 // Stronger inset for transparent-solid neighbors (e.g. glass) so water
-                // stays visible behind glass without coplanar flicker.
+                // stays visible behind glass without a coplanar flicker.
                 let side_plane_inset_transparent_solid = 0.04 * s;
+                // Thin shoreline band against opaque blocks to avoid floating-water gaps.
+                let side_strip_height_opaque = 0.09 * s;
                 // Lift bottom face of water slightly to reduce transparent depth fighting.
                 let fluid_bottom_face_lift = 0.1 * s;
                 let top_neigh = face_neighbor(Face::Top, x, y, z);
                 let bottom_neigh = face_neighbor(Face::Bottom, x, y, z);
                 let fluid_above = is_fluid_box && reg.fluid(top_neigh);
                 let fluid_below = is_fluid_box && reg.fluid(bottom_neigh);
+                let top_is_air = is_fluid_box && top_neigh == 0;
                 let connected = reg.has_connected_mask4(id);
                 let requires_face_visibility = connected || is_fluid_box;
                 let framed_slab = connected
@@ -1028,13 +1047,144 @@ pub async fn mesh_subchunk_async(
                 } else {
                     [-1.0, 0.0]
                 };
-                let face_ctm = |mask: u8| -> [f32; 2] {
+                let side_inset_for_neighbor = |neigh_id: BlockId| -> f32 {
+                    if let Some((size_m, _)) = reg.custom_mesh_box(neigh_id) {
+                        let near_full = |v: f32| (v - 1.0).abs() <= 0.001;
+                        let is_full_voxel =
+                            near_full(size_m[0]) && near_full(size_m[1]) && near_full(size_m[2]);
+                        if !is_full_voxel {
+                            return side_plane_inset_partial_solid;
+                        }
+                    }
+                    if reg.solid(neigh_id) && !reg.opaque(neigh_id) {
+                        side_plane_inset_transparent_solid
+                    } else if reg.opaque(neigh_id) {
+                        side_plane_inset_opaque
+                    } else {
+                        side_plane_inset_non_opaque
+                    }
+                };
+                let is_full_voxel_opaque = |neigh_id: BlockId| -> bool {
+                    if !reg.opaque(neigh_id) {
+                        return false;
+                    }
+                    let Some((size_m, _)) = reg.custom_mesh_box(neigh_id) else {
+                        return true;
+                    };
+                    let near_full = |v: f32| (v - 1.0).abs() <= 0.001;
+                    near_full(size_m[0]) && near_full(size_m[1]) && near_full(size_m[2])
+                };
+                let waterfall_lip = is_fluid_box && !fluid_above;
+                let fluid_flow_for_face = |face: Face| -> [f32; 2] {
+                    if waterfall_lip
+                        && matches!(face, Face::East | Face::West | Face::South | Face::North)
+                    {
+                        // Encode exposed waterfall lip so shader can round only the first edge
+                        // without creating seams between stacked vertical water cells.
+                        [0.0, -2.0]
+                    } else {
+                        water_flow_vec
+                    }
+                };
+                let face_ctm = |face: Face, mask: u8| -> [f32; 2] {
                     if connected {
                         [mask as f32, reg.connected_edge_clip_uv(id)]
                     } else if is_fluid_box {
-                        water_flow_vec
+                        fluid_flow_for_face(face)
                     } else {
                         [-1.0, 0.0]
+                    }
+                };
+                let clip_side_span_against_same_cell =
+                    |face: Face, y0: f32, top_a: f32, top_b: f32| -> Option<(f32, f32, f32)> {
+                        let mut out_y0 = y0;
+                        let mut out_top_a = top_a;
+                        let mut out_top_b = top_b;
+                        let mut out_top = out_top_a.max(out_top_b);
+
+                        if is_fluid_box && same_cell_other != 0 && !reg.fluid(same_cell_other) {
+                            if let Some((other_size_m, other_offset_m)) =
+                                reg.custom_mesh_box(same_cell_other)
+                            {
+                                let (other_min, other_max) =
+                                    local_box_bounds(other_size_m, other_offset_m);
+                                let face_touched = match face {
+                                    Face::East => other_max[0] >= 0.999,
+                                    Face::West => other_min[0] <= 0.001,
+                                    Face::South => other_max[2] >= 0.999,
+                                    Face::North => other_min[2] <= 0.001,
+                                    _ => false,
+                                };
+                                if face_touched {
+                                    let occ_y0 = y as f32 * s + other_min[1] * s;
+                                    let occ_y1 = y as f32 * s + other_max[1] * s;
+                                    if occ_y1 > out_y0 + 0.0001 && occ_y0 < out_top - 0.0001 {
+                                        let lower_gap = (occ_y0 - out_y0).max(0.0);
+                                        let upper_gap = (out_top - occ_y1).max(0.0);
+                                        if upper_gap >= lower_gap {
+                                            out_y0 = out_y0.max(occ_y1);
+                                        } else {
+                                            out_top = out_top.min(occ_y0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        out_top_a = out_top_a.min(out_top);
+                        out_top_b = out_top_b.min(out_top);
+                        if out_y0 < out_top_a.max(out_top_b) - 0.0001 {
+                            Some((out_y0, out_top_a, out_top_b))
+                        } else {
+                            None
+                        }
+                    };
+                let clip_side_span_against_neighbor = |face: Face,
+                                                       neigh_id: BlockId,
+                                                       y0: f32,
+                                                       top_a: f32,
+                                                       top_b: f32|
+                 -> Option<(f32, f32, f32)> {
+                    let mut out_y0 = y0;
+                    let mut out_top_a = top_a;
+                    let mut out_top_b = top_b;
+                    let mut out_top = out_top_a.max(out_top_b);
+
+                    if is_fluid_box && neigh_id != 0 && !reg.fluid(neigh_id) {
+                        if let Some((other_size_m, other_offset_m)) = reg.custom_mesh_box(neigh_id)
+                        {
+                            let (other_min, other_max) =
+                                local_box_bounds(other_size_m, other_offset_m);
+                            let face_touched = match face {
+                                // Shared face is neighbor's opposite side.
+                                Face::East => other_min[0] <= 0.001,
+                                Face::West => other_max[0] >= 0.999,
+                                Face::South => other_min[2] <= 0.001,
+                                Face::North => other_max[2] >= 0.999,
+                                _ => false,
+                            };
+                            if face_touched {
+                                let occ_y0 = y as f32 * s + other_min[1] * s;
+                                let occ_y1 = y as f32 * s + other_max[1] * s;
+                                if occ_y1 > out_y0 + 0.0001 && occ_y0 < out_top - 0.0001 {
+                                    let lower_gap = (occ_y0 - out_y0).max(0.0);
+                                    let upper_gap = (out_top - occ_y1).max(0.0);
+                                    if upper_gap >= lower_gap {
+                                        out_y0 = out_y0.max(occ_y1);
+                                    } else {
+                                        out_top = out_top.min(occ_y0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    out_top_a = out_top_a.min(out_top);
+                    out_top_b = out_top_b.min(out_top);
+                    if out_y0 < out_top_a.max(out_top_b) - 0.0001 {
+                        Some((out_y0, out_top_a, out_top_b))
+                    } else {
+                        None
                     }
                 };
                 let mut top_nw = max_y;
@@ -1170,7 +1320,7 @@ pub async fn mesh_subchunk_async(
                         } else {
                             [u_top.u0, u_top.v0, u_top.u1, u_top.v1]
                         },
-                        face_ctm(mask),
+                        face_ctm(Face::Top, mask),
                     );
                 }
                 if (!is_fluid_box || (!fluid_below && !fluid_above))
@@ -1212,11 +1362,14 @@ pub async fn mesh_subchunk_async(
                         } else {
                             [u_bottom.u0, u_bottom.v0, u_bottom.u1, u_bottom.v1]
                         },
-                        face_ctm(mask),
+                        face_ctm(Face::Bottom, mask),
                     );
                 }
                 let east_neigh = face_neighbor(Face::East, x, y, z);
-                if (!requires_face_visibility || face_visible(id, east_neigh))
+                let east_opaque_boundary_band = top_is_air && is_full_voxel_opaque(east_neigh);
+                if (!requires_face_visibility
+                    || face_visible(id, east_neigh)
+                    || east_opaque_boundary_band)
                     && !(connected
                         && connected_neighbor_occludes_face(
                             id,
@@ -1245,15 +1398,38 @@ pub async fn mesh_subchunk_async(
                             east_y0 =
                                 east_y0.max(fluid_top_from_level(reg.fluid_level(east_neigh)));
                         } else if east_neigh != 0 {
-                            let inset = if reg.solid(east_neigh) && !reg.opaque(east_neigh) {
-                                side_plane_inset_transparent_solid
+                            if east_opaque_boundary_band {
+                                east_y0 = east_y0.max(
+                                    (east_top_n.max(east_top_s) - side_strip_height_opaque)
+                                        .max(min_y),
+                                );
+                            }
+                            let inset = if waterfall_lip {
+                                0.0
                             } else {
-                                side_plane_inset
+                                side_inset_for_neighbor(east_neigh)
                             };
                             east_x -= inset;
                         }
                     }
-                    if east_y0 < east_top_n.max(east_top_s) - 0.0001 {
+                    if let Some((east_y0, east_top_n, east_top_s)) =
+                        clip_side_span_against_neighbor(
+                            Face::East,
+                            east_neigh,
+                            east_y0,
+                            east_top_n,
+                            east_top_s,
+                        )
+                        .and_then(|(y0, ta, tb)| {
+                            clip_side_span_against_same_cell(Face::East, y0, ta, tb)
+                        })
+                    {
+                        let face_flow = if east_opaque_boundary_band {
+                            // Marker for one-sided shoreline band (visible only from solid side).
+                            [0.0, -3.0]
+                        } else {
+                            face_ctm(Face::East, mask)
+                        };
                         b.quad_with_ctm(
                             [
                                 [east_x, east_y0, max_z],
@@ -1271,12 +1447,15 @@ pub async fn mesh_subchunk_async(
                             } else {
                                 [u_east.u0, u_east.v0, u_east.u1, u_east.v1]
                             },
-                            face_ctm(mask),
+                            face_flow,
                         );
                     }
                 }
                 let west_neigh = face_neighbor(Face::West, x, y, z);
-                if (!requires_face_visibility || face_visible(id, west_neigh))
+                let west_opaque_boundary_band = top_is_air && is_full_voxel_opaque(west_neigh);
+                if (!requires_face_visibility
+                    || face_visible(id, west_neigh)
+                    || west_opaque_boundary_band)
                     && !(connected
                         && connected_neighbor_occludes_face(
                             id,
@@ -1305,15 +1484,37 @@ pub async fn mesh_subchunk_async(
                             west_y0 =
                                 west_y0.max(fluid_top_from_level(reg.fluid_level(west_neigh)));
                         } else if west_neigh != 0 {
-                            let inset = if reg.solid(west_neigh) && !reg.opaque(west_neigh) {
-                                side_plane_inset_transparent_solid
+                            if west_opaque_boundary_band {
+                                west_y0 = west_y0.max(
+                                    (west_top_n.max(west_top_s) - side_strip_height_opaque)
+                                        .max(min_y),
+                                );
+                            }
+                            let inset = if waterfall_lip {
+                                0.0
                             } else {
-                                side_plane_inset
+                                side_inset_for_neighbor(west_neigh)
                             };
                             west_x += inset;
                         }
                     }
-                    if west_y0 < west_top_n.max(west_top_s) - 0.0001 {
+                    if let Some((west_y0, west_top_n, west_top_s)) =
+                        clip_side_span_against_neighbor(
+                            Face::West,
+                            west_neigh,
+                            west_y0,
+                            west_top_n,
+                            west_top_s,
+                        )
+                        .and_then(|(y0, ta, tb)| {
+                            clip_side_span_against_same_cell(Face::West, y0, ta, tb)
+                        })
+                    {
+                        let face_flow = if west_opaque_boundary_band {
+                            [0.0, -3.0]
+                        } else {
+                            face_ctm(Face::West, mask)
+                        };
                         b.quad_with_ctm(
                             [
                                 [west_x, west_y0, min_z],
@@ -1331,12 +1532,15 @@ pub async fn mesh_subchunk_async(
                             } else {
                                 [u_west.u0, u_west.v0, u_west.u1, u_west.v1]
                             },
-                            face_ctm(mask),
+                            face_flow,
                         );
                     }
                 }
                 let south_neigh = face_neighbor(Face::South, x, y, z);
-                if (!requires_face_visibility || face_visible(id, south_neigh))
+                let south_opaque_boundary_band = top_is_air && is_full_voxel_opaque(south_neigh);
+                if (!requires_face_visibility
+                    || face_visible(id, south_neigh)
+                    || south_opaque_boundary_band)
                     && !(connected
                         && connected_neighbor_occludes_face(
                             id,
@@ -1365,15 +1569,37 @@ pub async fn mesh_subchunk_async(
                             south_y0 =
                                 south_y0.max(fluid_top_from_level(reg.fluid_level(south_neigh)));
                         } else if south_neigh != 0 {
-                            let inset = if reg.solid(south_neigh) && !reg.opaque(south_neigh) {
-                                side_plane_inset_transparent_solid
+                            if south_opaque_boundary_band {
+                                south_y0 = south_y0.max(
+                                    (south_top_w.max(south_top_e) - side_strip_height_opaque)
+                                        .max(min_y),
+                                );
+                            }
+                            let inset = if waterfall_lip {
+                                0.0
                             } else {
-                                side_plane_inset
+                                side_inset_for_neighbor(south_neigh)
                             };
                             south_z -= inset;
                         }
                     }
-                    if south_y0 < south_top_w.max(south_top_e) - 0.0001 {
+                    if let Some((south_y0, south_top_w, south_top_e)) =
+                        clip_side_span_against_neighbor(
+                            Face::South,
+                            south_neigh,
+                            south_y0,
+                            south_top_w,
+                            south_top_e,
+                        )
+                        .and_then(|(y0, ta, tb)| {
+                            clip_side_span_against_same_cell(Face::South, y0, ta, tb)
+                        })
+                    {
+                        let face_flow = if south_opaque_boundary_band {
+                            [0.0, -3.0]
+                        } else {
+                            face_ctm(Face::South, mask)
+                        };
                         b.quad_with_ctm(
                             [
                                 [min_x, south_y0, south_z],
@@ -1391,12 +1617,15 @@ pub async fn mesh_subchunk_async(
                             } else {
                                 [u_south.u0, u_south.v0, u_south.u1, u_south.v1]
                             },
-                            face_ctm(mask),
+                            face_flow,
                         );
                     }
                 }
                 let north_neigh = face_neighbor(Face::North, x, y, z);
-                if (!requires_face_visibility || face_visible(id, north_neigh))
+                let north_opaque_boundary_band = top_is_air && is_full_voxel_opaque(north_neigh);
+                if (!requires_face_visibility
+                    || face_visible(id, north_neigh)
+                    || north_opaque_boundary_band)
                     && !(connected
                         && connected_neighbor_occludes_face(
                             id,
@@ -1425,15 +1654,37 @@ pub async fn mesh_subchunk_async(
                             north_y0 =
                                 north_y0.max(fluid_top_from_level(reg.fluid_level(north_neigh)));
                         } else if north_neigh != 0 {
-                            let inset = if reg.solid(north_neigh) && !reg.opaque(north_neigh) {
-                                side_plane_inset_transparent_solid
+                            if north_opaque_boundary_band {
+                                north_y0 = north_y0.max(
+                                    (north_top_e.max(north_top_w) - side_strip_height_opaque)
+                                        .max(min_y),
+                                );
+                            }
+                            let inset = if waterfall_lip {
+                                0.0
                             } else {
-                                side_plane_inset
+                                side_inset_for_neighbor(north_neigh)
                             };
                             north_z += inset;
                         }
                     }
-                    if north_y0 < north_top_e.max(north_top_w) - 0.0001 {
+                    if let Some((north_y0, north_top_e, north_top_w)) =
+                        clip_side_span_against_neighbor(
+                            Face::North,
+                            north_neigh,
+                            north_y0,
+                            north_top_e,
+                            north_top_w,
+                        )
+                        .and_then(|(y0, ta, tb)| {
+                            clip_side_span_against_same_cell(Face::North, y0, ta, tb)
+                        })
+                    {
+                        let face_flow = if north_opaque_boundary_band {
+                            [0.0, -3.0]
+                        } else {
+                            face_ctm(Face::North, mask)
+                        };
                         b.quad_with_ctm(
                             [
                                 [max_x, north_y0, north_z],
@@ -1451,7 +1702,7 @@ pub async fn mesh_subchunk_async(
                             } else {
                                 [u_north.u0, u_north.v0, u_north.u1, u_north.v1]
                             },
-                            face_ctm(mask),
+                            face_flow,
                         );
                     }
                 }

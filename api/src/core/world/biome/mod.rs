@@ -103,6 +103,23 @@ pub struct BiomeSettings {
     pub mount_amp: Option<f32>,
     #[serde(default)]
     pub mount_freq: Option<f32>,
+
+    // sub-biome gates (optional)
+    #[serde(
+        default,
+        alias = "sub-min-land-distance-blocks",
+        alias = "min_land_distance_blocks",
+        alias = "min-land-distance-blocks"
+    )]
+    pub sub_min_land_distance_blocks: Option<f32>,
+
+    #[serde(
+        default,
+        alias = "sub-min-land-distance-blend-blocks",
+        alias = "min_land_distance_blend_blocks",
+        alias = "min-land-distance-blend-blocks"
+    )]
+    pub sub_min_land_distance_blend_blocks: Option<f32>,
 }
 
 /// Represents biome generation used by the `core::world::biome` module.

@@ -1,0 +1,34 @@
+{
+  "localized_name": "oplexa:deep_ocean",
+  "name": "Deep Ocean",
+  "stand_alone": false,
+  "climate": ["wet"],
+  "rarity": 0.2,
+  "sizes": [ "Medium", "Large" ],
+  "surface": {
+    "top": ["gravel_block"],
+    "bottom": ["gravel_block", "dirt_block"],
+    "sea_floor": ["gravel_block", "dirt_block"],
+    "upper_zero": ["stone_block", "dirt_block", "gravel_block"],
+    "under_zero": ["deep_stone_block"]
+  },
+  "settings": {
+    "height_offset": -32.0,
+    "seafloor_amp": 27.0,
+    "seafloor_freq": 0.0042,
+    "min_land_distance_blocks": 130.0,
+    "min_land_distance_blend_blocks": 360.0
+  },
+  "generation": {
+    "rivers": false,
+    "vegetation": {
+      "density": 0.26,
+      "items": [
+        {
+          "block": "sea_grass_block",
+          "weight": 0.05
+        }
+      ]
+    }
+  }
+}

@@ -14,6 +14,13 @@ pub struct BlockBreakByPlayerEvent {
     pub drops_item: bool,
 }
 
+/// Represents an observed block break from world replication.
+/// This event is local-only and must not be re-sent over the network.
+#[derive(Message, Clone, Debug)]
+pub struct BlockBreakObservedEvent {
+    pub location: IVec3,
+}
+
 /// Represents block place by player event used by the `core::events::block::block_player_events` module.
 #[derive(Message, Clone, Debug)]
 pub struct BlockPlaceByPlayerEvent {
@@ -21,4 +28,12 @@ pub struct BlockPlaceByPlayerEvent {
     pub block_id: u16,
     pub stacked_block_id: u16,
     pub block_name: String,
+}
+
+/// Represents an observed block placement from world replication.
+/// This event is local-only and must not be re-sent over the network.
+#[derive(Message, Clone, Debug)]
+pub struct BlockPlaceObservedEvent {
+    pub location: IVec3,
+    pub block_id: u16,
 }

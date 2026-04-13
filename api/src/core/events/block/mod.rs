@@ -10,6 +10,8 @@ impl Plugin for BlockEventsModule {
     /// Builds this component for the `core::events::block` module.
     fn build(&self, app: &mut App) {
         app.add_message::<BlockBreakByPlayerEvent>()
-            .add_message::<BlockPlaceByPlayerEvent>();
+            .add_message::<BlockPlaceByPlayerEvent>()
+            .add_message::<BlockBreakObservedEvent>()
+            .add_message::<BlockPlaceObservedEvent>();
     }
 }

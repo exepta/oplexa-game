@@ -59,8 +59,11 @@ fn remap_uv_scroll(
   ) * uv_scale;
 
   let base_speed = max(length(params.flow.xy), 0.0001);
-  let has_local_dir = length(flow_dir) > 0.001;
-  let world_dir = normalize(select(vec2<f32>(1.0, 0.0), flow_dir, has_local_dir));
+  let boundary_flag = flow_dir.y < -2.5;
+  let lip_flag = flow_dir.y < -1.5 && !boundary_flag;
+  let flow_vec = select(flow_dir, vec2<f32>(0.0, 0.0), lip_flag || boundary_flag);
+  let has_local_dir = length(flow_vec) > 0.001;
+  let world_dir = normalize(select(vec2<f32>(1.0, 0.0), flow_vec, has_local_dir));
   let top_flow = world_dir * base_speed;
   let side_u = select(world_dir.x, -world_dir.y, is_side_x);
   let side_flow_horizontal = vec2<f32>(side_u * base_speed, 0.0);
@@ -111,8 +114,22 @@ fn vertex(v: VertexInput) -> VOut {
   let wave = (0.5 + 0.5 * clamp(wave_raw / 1.62, -1.0, 1.0)) * amp;
 
   let is_top_face = normal_ws.y > 0.95;
-  let is_side_top_edge = abs(normal_ws.y) < 0.05 && v.uv_local.y <= 0.001;
-  if (is_top_face || is_side_top_edge) {
+  let boundary_flag = v.flow_dir.y < -2.5;
+  let lip_flag = v.flow_dir.y < -1.5 && !boundary_flag;
+  let flow_vec = select(v.flow_dir, vec2<f32>(0.0, 0.0), lip_flag || boundary_flag);
+  let has_local_dir = length(flow_vec) > 0.001;
+  let is_side_face = abs(normal_ws.y) < 0.05;
+  // Avoid vertical waterfall seams: only animate side top edge when this face is
+  // laterally flowing, lip-rounded, or shoreline-boundary tagged.
+  let is_side_top_edge =
+    is_side_face && v.uv_local.y <= 0.001 && (has_local_dir || lip_flag || boundary_flag);
+  if (is_top_face) {
+    pos_world.y = pos_world.y + wave;
+  } else if (is_side_top_edge) {
+    let across = clamp(v.uv_local.x, 0.0, 1.0);
+    let center = 1.0 - abs(across * 2.0 - 1.0);
+    let _arc = smoothstep(0.0, 1.0, center);
+    // Keep edge height exactly in sync with top-face wave to avoid see-through seams.
     pos_world.y = pos_world.y + wave;
   }
 
@@ -126,10 +143,28 @@ fn vertex(v: VertexInput) -> VOut {
 }
 
 @fragment
-fn fragment(in: VOut) -> @location(0) vec4<f32> {
+fn fragment(in: VOut, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
   let cam_pos = (view.world_from_view * vec4<f32>(0.0, 0.0, 0.0, 1.0)).xyz;
   let V = normalize(cam_pos - in.world_pos);
-  let N = normalize(in.normal_ws);
+  let N_geom = normalize(in.normal_ws);
+  let boundary_flag = in.flow_dir.y < -2.5;
+  let lip_flag = in.flow_dir.y < -1.5 && !boundary_flag;
+  if (boundary_flag && !is_front) {
+    discard;
+  }
+  var N = N_geom;
+  let flow_vec = select(in.flow_dir, vec2<f32>(0.0, 0.0), lip_flag || boundary_flag);
+  let has_local_dir = length(flow_vec) > 0.001;
+  if (abs(N.y) < 0.25 && (has_local_dir || lip_flag)) {
+    // Soft highlight rounding on flowing lips to reduce rigid "blocky" look.
+    let edge_t = smoothstep(0.28, 0.0, in.uv_local.y);
+    let center = 1.0 - abs(clamp(in.uv_local.x, 0.0, 1.0) * 2.0 - 1.0);
+    let round_t = edge_t * smoothstep(0.0, 1.0, center);
+    if (round_t > 0.0001) {
+      let lift_n = normalize(N + vec3<f32>(0.0, 0.85, 0.0));
+      N = normalize(mix(N, lift_n, round_t * 0.58));
+    }
+  }
 
   let uv_sample = remap_uv_scroll(in.uv_local, in.tile_rect, in.world_pos, in.normal_ws, in.flow_dir);
   let tex = textureSampleGrad(atlas_tex, atlas_smp, uv_sample.uv, uv_sample.duvdx, uv_sample.duvdy);

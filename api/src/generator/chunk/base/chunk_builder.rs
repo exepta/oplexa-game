@@ -520,22 +520,14 @@ fn schedule_chunk_generation(
     let waiting = is_waiting(&app_state);
     let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
     let frame_ms = schedule_state.time.delta_secs() * 1000.0;
-    let dynamic_divisor = if frame_ms > 30.0 {
-        4
-    } else if frame_ms > 22.0 {
-        3
-    } else if frame_ms > 17.0 {
-        2
-    } else {
-        1
-    };
+    let dynamic_divisor = frame_pressure_divisor(frame_ms);
     let async_threads = AsyncComputeTaskPool::get().thread_num().max(1);
     let waiting_max_inflight = (async_threads * 6).clamp(24, 192);
     let waiting_submit = (async_threads * 3).clamp(8, 96);
     let ingame_max_inflight =
-        (game_config.graphics.chunk_gen_max_inflight.max(1) / dynamic_divisor).clamp(4, 20);
+        (game_config.graphics.chunk_gen_max_inflight.max(1) / dynamic_divisor).clamp(3, 12);
     let ingame_submit =
-        (game_config.graphics.chunk_gen_submit_per_frame.max(1) / dynamic_divisor).clamp(1, 4);
+        (game_config.graphics.chunk_gen_submit_per_frame.max(1) / dynamic_divisor).clamp(1, 3);
     let mut max_inflight = if waiting {
         waiting_max_inflight
     } else if in_game {
@@ -567,6 +559,7 @@ fn schedule_chunk_generation(
     }
 
     if !waiting
+        && frame_ms <= 20.0
         && schedule_state
             .stream_lookahead
             .smoothed_dir
@@ -578,18 +571,18 @@ fn schedule_chunk_generation(
 
     if !waiting {
         let mesh_pressure = pending_mesh.0.len() + backlog.0.len();
-        if mesh_pressure > 4_000 {
+        if mesh_pressure > 2_000 {
+            max_inflight = max_inflight.min(4);
+            per_frame_submit = per_frame_submit.min(1);
+        } else if mesh_pressure > 1_200 {
             max_inflight = max_inflight.min(6);
             per_frame_submit = per_frame_submit.min(1);
-        } else if mesh_pressure > 2_500 {
+        } else if mesh_pressure > 700 {
+            max_inflight = max_inflight.min(8);
+            per_frame_submit = per_frame_submit.min(2);
+        } else if mesh_pressure > 350 {
             max_inflight = max_inflight.min(10);
             per_frame_submit = per_frame_submit.min(2);
-        } else if mesh_pressure > 1_500 {
-            max_inflight = max_inflight.min(16);
-            per_frame_submit = per_frame_submit.min(3);
-        } else if mesh_pressure > 800 {
-            max_inflight = max_inflight.min(24);
-            per_frame_submit = per_frame_submit.min(5);
         }
 
         let urgent = (visible_radius(game_config.graphics.chunk_range) + 1).max(1);
@@ -606,7 +599,7 @@ fn schedule_chunk_generation(
             }
         }
         if missing_near > 0 && mesh_pressure < 1_200 {
-            let near_boost = if in_game { 4 } else { 12 };
+            let near_boost = if in_game { 2 } else { 12 };
             per_frame_submit = per_frame_submit.max(near_boost).min(max_inflight);
         }
     }
@@ -746,18 +739,20 @@ fn schedule_chunk_generation(
     });
 
     if !waiting
+        && frame_ms < 26.0
         && !visible_candidates.is_empty()
         && schedule_state.ring_deadlines.visible_miss_frames >= 2
     {
         per_frame_submit = per_frame_submit
-            .max(if in_game { 4 } else { 24 })
+            .max(if in_game { 2 } else { 24 })
             .min(max_inflight);
     } else if !waiting
+        && frame_ms < 26.0
         && !preload_candidates.is_empty()
         && schedule_state.ring_deadlines.preload_miss_frames >= 6
     {
         per_frame_submit = per_frame_submit
-            .max(if in_game { 2 } else { 10 })
+            .max(if in_game { 1 } else { 10 })
             .min(max_inflight);
     }
 
@@ -861,9 +856,10 @@ fn drain_mesh_backlog(
     chunk_map: Res<ChunkMap>,
     reg: Res<BlockRegistry>,
     game_config: Res<GlobalConfig>,
+    time: Res<Time>,
+    app_state: Res<State<AppState>>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
     load_center: Option<Res<LoadCenter>>,
-    app_state: Res<State<AppState>>,
 ) {
     if chunk_map.chunks.is_empty() {
         backlog.0.clear();
@@ -872,11 +868,27 @@ fn drain_mesh_backlog(
     }
 
     let waiting = is_waiting(&app_state);
+    let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
+    let frame_ms = time.delta_secs() * 1000.0;
+    let dynamic_divisor = frame_pressure_divisor(frame_ms);
     let waiting_mesh_cap = (AsyncComputeTaskPool::get().thread_num().max(1) * 8).clamp(32, 256);
     let max_inflight_mesh = if waiting {
         waiting_mesh_cap
+    } else if in_game {
+        (game_config.graphics.chunk_mesh_max_inflight.max(1) / dynamic_divisor).clamp(4, 16)
     } else {
         game_config.graphics.chunk_mesh_max_inflight.max(1)
+    };
+    let pull_budget = if waiting {
+        usize::MAX
+    } else if frame_ms > 34.0 {
+        1
+    } else if frame_ms > 24.0 {
+        2
+    } else if frame_ms > 18.0 {
+        3
+    } else {
+        5
     };
 
     let reg_lite = RegLite::from_reg(&reg);
@@ -893,7 +905,8 @@ fn drain_mesh_backlog(
         IVec2::ZERO
     };
 
-    while pending_mesh.0.len() < max_inflight_mesh {
+    let mut pulled = 0usize;
+    while pending_mesh.0.len() < max_inflight_mesh && pulled < pull_budget {
         let next = if waiting {
             backlog.0.pop_front()
         } else {
@@ -915,13 +928,14 @@ fn drain_mesh_backlog(
         let Some((coord, sub)) = next else {
             break;
         };
+        pulled += 1;
         backlog_set.0.remove(&(coord, sub));
         if pending_mesh.0.contains_key(&(coord, sub)) {
             continue;
         }
 
         let mut subs = vec![sub];
-        if !waiting && pending_mesh.0.len() + 1 < max_inflight_mesh {
+        if !waiting && frame_ms < 20.0 && pending_mesh.0.len() + 1 < max_inflight_mesh {
             let max_take = (max_inflight_mesh - pending_mesh.0.len() - 1).min(SEC_COUNT);
             let mut i = 0usize;
             while i < backlog.0.len() && subs.len() <= max_take {
@@ -993,15 +1007,7 @@ fn collect_generated_chunks(
     let waiting = is_waiting(&app_state);
     let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
     let frame_ms = time.delta_secs() * 1000.0;
-    let dynamic_divisor = if frame_ms > 30.0 {
-        4
-    } else if frame_ms > 22.0 {
-        3
-    } else if frame_ms > 17.0 {
-        2
-    } else {
-        1
-    };
+    let dynamic_divisor = frame_pressure_divisor(frame_ms);
     let waiting_mesh_cap = (AsyncComputeTaskPool::get().thread_num().max(1) * 8).clamp(32, 256);
     let max_inflight_mesh = if waiting {
         waiting_mesh_cap
@@ -1014,7 +1020,11 @@ fn collect_generated_chunks(
     let gen_apply_cap = if waiting {
         BIG
     } else if in_game {
-        (2usize / dynamic_divisor).max(1)
+        if frame_ms > 24.0 {
+            1
+        } else {
+            (2usize / dynamic_divisor).max(1)
+        }
     } else if mesh_pressure > 4_000 {
         1
     } else if mesh_pressure > 2_500 {
@@ -1168,18 +1178,10 @@ fn collect_meshed_subchunks(
     let waiting = is_waiting(&app_state);
     let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
     let frame_ms = time.delta_secs() * 1000.0;
-    let dynamic_divisor = if frame_ms > 30.0 {
-        4
-    } else if frame_ms > 22.0 {
-        3
-    } else if frame_ms > 17.0 {
-        2
-    } else {
-        1
-    };
+    let dynamic_divisor = frame_pressure_divisor(frame_ms);
     let ingame_apply_cap = game_config.graphics.chunk_mesh_apply_per_frame.max(1);
     let ingame_apply_cap = if in_game {
-        (ingame_apply_cap / dynamic_divisor).max(2)
+        (ingame_apply_cap / dynamic_divisor).clamp(1, 10)
     } else {
         ingame_apply_cap
     };
@@ -1204,7 +1206,7 @@ fn collect_meshed_subchunks(
     let poll_scan_limit = if waiting {
         1024usize
     } else {
-        (apply_cap.saturating_mul(4)).clamp(16, 96)
+        (apply_cap.saturating_mul(3)).clamp(12, 64)
     };
     let mut polled_done_keys: Vec<(IVec2, usize)> = Vec::new();
     let mut scanned = 0usize;
@@ -1255,7 +1257,15 @@ fn collect_meshed_subchunks(
     let apply_budget_ms = if waiting {
         10.0
     } else if in_game {
-        2.8
+        if frame_ms > 34.0 {
+            1.0
+        } else if frame_ms > 26.0 {
+            1.4
+        } else if frame_ms > 20.0 {
+            2.0
+        } else {
+            2.6
+        }
     } else {
         6.0
     };
@@ -1633,15 +1643,7 @@ fn collect_finished_collider_builds(
     let waiting = is_waiting(&app_state);
     let in_game = matches!(app_state.get(), AppState::InGame(InGameStates::Game));
     let frame_ms = time.delta_secs() * 1000.0;
-    let dynamic_divisor = if frame_ms > 30.0 {
-        4
-    } else if frame_ms > 22.0 {
-        3
-    } else if frame_ms > 17.0 {
-        2
-    } else {
-        1
-    };
+    let dynamic_divisor = frame_pressure_divisor(frame_ms);
     let ingame_apply_cap = game_config.graphics.chunk_collider_apply_per_frame.max(1);
     let ingame_apply_cap = if in_game {
         (ingame_apply_cap / dynamic_divisor).max(1)
@@ -1656,7 +1658,7 @@ fn collect_finished_collider_builds(
         ingame_apply_cap
     };
     let mut done_keys = Vec::new();
-    let poll_scan_limit = if waiting { 512usize } else { 256usize };
+    let poll_scan_limit = if waiting { 512usize } else { 128usize };
     let mut scanned = 0usize;
     for (key, task) in pending.0.iter_mut() {
         if scanned >= poll_scan_limit {
@@ -1685,7 +1687,15 @@ fn collect_finished_collider_builds(
     let apply_budget_ms = if waiting {
         8.0
     } else if in_game {
-        1.8
+        if frame_ms > 34.0 {
+            0.8
+        } else if frame_ms > 26.0 {
+            1.1
+        } else if frame_ms > 20.0 {
+            1.4
+        } else {
+            1.8
+        }
     } else {
         5.0
     };
@@ -2486,6 +2496,23 @@ fn loaded_radius(chunk_range: i32) -> i32 {
         r + HIDDEN_PRELOAD_RING
     } else {
         r
+    }
+}
+
+#[inline]
+fn frame_pressure_divisor(frame_ms: f32) -> usize {
+    if frame_ms > 45.0 {
+        8
+    } else if frame_ms > 34.0 {
+        6
+    } else if frame_ms > 26.0 {
+        4
+    } else if frame_ms > 20.0 {
+        3
+    } else if frame_ms > 16.0 {
+        2
+    } else {
+        1
     }
 }
 

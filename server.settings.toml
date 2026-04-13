@@ -1,17 +1,37 @@
+# Public bind/advertise settings.
+# Impact: wrong network values can prevent clients from connecting.
 ip = "auto"
 port = 14191
+
+# World identity and generation seed.
+# Impact: changing these can create a different world or load another world folder.
 world-name = "world"
 world-seed = "random"
+
+# Server browser identity.
+# Impact: cosmetic only; does not affect performance.
 server-name = "Oplexa Server"
 motd = "Welcome to Oplexa"
+
+# Session/player limits.
+# Impact: higher player count increases CPU, network, and chunk-stream load.
 max-players = 10
 client-timeout = 60
-chunk-stream-sends-per-tick-base = 8
-chunk-stream-sends-per-tick-per-client = 2
-chunk-stream-sends-per-tick-max = 64
-chunk-stream-inflight-per-client = 12
-chunk-flight-timeout-ms = 300
-chunk-stream-gen-max-inflight = 16
+
+# Chunk stream throughput controls (server -> clients).
+# Impact: higher values load terrain faster but can raise CPU/network usage.
+chunk-stream-sends-per-tick-base = 22
+chunk-stream-sends-per-tick-per-client = 8
+chunk-stream-sends-per-tick-max = 240
+chunk-stream-inflight-per-client = 42
+chunk-flight-timeout-ms = 120
+chunk-stream-gen-max-inflight = 96
+
+# Interest/search limits.
+# Impact: a higher stream radius / search radius increases generation and memory pressure.
 max-stream-radius = 12
 locate-search-radius = 1000
+
+# Maintenance cadence for dead entities.
+# Impact: the lower interval cleans up faster but adds periodic CPU work.
 dead-entity-check-interval-secs = 20

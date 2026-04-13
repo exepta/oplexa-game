@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 /// Chunk dimensions in cells (X × Y × Z).
 pub const CX: usize = 32;
-pub const CY: usize = 320;
+pub const CY: usize = 384;
 pub const CZ: usize = 32;
 
 /// Inclusive world-space vertical bounds covered by a single column of chunks.

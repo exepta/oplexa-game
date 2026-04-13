@@ -1,4 +1,6 @@
 use super::*;
+use bevy::render::render_resource::WgpuFeatures;
+use bevy::render::settings::PowerPreference;
 
 /// Initializes bevy app for the `client` module.
 pub(super) fn init_bevy_app(
@@ -36,10 +38,16 @@ pub(super) fn init_bevy_app(
                             config.graphics.window_width,
                             config.graphics.window_height,
                         ),
-                        present_mode: if config.graphics.vsync {
+                        present_mode: if cfg!(target_os = "macos") {
+                            if config.graphics.vsync {
+                                PresentMode::AutoVsync
+                            } else {
+                                PresentMode::AutoNoVsync
+                            }
+                        } else if config.graphics.vsync {
                             PresentMode::AutoVsync
                         } else {
-                            PresentMode::AutoNoVsync
+                            PresentMode::Mailbox
                         },
                         ..default()
                     }),
@@ -151,6 +159,7 @@ fn create_gpu_settings(backend_str: &str) -> WgpuSettings {
     let backend = match backend_str {
         "auto" | "AUTO" | "primary" | "PRIMARY" => Some(Backends::PRIMARY),
         "vulkan" | "VULKAN" => Some(Backends::VULKAN),
+        "opengl" | "OPENGL" | "gl" | "GL" => Some(Backends::GL),
         "dx12" | "DX12" => Some(Backends::DX12),
         "metal" | "METAL" => Some(Backends::METAL),
         other => {
@@ -159,6 +168,9 @@ fn create_gpu_settings(backend_str: &str) -> WgpuSettings {
         }
     };
 
+    let power_preference = PowerPreference::from_env().unwrap_or(PowerPreference::HighPerformance);
+    println!("GPU Power Preference: {:?}", power_preference);
+
     WgpuSettings {
         features: if cfg!(debug_assertions) {
             WgpuFeatures::POLYGON_MODE_LINE
@@ -166,6 +178,7 @@ fn create_gpu_settings(backend_str: &str) -> WgpuSettings {
             WgpuFeatures::empty()
         },
         backends: backend,
+        power_preference,
         ..default()
     }
 }

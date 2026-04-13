@@ -2,6 +2,7 @@
   "localized_name": "oplexa:ocean",
   "name": "Ocean",
   "stand_alone": true,
+  "subs": ["deep_ocean"],
   "climate": ["wet"],
   "rarity": 0.4,
   "sizes": [ "Ocean" ],
@@ -13,11 +14,20 @@
     "under_zero": ["deep_stone_block"]
   },
   "settings": {
-    "height_offset": -38.0,
-    "seafloor_amp": 34.0,
-    "seafloor_freq": 0.0046
+    "height_offset": -16.0,
+    "seafloor_amp": 24.0,
+    "seafloor_freq": 0.0042
   },
   "generation": {
-    "rivers": false
+    "rivers": false,
+    "vegetation": {
+      "density": 0.12,
+      "items": [
+        {
+          "block": "sea_grass_block",
+          "weight": 0.05
+        }
+      ]
+    }
   }
 }

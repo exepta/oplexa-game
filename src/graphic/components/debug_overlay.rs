@@ -50,6 +50,7 @@ fn refresh_sys_stats(
     mut stats: ResMut<SysStats>,
     mut vram_state: ResMut<DebugVramState>,
     mut gpu_load_state: ResMut<DebugGpuLoadState>,
+    mut gpu_clock_state: ResMut<DebugGpuClockState>,
 ) {
     if !overlay.show {
         return;
@@ -79,6 +80,7 @@ fn refresh_sys_stats(
 
     let vram = v_ram_utils::detect_v_ram_best_effort();
     vram_state.bytes = vram.map(|value| value.bytes);
+    vram_state.total_bytes = v_ram_utils::detect_v_ram_total_best_effort();
     vram_state.source = vram.map(|value| value.source);
     vram_state.scope = vram.map(|value| value.scope);
 
@@ -86,6 +88,11 @@ fn refresh_sys_stats(
     gpu_load_state.percent = gpu_load.map(|value| value.percent);
     gpu_load_state.source = gpu_load.map(|value| value.source);
     gpu_load_state.scope = gpu_load.map(|value| value.scope);
+
+    let gpu_clock = v_ram_utils::detect_gpu_clock_best_effort();
+    gpu_clock_state.hz = gpu_clock.map(|value| value.hz);
+    gpu_clock_state.source = gpu_clock.map(|value| value.source);
+    gpu_clock_state.scope = gpu_clock.map(|value| value.scope);
 }
 
 /// Samples runtime FPS and update tick speed for the debug overlay.
@@ -97,12 +104,42 @@ fn sample_runtime_perf_stats(
 ) {
     let dt = time.delta_secs().max(0.0001);
     let raw = (1.0 / dt).clamp(0.0, 10000.0);
+    perf.fps_direct = raw;
+
+    sample_state.fps_window_secs += dt;
+    sample_state.fps_window_sum += raw;
+    sample_state.fps_window_count = sample_state.fps_window_count.saturating_add(1);
+    if sample_state.fps_window_secs >= 1.0 {
+        let count = sample_state.fps_window_count.max(1) as f32;
+        perf.fps = sample_state.fps_window_sum / count;
+        sample_state.fps_window_secs = 0.0;
+        sample_state.fps_window_sum = 0.0;
+        sample_state.fps_window_count = 0;
+    } else if perf.fps <= 0.0 {
+        perf.fps = raw;
+    }
+
     let alpha = 0.15;
 
-    if perf.fps <= 0.0 {
-        perf.fps = raw;
-    } else {
-        perf.fps += (raw - perf.fps) * alpha;
+    sample_state.low_window_secs += dt;
+    sample_state.low_window_fps_samples.push(raw);
+    if sample_state.low_window_secs >= 2.0 {
+        if !sample_state.low_window_fps_samples.is_empty() {
+            sample_state
+                .low_window_fps_samples
+                .sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let low_bucket = ((sample_state.low_window_fps_samples.len() as f32) * 0.01)
+                .ceil()
+                .max(1.0) as usize;
+            let bucket_len = low_bucket.min(sample_state.low_window_fps_samples.len());
+            let low_sum: f32 = sample_state.low_window_fps_samples[..bucket_len]
+                .iter()
+                .copied()
+                .sum();
+            perf.fps_low_1p = low_sum / bucket_len as f32;
+        }
+        sample_state.low_window_secs = 0.0;
+        sample_state.low_window_fps_samples.clear();
     }
 
     if let Some(local_timeline) = local_timeline {
@@ -193,7 +230,8 @@ struct LookedBlockDeps<'w, 's> {
     selection_state: Res<'w, SelectionState>,
     block_registry: Res<'w, BlockRegistry>,
     language: Res<'w, ClientLanguageState>,
-    q_structures: Query<'w, 's, &'static crate::logic::events::block_event_handler::PlacedStructureMetadata>,
+    q_structures:
+        Query<'w, 's, &'static crate::logic::events::block_event_handler::PlacedStructureMetadata>,
 }
 
 /// Synchronizes system last ui for the `graphic::components::debug_overlay` module.
@@ -205,8 +243,10 @@ fn sync_system_last_ui(
     world_inspector: Res<WorldInspectorState>,
     stats: Res<SysStats>,
     perf: Res<RuntimePerfStats>,
+    chunk_debug: Res<ChunkDebugStats>,
     vram_state: Res<DebugVramState>,
     gpu_load_state: Res<DebugGpuLoadState>,
+    gpu_clock_state: Res<DebugGpuClockState>,
     gpu_adapter: Option<Res<RenderAdapterInfo>>,
     world_gen_config: Res<WorldGenConfig>,
     biomes: Res<BiomeRegistry>,
@@ -238,38 +278,37 @@ fn sync_system_last_ui(
         .map(|adapter| adapter.name.as_str())
         .filter(|name| !name.is_empty())
         .unwrap_or("Unknown GPU");
-    let (vram_text, vram_backend) = if let Some(bytes) = vram_state.bytes {
-        let backend = match (vram_state.source, vram_state.scope) {
-            (Some(source), Some(scope)) => format!("{source}/{scope}"),
-            (Some(source), None) => source.to_string(),
-            _ => "unknown".to_string(),
-        };
-        (v_ram_utils::fmt_bytes(bytes), backend)
+    let vram_text = if let Some(bytes) = vram_state.bytes {
+        if let Some(total_bytes) = vram_state.total_bytes {
+            format!(
+                "{} / {}",
+                v_ram_utils::fmt_bytes(bytes),
+                v_ram_utils::fmt_bytes(total_bytes)
+            )
+        } else {
+            v_ram_utils::fmt_bytes(bytes)
+        }
     } else if cfg!(target_os = "macos") {
-        (
-            format!("~{}", v_ram_utils::fmt_bytes(stats.app_mem_bytes)),
-            "fallback/app-rss".to_string(),
-        )
+        format!("~{}", v_ram_utils::fmt_bytes(stats.app_mem_bytes))
     } else {
-        ("n/a".to_string(), "unavailable".to_string())
+        "n/a".to_string()
     };
-    let (gpu_load_text, gpu_load_backend) = if let Some(percent) = gpu_load_state.percent {
-        let backend = match (gpu_load_state.source, gpu_load_state.scope) {
-            (Some(source), Some(scope)) => format!("{source}/{scope}"),
-            (Some(source), None) => source.to_string(),
-            _ => "unknown".to_string(),
-        };
-        (format!("{percent:.1}%"), backend)
+    let gpu_load_text = if let Some(percent) = gpu_load_state.percent {
+        format!("{percent:.1}%")
     } else if cfg!(any(target_os = "macos", windows)) {
         let fps = perf.fps.max(1.0);
         let estimated_percent = (60.0 / fps * 100.0).clamp(0.0, 100.0);
-        (
-            format!("~{estimated_percent:.1}%"),
-            "fallback/fps-estimate".to_string(),
-        )
+        format!("~{estimated_percent:.1}%")
     } else {
-        ("n/a".to_string(), "unavailable".to_string())
+        "n/a".to_string()
     };
+    let gpu_clock_text = if let Some(hz) = gpu_clock_state.hz {
+        v_ram_utils::fmt_hz(hz)
+    } else {
+        "n/a".to_string()
+    };
+    let has_remote_stream_activity =
+        chunk_debug.remote_decode_queue_peak > 0 || chunk_debug.remote_remesh_queue_peak > 0;
     let (player_pos, player_yaw_pitch) = player
         .iter()
         .next()
@@ -326,7 +365,9 @@ fn sync_system_last_ui(
                     if let Some(block_id) = registration.block_id {
                         localize_block_name_for_id(language.as_ref(), &block_registry, block_id)
                     } else {
-                        language.as_ref().localize_name_key(registration.name.as_str())
+                        language
+                            .as_ref()
+                            .localize_name_key(registration.name.as_str())
                     }
                 } else {
                     meta.recipe_name.clone()
@@ -342,9 +383,46 @@ fn sync_system_last_ui(
             ID_BUILD => format!(
                 "{}: {} v{} | Bevy {}",
                 language.localize_name_key("KEY_UI_DEBUG_GAME_VERSION"),
-                build.app_name, build.app_version, build.bevy_version
+                build.app_name,
+                build.app_version,
+                build.bevy_version
             ),
-            ID_FPS => format!("{}: {:.1}", language.localize_name_key("KEY_UI_DEBUG_FPS"), perf.fps),
+            ID_FPS => format!(
+                "{}: {:.1} / {:.1}s",
+                language.localize_name_key("KEY_UI_DEBUG_FPS"),
+                perf.fps_direct,
+                perf.fps
+            ),
+            ID_FPS_LOW => {
+                if perf.fps_low_1p > 0.0 {
+                    format!("Fps (Low): {:.1}", perf.fps_low_1p)
+                } else {
+                    "Fps (Low): n/a".to_string()
+                }
+            }
+            ID_STREAM_DECODE_QUEUE => {
+                if !has_remote_stream_activity {
+                    format!("Decode Queue: {}", chunk_debug.queue_chunks)
+                } else {
+                    format!(
+                        "Decode Queue: {} (peak {})",
+                        chunk_debug.remote_decode_queue, chunk_debug.remote_decode_queue_peak
+                    )
+                }
+            }
+            ID_STREAM_REMESH_QUEUE => {
+                if !has_remote_stream_activity {
+                    format!(
+                        "Remesh Queue: {}",
+                        chunk_debug.base_mesh_inflight + chunk_debug.base_mesh_queue
+                    )
+                } else {
+                    format!(
+                        "Remesh Queue: {} (peak {})",
+                        chunk_debug.remote_remesh_queue, chunk_debug.remote_remesh_queue_peak
+                    )
+                }
+            }
             ID_TICK_SPEED => format!(
                 "{}: {:.1} t/s",
                 language.localize_name_key("KEY_UI_DEBUG_TICKS"),
@@ -358,7 +436,8 @@ fn sync_system_last_ui(
             ID_APP_CPU => format!(
                 "{}: {:.1}% / {:.1}%",
                 language.localize_name_key("KEY_UI_DEBUG_CPU_LAST_GAME_SYSTEM"),
-                app_cpu_normalized, stats.cpu_percent
+                app_cpu_normalized,
+                stats.cpu_percent
             ),
             ID_GLOBAL_CPU => format!(
                 "{}: {:.1}%",
@@ -375,18 +454,9 @@ fn sync_system_last_ui(
                 language.localize_name_key("KEY_UI_DEBUG_GPU_NAME"),
                 gpu_name
             ),
-            ID_GPU_LOAD => format!(
-                "{}: {} ({})",
-                language.localize_name_key("KEY_UI_DEBUG_GPU_LOAD"),
-                gpu_load_text,
-                gpu_load_backend
-            ),
-            ID_VRAM => format!(
-                "{}: {} ({})",
-                language.localize_name_key("KEY_UI_DEBUG_VRAM"),
-                vram_text,
-                vram_backend
-            ),
+            ID_GPU_LOAD => format!("GPU (Last): {}", gpu_load_text),
+            ID_GPU_CLOCK => format!("GPU (Takt): {}", gpu_clock_text),
+            ID_VRAM => format!("VRAM: {}", vram_text),
             ID_BIOME => format!(
                 "{}: {}",
                 language.localize_name_key("KEY_UI_DEBUG_BIOME_NAME"),
@@ -407,7 +477,11 @@ fn sync_system_last_ui(
                     format!(
                         "{}: {:.2} / {:.2} / {:.2} (yaw {:.1} / pitch {:.1})",
                         language.localize_name_key("KEY_UI_DEBUG_LOCATION_PLAYER"),
-                        pos.x, pos.y, pos.z, yaw, pitch
+                        pos.x,
+                        pos.y,
+                        pos.z,
+                        yaw,
+                        pitch
                     )
                 } else {
                     format!(

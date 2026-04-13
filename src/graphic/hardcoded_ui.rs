@@ -187,6 +187,7 @@ const ID_BUILD: &str = "debug-build";
 const ID_CPU_NAME: &str = "debug-cpu-name";
 const ID_GPU_NAME: &str = "debug-gpu-name";
 const ID_GPU_LOAD: &str = "debug-gpu-load";
+const ID_GPU_CLOCK: &str = "debug-gpu-clock";
 const ID_VRAM: &str = "debug-vram";
 const ID_BIOME: &str = "debug-biome";
 const ID_BIOME_CLIMATE: &str = "debug-biome-climate";
@@ -194,6 +195,9 @@ const ID_GLOBAL_CPU: &str = "debug-global-cpu";
 const ID_APP_CPU: &str = "debug-app-cpu";
 const ID_APP_MEM: &str = "debug-app-mem";
 const ID_FPS: &str = "debug-fps";
+const ID_FPS_LOW: &str = "debug-fps-low";
+const ID_STREAM_DECODE_QUEUE: &str = "debug-stream-decode-queue";
+const ID_STREAM_REMESH_QUEUE: &str = "debug-stream-remesh-queue";
 const ID_TICK_SPEED: &str = "debug-tick-speed";
 const ID_LOOK_BLOCK: &str = "debug-look-block";
 const ID_PLAYER_POS: &str = "debug-player-pos";
@@ -454,6 +458,11 @@ impl Default for HotbarSelectionTooltipState {
 struct RuntimePerfSampleState {
     last_local_tick: Option<Tick>,
     last_sample_real_secs: Option<f64>,
+    fps_window_secs: f32,
+    fps_window_sum: f32,
+    fps_window_count: u32,
+    low_window_secs: f32,
+    low_window_fps_samples: Vec<f32>,
 }
 
 /// Represents world unload ui state used by the `graphic::hardcoded_ui` module.
@@ -595,6 +604,7 @@ struct CreativePanelUiState {
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct DebugVramState {
     bytes: Option<u64>,
+    total_bytes: Option<u64>,
     source: Option<&'static str>,
     scope: Option<&'static str>,
 }
@@ -603,6 +613,14 @@ struct DebugVramState {
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct DebugGpuLoadState {
     percent: Option<f32>,
+    source: Option<&'static str>,
+    scope: Option<&'static str>,
+}
+
+/// Represents debug gpu clock state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+struct DebugGpuClockState {
+    hz: Option<u64>,
     source: Option<&'static str>,
     scope: Option<&'static str>,
 }
@@ -824,6 +842,7 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<ChatUiState>()
             .init_resource::<DebugVramState>()
             .init_resource::<DebugGpuLoadState>()
+            .init_resource::<DebugGpuClockState>()
             .init_resource::<SinglePlayerUiState>()
             .init_resource::<MultiplayerUiState>()
             .init_resource::<DebugOverlayState>()

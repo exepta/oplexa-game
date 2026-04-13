@@ -64,12 +64,18 @@ pub fn load_bootstrap() -> BootstrapResult {
     );
 
     info!(
-        "Server will listen on {} (session URL: {}, world: {:?}, seed: {}, dead-entity-check={}s)",
+        "Server will listen on {} (session URL: {}, world: {:?}, seed: {}, dead-entity-check={}s, chunk-stream: base={}, per-client={}, max={}, inflight/client={}, timeout={}ms, gen-max-inflight={})",
         bind_addr,
         public_url,
         world_root,
         world_seed,
-        server_settings.dead_entity_check_interval_secs
+        server_settings.dead_entity_check_interval_secs,
+        server_settings.chunk_stream_sends_per_tick_base,
+        server_settings.chunk_stream_sends_per_tick_per_client,
+        server_settings.chunk_stream_sends_per_tick_max,
+        server_settings.chunk_stream_inflight_per_client,
+        server_settings.chunk_flight_timeout_ms,
+        server_settings.chunk_stream_gen_max_inflight
     );
 
     BootstrapResult {

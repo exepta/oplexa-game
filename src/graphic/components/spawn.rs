@@ -2237,12 +2237,16 @@ fn spawn_hardcoded_ui(
                 for id in [
                     ID_BUILD,
                     ID_FPS,
+                    ID_FPS_LOW,
+                    ID_STREAM_DECODE_QUEUE,
+                    ID_STREAM_REMESH_QUEUE,
                     ID_TICK_SPEED,
                     ID_CPU_NAME,
                     ID_APP_CPU,
                     ID_APP_MEM,
                     ID_GPU_NAME,
                     ID_GPU_LOAD,
+                    ID_GPU_CLOCK,
                     ID_VRAM,
                 ] {
                     panel.spawn((

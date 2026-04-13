@@ -9,12 +9,12 @@ use crate::core::world::fluid::FluidMap;
 use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use bevy::prelude::*;
 
-const UW_VIS_GOOD_BLOCKS: f32 = 30.0;
-const UW_VIS_MEDIUM_END_BLOCKS: f32 = 45.0;
-const UW_VIS_WEAK_END_SHALLOW_BLOCKS: f32 = 54.0;
-const UW_VIS_WEAK_END_DEEP_BLOCKS: f32 = 46.0;
-const UW_OVERLAY_MAX_ALPHA: f32 = 0.18;
-const UW_STATE_HOLD_SECONDS: f32 = 0.28;
+const UW_VIS_GOOD_BLOCKS: f32 = 12.0;
+const UW_VIS_MEDIUM_END_BLOCKS: f32 = 22.0;
+const UW_VIS_WEAK_END_SHALLOW_BLOCKS: f32 = 34.0;
+const UW_VIS_WEAK_END_DEEP_BLOCKS: f32 = 24.0;
+const UW_OVERLAY_MAX_ALPHA: f32 = 0.24;
+const UW_STATE_HOLD_SECONDS: f32 = 0.08;
 const UW_FOG_SMOOTH_SPEED: f32 = 8.0;
 
 /// Represents underwater fx plugin used by the `logic::entities::player::water_hud_service` module.
@@ -154,7 +154,7 @@ fn update_underwater_fx(
                         bottom: Val::Px(0.0),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.08, 0.20, 0.30, 0.06)),
+                    BackgroundColor(Color::srgba(0.06, 0.24, 0.46, 0.08)),
                     GlobalZIndex(-10),
                     UnderwaterOverlay,
                 ))
@@ -200,14 +200,14 @@ fn update_underwater_fx(
         let depth_factor = (depth / 9.0).clamp(0.0, 1.0);
         let look_up = xf.forward().dot(Vec3::Y).clamp(0.0, 1.0);
 
-        let mut r = 0.10 + (0.045 - 0.10) * depth_factor;
-        let mut g = 0.25 + (0.16 - 0.25) * depth_factor;
-        let mut b = 0.34 + (0.24 - 0.34) * depth_factor;
+        let mut r = 0.09 + (0.03 - 0.09) * depth_factor;
+        let mut g = 0.34 + (0.17 - 0.34) * depth_factor;
+        let mut b = 0.72 + (0.46 - 0.72) * depth_factor;
 
         // Looking upwards should feel slightly brighter/greener (towards surface light).
-        r += 0.018 * look_up;
-        g += 0.034 * look_up;
-        b += 0.010 * look_up;
+        r += 0.010 * look_up;
+        g += 0.040 * look_up;
+        b += 0.085 * look_up;
 
         let fog_start = UW_VIS_GOOD_BLOCKS * VOXEL_SIZE;
         let fog_end_blocks = (UW_VIS_WEAK_END_SHALLOW_BLOCKS
@@ -293,9 +293,9 @@ fn update_underwater_fx(
         let depth_factor = (depth / 6.0).clamp(0.0, 1.0);
 
         // Keep HUD overlay minimal; fog does most of the underwater look.
-        let base = 0.02;
-        let extra_look = 0.03 * t;
-        let extra_depth = 0.08 * depth_factor;
+        let base = 0.04;
+        let extra_look = 0.04 * t;
+        let extra_depth = 0.10 * depth_factor;
         let alpha = if ui_interaction.blocks_game_input() {
             0.0
         } else {

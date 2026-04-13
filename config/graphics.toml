@@ -1,18 +1,41 @@
+# Window size at startup.
+# Impact: larger resolution costs GPU time and can reduce FPS.
 window_width = 1270
 window_height = 720
+
+# Fullscreen toggle.
+# Impact: fullscreen can improve presentation stability depending on driver/OS.
 fullscreen = false
+
+# Vertical sync.
+# Impact: it reduces tearing; can increase input latency and cap FPS.
 vsync = false
+
+# Rendering backend selection (AUTO, VULKAN, DX12, etc.).
+# Impact: backend choice can strongly affect stability/performance per platform.
 graphic_backend = "AUTO"
+
+# View distance in chunk units.
+# Impact: the biggest single cost driver for generation, meshing, memory, and draw calls.
 chunk_range = 8
-chunk_gen_submit_per_frame = 12
-chunk_gen_max_inflight = 64
-chunk_mesh_max_inflight = 64
-chunk_mesh_apply_per_frame = 28
-chunk_collider_max_inflight = 24
-chunk_collider_apply_per_frame = 12
+
+# Local (singleplayer) chunk generation/meshing budgets.
+# Impact: higher values reduce pop-in but can increase frame spikes.
+chunk_gen_submit_per_frame = 8
+chunk_gen_max_inflight = 32
+chunk_mesh_max_inflight = 24
+chunk_mesh_apply_per_frame = 10
+chunk_collider_max_inflight = 8
+chunk_collider_apply_per_frame = 4
 chunk_unload_budget_per_frame = 10
+
+# Distance fog settings.
+# Impact: fog can hide far chunk transitions and slightly reduce visible overdraw.
 fog_enabled = true
 fog_color = [0.62, 0.72, 0.85]
 fog_start_factor = 0.80
 fog_end_factor = 1.08
+
+# Extra camera far clip distance beyond chunk bounds.
+# Impact: higher value increases visible geometry and potential GPU cost.
 far_clip_extra = 14.0

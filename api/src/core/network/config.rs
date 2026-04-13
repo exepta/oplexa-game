@@ -223,32 +223,32 @@ fn default_client_timeout() -> u64 {
 
 /// Runs the `default_chunk_stream_sends_per_tick_base` routine for default chunk stream sends per tick base in the `core::network::config` module.
 fn default_chunk_stream_sends_per_tick_base() -> usize {
-    8
+    22
 }
 
 /// Runs the `default_chunk_stream_sends_per_tick_per_client` routine for default chunk stream sends per tick per client in the `core::network::config` module.
 fn default_chunk_stream_sends_per_tick_per_client() -> usize {
-    2
+    8
 }
 
 /// Runs the `default_chunk_stream_sends_per_tick_max` routine for default chunk stream sends per tick max in the `core::network::config` module.
 fn default_chunk_stream_sends_per_tick_max() -> usize {
-    64
+    240
 }
 
 /// Runs the `default_chunk_stream_inflight_per_client` routine for default chunk stream inflight per client in the `core::network::config` module.
 fn default_chunk_stream_inflight_per_client() -> usize {
-    12
+    42
 }
 
 /// Runs the `default_chunk_flight_timeout_ms` routine for default chunk flight timeout ms in the `core::network::config` module.
 fn default_chunk_flight_timeout_ms() -> u64 {
-    300
+    120
 }
 
 /// Runs the `default_chunk_stream_gen_max_inflight` routine for default chunk stream gen max inflight in the `core::network::config` module.
 fn default_chunk_stream_gen_max_inflight() -> usize {
-    16
+    96
 }
 
 /// Runs the `default_max_stream_radius` routine for default max stream radius in the `core::network::config` module.

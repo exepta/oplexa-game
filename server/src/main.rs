@@ -27,7 +27,7 @@ use std::time::Duration;
 /// Runs the `main` routine for main in the `project` module.
 fn main() {
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(5))))
+    app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(2))))
         .add_plugins(LogPlugin {
             level: Level::DEBUG,
             filter: "info,oplexa_game_server=debug,api=debug,tokio_tungstenite=warn,tungstenite=warn,lightyear=warn,wgpu=error,naga=warn".to_string(),
