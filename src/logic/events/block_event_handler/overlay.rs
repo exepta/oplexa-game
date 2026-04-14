@@ -1,12 +1,12 @@
-/// Represents mining overlay used by the `logic::events::block_event_handler` module.
+/// Marker for the root entity of the mining overlay.
 #[derive(Component)]
 struct MiningOverlay;
 
-/// Represents mining overlay face used by the `logic::events::block_event_handler` module.
+/// Marker for a single mining overlay face mesh.
 #[derive(Component)]
 struct MiningOverlayFace;
 
-/// Defines the possible axis variants in the `logic::events::block_event_handler` module.
+/// Orientation buckets for overlay face quads.
 #[derive(Clone, Copy)]
 enum Axis {
     XY,
@@ -14,7 +14,7 @@ enum Axis {
     YZ,
 }
 
-/// Synchronizes mining overlay for the `logic::events::block_event_handler` module.
+/// Synchronizes overlay transform and scale with the active mining target.
 fn sync_mining_overlay(
     mut commands: Commands,
     mut root: ResMut<MiningOverlayRoot>,
@@ -79,7 +79,7 @@ fn sync_mining_overlay(
     }
 }
 
-/// Spawns overlay at for the `logic::events::block_event_handler` module.
+/// Spawns a six-faced mining overlay cube around `world_center`.
 #[inline]
 fn spawn_overlay_at(
     commands: &mut Commands,
@@ -185,7 +185,7 @@ fn spawn_overlay_at(
     parent_id
 }
 
-/// Runs the `unit_centered_quad` routine for unit centered quad in the `logic::events::block_event_handler` module.
+/// Builds a centered unit quad mesh used by overlay faces.
 #[inline]
 fn unit_centered_quad() -> Mesh {
     use bevy::mesh::{Indices, PrimitiveTopology};

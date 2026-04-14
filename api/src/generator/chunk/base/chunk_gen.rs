@@ -860,14 +860,18 @@ fn resolve_ocean_site_profile<'a>(
             // Extra trench/ridge shaping for deep ocean. We fade this in with sub-core
             // so ocean -> deep_ocean transitions stay smooth.
             let core = t_sub_height_smooth * t_sub_height_smooth;
-            let ridge = (1.0 - seafloor_mat_n.get_noise_2d(wxf * 1.45 + 19.4, wzf * 1.45 - 13.7).abs())
-                .clamp(0.0, 1.0);
+            let ridge = (1.0
+                - seafloor_mat_n
+                    .get_noise_2d(wxf * 1.45 + 19.4, wzf * 1.45 - 13.7)
+                    .abs())
+            .clamp(0.0, 1.0);
             let basin = map01(seafloor_mat_d.get_noise_2d(wxf * 0.78 - 83.2, wzf * 0.78 + 57.9));
             let shard = map01(seafloor_mat_d.get_noise_2d(wxf * 1.35 + 41.3, wzf * 1.35 - 28.6));
             let rugged = (0.58 * ridge + 0.30 * basin + 0.12 * shard).clamp(0.0, 1.0);
             let extra_depth = (2.5 + rugged.powf(1.62) * 14.5) * core;
             let jagged = ((shard - 0.5) * 2.0) * 1.4 * core;
-            h_sub_blend = clamp_world_y(h_sub_blend - extra_depth + jagged).min((SEA_LEVEL - 3) as f32);
+            h_sub_blend =
+                clamp_world_y(h_sub_blend - extra_depth + jagged).min((SEA_LEVEL - 3) as f32);
         }
 
         let h_diff = (h_ocean_host - h_ocean_sub).abs();

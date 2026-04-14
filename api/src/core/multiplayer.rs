@@ -62,9 +62,20 @@ impl MultiplayerConnectionState {
         }
     }
 
-    /// Runs the `uses_local_save_data` routine for uses local save data in the `core::multiplayer` module.
+    /// Returns whether the active gameplay session is backed by remote server data.
+    pub fn is_remote_session(&self) -> bool {
+        self.world_data_mode == WorldDataMode::Remote
+            || self.connected
+            || matches!(self.phase, MultiplayerConnectionPhase::Connecting)
+            || self
+                .active_session_url
+                .as_deref()
+                .is_some_and(|url| !url.trim().is_empty())
+    }
+
+    /// Returns whether local world/inventory persistence is allowed for the current session.
     pub fn uses_local_save_data(&self) -> bool {
-        self.world_data_mode == WorldDataMode::Local
+        self.world_data_mode == WorldDataMode::Local && !self.is_remote_session()
     }
 
     /// Sets world data mode remote for the `core::multiplayer` module.

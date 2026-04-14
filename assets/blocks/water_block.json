@@ -9,7 +9,7 @@
     "hardness": 0.0,
     "blast_resistance": 0.0,
     "level": "0",
-    "fluid_level": 10,
+    "fluid_level": 8,
     "opaque": false,
     "fluid": true,
     "solid": false,
@@ -24,6 +24,6 @@
   },
   "fluid_flow": {
     "enabled": true,
-    "step_ms": 150
+    "step_ms": 250
   }
 }

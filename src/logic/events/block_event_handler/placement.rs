@@ -452,7 +452,7 @@ fn remove_hit_block_occupant(
     true
 }
 
-/// Checks whether place from selected slot in the `logic::events::block_event_handler` module.
+/// Returns whether the selected inventory source can place `block_id`.
 fn can_place_from_selected_slot(
     inventory: &PlayerInventory,
     hotbar_selection: Option<&HotbarSelectionState>,
@@ -486,7 +486,7 @@ fn can_place_from_selected_slot(
     })
 }
 
-/// Runs the `consume_from_selected_slot` routine for consume from selected slot in the `logic::events::block_event_handler` module.
+/// Consumes one placeable item for `block_id` from the selected source.
 fn consume_from_selected_slot(
     inventory: &mut PlayerInventory,
     hotbar_selection: Option<&HotbarSelectionState>,
@@ -566,7 +566,7 @@ fn selected_hotbar_item_id(
     Some(slot.item_id)
 }
 
-/// Runs the `selected_hotbar_tool` routine for selected hotbar tool in the `logic::events::block_event_handler` module.
+/// Resolves the currently selected hotbar tool, if any.
 fn selected_hotbar_tool(
     inventory: &PlayerInventory,
     hotbar_selection: Option<&HotbarSelectionState>,

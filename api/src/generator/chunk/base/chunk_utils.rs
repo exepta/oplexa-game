@@ -1018,12 +1018,27 @@ pub async fn mesh_subchunk_async(
                     let xi = x as i32;
                     let yi = y as i32;
                     let zi = z as i32;
-                    let self_level = reg.fluid_level(id) as f32;
+                    let fluid_visual_level = |fluid_id: BlockId| -> f32 {
+                        if !reg.fluid(fluid_id) {
+                            return 0.0;
+                        }
+                        let base = reg.fluid_level(fluid_id) as f32;
+                        // Source-like water can report level 8 while still using a full-height
+                        // collider. Normalize those full-height fluid cells to level 10 so
+                        // remeshes don't randomly flip flow texture direction.
+                        if let Some((size_m, _)) = reg.custom_mesh_box(fluid_id)
+                            && size_m[1] >= 0.999
+                            && base < 10.0
+                        {
+                            10.0
+                        } else {
+                            base
+                        }
+                    };
+                    let self_level = fluid_visual_level(id);
                     let flow_weight = |neigh_id: BlockId| -> f32 {
                         if reg.fluid(neigh_id) {
-                            (self_level - reg.fluid_level(neigh_id) as f32).max(0.0)
-                        } else if neigh_id == 0 || !reg.opaque(neigh_id) {
-                            (self_level * 0.35).max(0.5)
+                            (self_level - fluid_visual_level(neigh_id)).max(0.0)
                         } else {
                             0.0
                         }
