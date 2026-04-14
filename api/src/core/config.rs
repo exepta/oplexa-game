@@ -411,6 +411,10 @@ pub struct InputConfig {
 
     /// Toggle world inspector.
     pub world_inspector: String,
+
+    /// Toggle runtime benchmark mode.
+    #[serde(default = "default_benchmark_key")]
+    pub benchmark: String,
 }
 
 impl Default for InputConfig {
@@ -445,6 +449,7 @@ impl Default for InputConfig {
             collider_debug: default_collider_debug_key(),
             chunk_grid: String::from("F9"),
             world_inspector: String::from("F1"),
+            benchmark: default_benchmark_key(),
         }
     }
 }
@@ -502,6 +507,11 @@ fn default_hotbar_slot_6_key() -> String {
 /// Runs the `default_collider_debug_key` routine for default collider debug key in the `core::config` module.
 fn default_collider_debug_key() -> String {
     String::from("F8")
+}
+
+/// Runs the `default_benchmark_key` routine for default benchmark key in the `core::config` module.
+fn default_benchmark_key() -> String {
+    String::from("B")
 }
 
 /// Runs the `default_window_width` routine for default window width in the `core::config` module.

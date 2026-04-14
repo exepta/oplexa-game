@@ -347,6 +347,9 @@ struct CreativePanelGridRoot;
 /// Represents debug overlay root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct DebugOverlayRoot;
+/// Represents benchmark border root used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct BenchmarkBorderRoot;
 
 /// Defines the possible ui button kind variants in the `graphic::hardcoded_ui` module.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -855,6 +858,7 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<ChunkDebugStats>()
             .init_resource::<WorldGenProgressLogState>()
             .init_resource::<ActiveInventorySavePath>()
+            .init_resource::<BenchmarkRuntime>()
             .insert_non_send_resource(ServerProbeRuntime::default())
             .add_plugins(ExtendedUiPlugin)
             .configure_sets(
@@ -1111,6 +1115,16 @@ impl Plugin for HardcodedUiPlugin {
             .add_systems(
                 Update,
                 (
+                    toggle_benchmark,
+                    sample_benchmark_runtime,
+                    sync_benchmark_border,
+                )
+                    .chain()
+                    .run_if(in_state(AppState::InGame(InGameStates::Game))),
+            )
+            .add_systems(
+                Update,
+                (
                     toggle_system_last_ui,
                     sample_runtime_perf_stats,
                     sample_chunk_debug_stats,
@@ -1122,6 +1136,10 @@ impl Plugin for HardcodedUiPlugin {
         app.add_systems(
             OnExit(AppState::InGame(InGameStates::Game)),
             close_system_last_ui,
+        );
+        app.add_systems(
+            OnExit(AppState::InGame(InGameStates::Game)),
+            force_stop_benchmark_on_game_exit,
         );
     }
 }
@@ -1143,6 +1161,7 @@ include!("components/workbench.rs");
 include!("components/inventory_persistence.rs");
 include!("components/ui_interaction_sync.rs");
 include!("components/debug_overlay.rs");
+include!("components/benchmark.rs");
 
 /// Runs the `bytes_to_mib` routine for bytes to mib in the `graphic::hardcoded_ui` module.
 #[inline]

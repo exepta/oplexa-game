@@ -2346,6 +2346,25 @@ fn spawn_hardcoded_ui(
         })
         .id();
 
+    let _benchmark_border_root = commands
+        .spawn((
+            Name::new("UI Benchmark Border"),
+            BenchmarkBorderRoot,
+            Visibility::Hidden,
+            Pickable::IGNORE,
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
+                border: UiRect::all(Val::Px(2.0)),
+                ..default()
+            },
+            BorderColor::all(Color::srgb(1.0, 0.1, 0.1)),
+            BackgroundColor::DEFAULT,
+            ZIndex(180),
+        ))
+        .id();
+
     commands.insert_resource(UiEntities {
         single_player_world_list,
         multiplayer_server_list,
