@@ -5,7 +5,9 @@ pub mod ui_events;
 use crate::core::events::block::BlockEventsModule;
 use crate::core::events::chunk_events::*;
 use crate::core::events::ui_events::{
-    ChatSubmitRequest, ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest,
+    ChatSubmitRequest, ChestInventoryContentsSync, ChestInventoryPersistRequest,
+    ChestInventoryUiClosed, ChestInventoryUiOpened, ConnectToServerRequest,
+    DisconnectFromServerRequest, DropItemRequest, OpenChestInventoryMenuRequest,
     OpenStructureBuildMenuRequest, OpenWorkbenchMenuRequest,
 };
 use bevy::prelude::*;
@@ -25,6 +27,11 @@ impl Plugin for EventModule {
             .add_message::<ChatSubmitRequest>()
             .add_message::<DropItemRequest>()
             .add_message::<OpenStructureBuildMenuRequest>()
-            .add_message::<OpenWorkbenchMenuRequest>();
+            .add_message::<OpenWorkbenchMenuRequest>()
+            .add_message::<OpenChestInventoryMenuRequest>()
+            .add_message::<ChestInventoryUiOpened>()
+            .add_message::<ChestInventoryUiClosed>()
+            .add_message::<ChestInventoryContentsSync>()
+            .add_message::<ChestInventoryPersistRequest>();
     }
 }

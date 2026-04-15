@@ -1,5 +1,6 @@
 {
   "model_anchor": "center",
+  "item_view": false,
   "model_rotation_quarters": 1,
   "model_offset": [0.0, -0.5, 0.0],
   "register_as": "block",

@@ -24,6 +24,7 @@ fn block_place_handler(
         mut active_structure_placement,
         mut open_structure_menu_requests,
         mut open_workbench_menu_requests,
+        mut open_chest_menu_requests,
     } = structure_deps;
     let PlacementWorldDeps {
         mut inventory,
@@ -52,6 +53,30 @@ fn block_place_handler(
     }
 
     let shift_held = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    if let Some(structure_hit) = sel.structure_hit
+        && let Ok(meta) = q_structures.get(structure_hit.entity)
+        && structure_has_chest_ui(meta)
+        && !shift_held
+    {
+        active_structure_recipe.selected_recipe_name = None;
+        active_structure_placement.rotation_quarters = 0;
+        open_chest_menu_requests.write(OpenChestInventoryMenuRequest {
+            world_pos: [meta.place_origin.x, meta.place_origin.y, meta.place_origin.z],
+        });
+        return;
+    }
+    if let Some(hit) = sel.hit
+        && block_has_chest_ui(get_block_world(&chunk_map, hit.block_pos), &registry)
+        && !shift_held
+    {
+        active_structure_recipe.selected_recipe_name = None;
+        active_structure_placement.rotation_quarters = 0;
+        open_chest_menu_requests.write(OpenChestInventoryMenuRequest {
+            world_pos: [hit.block_pos.x, hit.block_pos.y, hit.block_pos.z],
+        });
+        return;
+    }
+
     if let Some(structure_hit) = sel.structure_hit
         && let Ok(meta) = q_structures.get(structure_hit.entity)
         && structure_has_workbench_ui(meta)
@@ -420,4 +445,20 @@ fn block_place_handler(
         stacked_block_id: network_stacked_block_id,
         block_name: name,
     });
+
+    if !place_into_stacked && !waterlog_existing_primary {
+        try_spawn_runtime_structure_for_registered_block(
+            &mut commands,
+            &asset_server,
+            structure_recipe_registry.as_deref(),
+            &registry,
+            &item_registry,
+            world_pos,
+            place_id,
+            &mut structure_runtime,
+            multiplayer_connection.uses_local_save_data(),
+            ws.as_deref(),
+            region_cache.as_deref_mut(),
+        );
+    }
 }

@@ -475,34 +475,52 @@ fn css_has_class(classes: &CssClass, wanted: &str) -> bool {
 
 /// Runs the `style_slot_count_badges` routine for style slot count badges in the `graphic::components::theme` module.
 fn style_slot_count_badges(
-    mut badges: Query<(&CssID, &mut Node, &mut TextFont, &mut TextColor), With<Paragraph>>,
+    mut badges: Query<
+        (
+            Option<&CssID>,
+            Option<&HudLookedBlockChestPreviewBadge>,
+            &mut Node,
+            &mut TextFont,
+            &mut TextColor,
+        ),
+        With<Paragraph>,
+    >,
 ) {
-    for (css_id, mut node, mut font, mut text_color) in &mut badges {
-        if !css_id.0.starts_with(HUD_SLOT_BADGE_PREFIX)
-            && !css_id.0.starts_with(PLAYER_INVENTORY_BADGE_PREFIX)
-            && !css_id.0.starts_with(HAND_CRAFTED_BADGE_PREFIX)
-            && !css_id.0.starts_with(WORKBENCH_CRAFT_BADGE_PREFIX)
-            && !css_id.0.starts_with(WORKBENCH_TOOL_BADGE_PREFIX)
-            && !css_id.0.starts_with(WORKBENCH_PLAYER_INVENTORY_BADGE_PREFIX)
-            && !css_id.0.starts_with(RECIPE_PREVIEW_INPUT_BADGE_PREFIX)
-            && css_id.0 != HAND_CRAFTED_RESULT_BADGE_ID
-            && css_id.0 != WORKBENCH_RESULT_BADGE_ID
-            && css_id.0 != RECIPE_PREVIEW_RESULT_BADGE_ID
-            && css_id.0 != INVENTORY_CURSOR_BADGE_ID
-        {
+    for (maybe_css_id, chest_preview_badge, mut node, mut font, mut text_color) in &mut badges {
+        let is_known_css_badge = maybe_css_id.is_some_and(|css_id| {
+            css_id.0.starts_with(HUD_SLOT_BADGE_PREFIX)
+                || css_id.0.starts_with(PLAYER_INVENTORY_BADGE_PREFIX)
+                || css_id.0.starts_with(HAND_CRAFTED_BADGE_PREFIX)
+                || css_id.0.starts_with(WORKBENCH_CRAFT_BADGE_PREFIX)
+                || css_id.0.starts_with(WORKBENCH_TOOL_BADGE_PREFIX)
+                || css_id.0.starts_with(WORKBENCH_PLAYER_INVENTORY_BADGE_PREFIX)
+                || css_id.0.starts_with(CHEST_SLOT_BADGE_PREFIX)
+                || css_id.0.starts_with(CHEST_PLAYER_INVENTORY_BADGE_PREFIX)
+                || css_id.0.starts_with(RECIPE_PREVIEW_INPUT_BADGE_PREFIX)
+                || css_id.0 == HAND_CRAFTED_RESULT_BADGE_ID
+                || css_id.0 == WORKBENCH_RESULT_BADGE_ID
+                || css_id.0 == RECIPE_PREVIEW_RESULT_BADGE_ID
+                || css_id.0 == INVENTORY_CURSOR_BADGE_ID
+        });
+        let is_hud_chest_preview_badge = chest_preview_badge.is_some();
+        if !is_known_css_badge && !is_hud_chest_preview_badge {
             continue;
         }
 
         node.position_type = PositionType::Absolute;
-        node.right = Val::Px(2.0);
-        node.top = Val::Px(2.0);
-        node.min_width = Val::Px(14.0);
-        node.height = Val::Px(14.0);
-        node.padding = UiRect::axes(Val::Px(3.0), Val::Px(1.0));
+        node.right = Val::Px(if is_hud_chest_preview_badge { 1.0 } else { 2.0 });
+        node.top = Val::Px(if is_hud_chest_preview_badge { 1.0 } else { 2.0 });
+        node.min_width = Val::Px(if is_hud_chest_preview_badge { 12.0 } else { 14.0 });
+        node.height = Val::Px(if is_hud_chest_preview_badge { 12.0 } else { 14.0 });
+        node.padding = if is_hud_chest_preview_badge {
+            UiRect::axes(Val::Px(2.0), Val::Px(0.0))
+        } else {
+            UiRect::axes(Val::Px(3.0), Val::Px(1.0))
+        };
         node.justify_content = JustifyContent::Center;
         node.align_items = AlignItems::Center;
 
-        font.font_size = 9.0;
+        font.font_size = if is_hud_chest_preview_badge { 8.0 } else { 9.0 };
         text_color.0 = Color::WHITE;
     }
 }

@@ -7,7 +7,11 @@ use crate::core::events::block::block_player_events::{
     BlockPlaceObservedEvent,
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
-use crate::core::events::ui_events::{OpenStructureBuildMenuRequest, OpenWorkbenchMenuRequest};
+use crate::core::events::ui_events::{
+    ChestInventoryContentsSync, ChestInventoryPersistRequest, ChestInventorySlotPayload,
+    ChestInventoryUiClosed, ChestInventoryUiOpened, OpenChestInventoryMenuRequest,
+    OpenStructureBuildMenuRequest, OpenWorkbenchMenuRequest,
+};
 use crate::core::inventory::items::{
     ItemId, ItemRegistry, block_requirement_for_id, can_drop_from_block, mining_speed_multiplier,
     spawn_world_item_for_block_break, spawn_world_item_with_motion,
@@ -26,8 +30,9 @@ use crate::core::world::chunk::*;
 use crate::core::world::chunk_dimension::*;
 use crate::core::world::fluid::{FluidChunk, FluidMap};
 use crate::core::world::save::{
-    RegionCache, StructureRegionDropItem, StructureRegionEntry, TAG_STR1, WorldSave,
-    container_find, container_upsert, decode_structure_entries, encode_structure_entries,
+    RegionCache, StructureRegionDropItem, StructureRegionEntry, StructureRegionInventorySlot,
+    TAG_STR1, WorldSave, container_find, container_upsert, decode_structure_entries,
+    encode_structure_entries,
 };
 use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
 use crate::generator::chunk::chunk_utils::safe_despawn_entity;
@@ -71,6 +76,8 @@ struct StructureMeshColliderCleanupPending;
 /// Runtime metadata attached to a spawned structure entity.
 pub(crate) struct PlacedStructureMetadata {
     pub recipe_name: String,
+    pub model_asset_path: String,
+    pub model_animated: bool,
     pub stats: BlockStats,
     pub place_origin: IVec3,
     pub rotation_quarters: u8,
@@ -92,9 +99,9 @@ struct PlacedStructureKey {
 }
 
 #[derive(Resource, Default)]
-struct StructureRuntimeState {
+pub(crate) struct StructureRuntimeState {
     loaded_chunks: HashSet<IVec2>,
-    records_by_chunk: HashMap<IVec2, Vec<StructureRegionEntry>>,
+    pub(crate) records_by_chunk: HashMap<IVec2, Vec<StructureRegionEntry>>,
     spawned_entities: HashMap<PlacedStructureKey, Entity>,
     entity_to_key: HashMap<Entity, PlacedStructureKey>,
 }
@@ -241,6 +248,7 @@ struct StructurePlacementDeps<'w, 's> {
     active_structure_placement: ResMut<'w, ActiveStructurePlacementState>,
     open_structure_menu_requests: MessageWriter<'w, OpenStructureBuildMenuRequest>,
     open_workbench_menu_requests: MessageWriter<'w, OpenWorkbenchMenuRequest>,
+    open_chest_menu_requests: MessageWriter<'w, OpenChestInventoryMenuRequest>,
 }
 
 #[derive(SystemParam)]
@@ -306,6 +314,12 @@ impl Plugin for BlockEventHandler {
                 configure_structure_mesh_collider_name_filters.in_set(VoxelStage::WorldEdit),
                 cleanup_structure_none_mesh_colliders.in_set(VoxelStage::WorldEdit),
                 apply_structure_style_material_system.in_set(VoxelStage::WorldEdit),
+                mark_chest_structures_for_animation.in_set(VoxelStage::WorldEdit),
+                bind_chest_animation_players.in_set(VoxelStage::WorldEdit),
+                sync_chest_inventory_contents_for_opened_ui.in_set(VoxelStage::WorldEdit),
+                persist_chest_inventory_from_ui_requests.in_set(VoxelStage::WorldEdit),
+                apply_chest_ui_animation_requests.in_set(VoxelStage::WorldEdit),
+                update_chest_animation_playback.in_set(VoxelStage::WorldEdit),
                 (block_break_handler, sync_mining_overlay)
                     .chain()
                     .in_set(VoxelStage::WorldEdit),
@@ -353,6 +367,9 @@ include!("block_event_handler/structure_runtime.rs");
 
 // Structure material, texture, and collider post-processing.
 include!("block_event_handler/structure_materials.rs");
+
+// Chest structure animation and UI open/close linkage.
+include!("block_event_handler/chest_animation.rs");
 
 // Structure transform and randomization helpers.
 include!("block_event_handler/structure_math.rs");

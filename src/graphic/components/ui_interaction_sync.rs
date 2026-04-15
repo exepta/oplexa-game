@@ -14,11 +14,13 @@ fn sync_ingame_ui_interaction_state(
     mut inventory_ui: ResMut<PlayerInventoryUiState>,
     mut structure_menu: ResMut<StructureBuildMenuState>,
     mut workbench_menu: ResMut<WorkbenchRecipeMenuState>,
+    mut chest_menu: ResMut<ChestInventoryMenuState>,
     mut roots: ParamSet<(
         Query<&mut Visibility, With<PauseMenuRoot>>,
         Query<&mut Visibility, With<PlayerInventoryRoot>>,
         Query<&mut Visibility, With<StructureBuildRoot>>,
         Query<&mut Visibility, With<WorkbenchRecipeRoot>>,
+        Query<&mut Visibility, With<ChestInventoryRoot>>,
     )>,
     mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
@@ -37,20 +39,28 @@ fn sync_ingame_ui_interaction_state(
         .single_mut()
         .map(|visibility| is_ui_open_visibility(*visibility))
         .unwrap_or(false);
+    let chest_visible = roots
+        .p4()
+        .single_mut()
+        .map(|visibility| is_ui_open_visibility(*visibility))
+        .unwrap_or(false);
 
     let resolved_pause_open = pause_menu.open || pause_visible;
     let resolved_inventory_open = inventory_ui.open;
     let resolved_structure_open = structure_menu.open || structure_visible;
     let resolved_workbench_open = workbench_menu.open || workbench_visible;
+    let resolved_chest_open = chest_menu.open || chest_visible;
 
     pause_menu.open = resolved_pause_open;
     inventory_ui.open = resolved_inventory_open;
     structure_menu.open = resolved_structure_open;
     workbench_menu.open = resolved_workbench_open;
+    chest_menu.open = resolved_chest_open;
     ui_interaction.menu_open = resolved_pause_open;
     ui_interaction.inventory_open = resolved_inventory_open;
     ui_interaction.structure_menu_open = resolved_structure_open;
     ui_interaction.workbench_menu_open = resolved_workbench_open;
+    ui_interaction.chest_menu_open = resolved_chest_open;
 
     if let Ok(mut visibility) = roots.p0().single_mut() {
         *visibility = if resolved_pause_open {
@@ -60,7 +70,7 @@ fn sync_ingame_ui_interaction_state(
         };
     }
     if let Ok(mut visibility) = roots.p1().single_mut() {
-        *visibility = if resolved_inventory_open || resolved_workbench_open {
+        *visibility = if resolved_inventory_open || resolved_workbench_open || resolved_chest_open {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -75,6 +85,13 @@ fn sync_ingame_ui_interaction_state(
     }
     if let Ok(mut visibility) = roots.p3().single_mut() {
         *visibility = if resolved_workbench_open {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+    if let Ok(mut visibility) = roots.p4().single_mut() {
+        *visibility = if resolved_chest_open {
             Visibility::Inherited
         } else {
             Visibility::Hidden

@@ -358,7 +358,12 @@ struct LookedBlockHudQueries<'w, 's> {
         &'static mut Visibility,
         (With<HudLookedBlockCard>, Without<HudLookedBlockProgress>),
     >,
-    icon_q: Query<'w, 's, (&'static mut Img, &'static mut Node), With<HudLookedBlockIcon>>,
+    icon_q: Query<
+        'w,
+        's,
+        (&'static mut ImageNode, &'static mut Node),
+        (With<HudLookedBlockIcon>, Without<HudLookedBlockChestPreviewIcon>),
+    >,
     display_name_q: Query<
         'w,
         's,
@@ -395,6 +400,90 @@ struct LookedBlockHudQueries<'w, 's> {
         (&'static mut ProgressBar, &'static mut Visibility),
         (With<HudLookedBlockProgress>, Without<HudLookedBlockCard>),
     >,
+    chest_count_q: Query<
+        'w,
+        's,
+        (&'static mut Paragraph, &'static mut Visibility),
+        (
+            With<HudLookedBlockChestCount>,
+            Without<HudLookedBlockCard>,
+            Without<HudLookedBlockProgress>,
+            Without<HudLookedBlockDisplayName>,
+            Without<HudLookedBlockLocalizedName>,
+            Without<HudLookedBlockLevel>,
+            Without<HudLookedBlockChestPreviewBadge>,
+        ),
+    >,
+    chest_preview_row_q: Query<
+        'w,
+        's,
+        &'static mut Visibility,
+        (
+            With<HudLookedBlockChestPreviewRow>,
+            Without<HudLookedBlockCard>,
+            Without<HudLookedBlockProgress>,
+            Without<HudLookedBlockChestCount>,
+            Without<HudLookedBlockChestPreviewSlot>,
+            Without<HudLookedBlockChestPreviewBadge>,
+            Without<HudLookedBlockChestPreviewMore>,
+        ),
+    >,
+    chest_slot_q: Query<
+        'w,
+        's,
+        (
+            &'static HudLookedBlockChestPreviewSlot,
+            &'static mut Visibility,
+        ),
+        (
+            Without<HudLookedBlockCard>,
+            Without<HudLookedBlockProgress>,
+            Without<HudLookedBlockChestCount>,
+            Without<HudLookedBlockChestPreviewRow>,
+            Without<HudLookedBlockChestPreviewBadge>,
+            Without<HudLookedBlockChestPreviewMore>,
+        ),
+    >,
+    chest_icon_q: Query<
+        'w,
+        's,
+        (&'static HudLookedBlockChestPreviewIcon, &'static mut ImageNode),
+        (With<HudLookedBlockChestPreviewIcon>, Without<HudLookedBlockIcon>),
+    >,
+    chest_badge_q: Query<
+        'w,
+        's,
+        (
+            &'static HudLookedBlockChestPreviewBadge,
+            &'static mut Paragraph,
+            &'static mut Visibility,
+        ),
+        (
+            Without<HudLookedBlockCard>,
+            Without<HudLookedBlockProgress>,
+            Without<HudLookedBlockDisplayName>,
+            Without<HudLookedBlockLocalizedName>,
+            Without<HudLookedBlockLevel>,
+            Without<HudLookedBlockChestCount>,
+            Without<HudLookedBlockChestPreviewRow>,
+            Without<HudLookedBlockChestPreviewSlot>,
+            Without<HudLookedBlockChestPreviewMore>,
+        ),
+    >,
+    chest_more_q: Query<
+        'w,
+        's,
+        &'static mut Visibility,
+        (
+            With<HudLookedBlockChestPreviewMore>,
+            Without<HudLookedBlockCard>,
+            Without<HudLookedBlockProgress>,
+            Without<HudLookedBlockChestCount>,
+            Without<HudLookedBlockChestPreviewRow>,
+            Without<HudLookedBlockChestPreviewSlot>,
+            Without<HudLookedBlockChestPreviewBadge>,
+        ),
+    >,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -411,6 +500,7 @@ fn sync_hud_looked_block_card(
     mut image_cache: ResMut<ImageCache>,
     mut images: ResMut<Assets<Image>>,
     q_structures: Query<&crate::logic::events::block_event_handler::PlacedStructureMetadata>,
+    structure_runtime: Option<Res<crate::logic::events::block_event_handler::StructureRuntimeState>>,
     hud_q: LookedBlockHudQueries,
 ) {
     let LookedBlockHudQueries {
@@ -420,6 +510,12 @@ fn sync_hud_looked_block_card(
         mut localized_name_q,
         mut level_q,
         mut progress_q,
+        mut chest_count_q,
+        mut chest_preview_row_q,
+        mut chest_slot_q,
+        mut chest_icon_q,
+        mut chest_badge_q,
+        mut chest_more_q,
     } = hud_q;
 
     struct LookedHudData {
@@ -428,6 +524,8 @@ fn sync_hud_looked_block_card(
         level: u8,
         icon_block_id: Option<u16>,
         block_progress_target: Option<(IVec3, u16)>,
+        world_pos: Option<IVec3>,
+        is_chest: bool,
     }
 
     let looked = if let Some(hit) = selection.hit.filter(|hit| hit.block_id != 0) {
@@ -439,6 +537,14 @@ fn sync_hud_looked_block_card(
                 progress_bar.value = 0.0;
                 *visibility = Visibility::Hidden;
             }
+            reset_hud_chest_preview(
+                &mut chest_count_q,
+                &mut chest_preview_row_q,
+                &mut chest_slot_q,
+                &mut chest_icon_q,
+                &mut chest_badge_q,
+                &mut chest_more_q,
+            );
             return;
         };
         LookedHudData {
@@ -447,6 +553,8 @@ fn sync_hud_looked_block_card(
             level: block.stats.level,
             icon_block_id: Some(hit.block_id),
             block_progress_target: Some((hit.block_pos, hit.block_id)),
+            world_pos: Some(hit.block_pos),
+            is_chest: is_chest_block_id(hit.block_id, &block_registry),
         }
     } else if let Some(structure_hit) = selection.structure_hit {
         let Ok(meta) = q_structures.get(structure_hit.entity) else {
@@ -457,6 +565,14 @@ fn sync_hud_looked_block_card(
                 progress_bar.value = 0.0;
                 *visibility = Visibility::Hidden;
             }
+            reset_hud_chest_preview(
+                &mut chest_count_q,
+                &mut chest_preview_row_q,
+                &mut chest_slot_q,
+                &mut chest_icon_q,
+                &mut chest_badge_q,
+                &mut chest_more_q,
+            );
             return;
         };
 
@@ -486,6 +602,8 @@ fn sync_hud_looked_block_card(
             level: meta.stats.level,
             icon_block_id: block_id,
             block_progress_target: None,
+            world_pos: Some(meta.place_origin),
+            is_chest: is_chest_structure_meta(meta),
         }
     } else {
         if let Ok(mut visibility) = card_visibility_q.single_mut() {
@@ -495,6 +613,14 @@ fn sync_hud_looked_block_card(
             progress_bar.value = 0.0;
             *visibility = Visibility::Hidden;
         }
+        reset_hud_chest_preview(
+            &mut chest_count_q,
+            &mut chest_preview_row_q,
+            &mut chest_slot_q,
+            &mut chest_icon_q,
+            &mut chest_badge_q,
+            &mut chest_more_q,
+        );
         return;
     };
 
@@ -578,8 +704,18 @@ fn sync_hud_looked_block_card(
         icon_node.max_width = Val::Px(target_size);
         icon_node.max_height = Val::Px(target_size);
 
-        if icon.src != next_icon {
-            icon.src = next_icon;
+        let next_icon_handle = next_icon
+            .as_ref()
+            .map(|path| {
+                image_cache
+                    .map
+                    .get(path.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| asset_server.load(path.clone()))
+            })
+            .unwrap_or_default();
+        if icon.image != next_icon_handle {
+            icon.image = next_icon_handle;
         }
     }
 
@@ -601,6 +737,288 @@ fn sync_hud_looked_block_card(
             progress_bar.value = 0.0;
             *visibility = Visibility::Hidden;
         }
+    }
+
+    if !looked.is_chest {
+        reset_hud_chest_preview(
+            &mut chest_count_q,
+            &mut chest_preview_row_q,
+            &mut chest_slot_q,
+            &mut chest_icon_q,
+            &mut chest_badge_q,
+            &mut chest_more_q,
+        );
+        return;
+    }
+
+    let preview = looked
+        .world_pos
+        .and_then(|world_pos| {
+            build_chest_hud_preview(
+                world_pos,
+                structure_runtime.as_deref(),
+                &item_registry,
+            )
+        })
+        .unwrap_or_default();
+
+    if let Ok((mut paragraph, mut visibility)) = chest_count_q.single_mut() {
+        paragraph.text = format!(
+            "{}: {}",
+            language.localize_name_key("KEY_UI_ITEMS"),
+            preview.total_count
+        );
+        *visibility = Visibility::Inherited;
+    }
+    if let Ok(mut visibility) = chest_preview_row_q.single_mut() {
+        *visibility = if preview.items.is_empty() && !preview.has_more {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+    }
+
+    for (slot, mut visibility) in &mut chest_slot_q {
+        *visibility = if preview.items.get(slot.index).is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for (icon, mut img) in &mut chest_icon_q {
+        let next_handle = preview
+            .items
+            .get(icon.index)
+            .and_then(|entry| {
+            resolve_item_icon_path(
+                &item_registry,
+                &block_registry,
+                &asset_server,
+                &mut image_cache,
+                &mut images,
+                entry.item_id,
+            )
+        })
+            .map(|path| {
+                image_cache
+                    .map
+                    .get(path.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| asset_server.load(path))
+            })
+            .unwrap_or_default();
+        if img.image != next_handle {
+            img.image = next_handle;
+        }
+    }
+    for (badge, mut paragraph, mut visibility) in &mut chest_badge_q {
+        if let Some(entry) = preview.items.get(badge.index) {
+            paragraph.text = entry.count.to_string();
+            *visibility = Visibility::Inherited;
+        } else {
+            if !paragraph.text.is_empty() {
+                paragraph.text.clear();
+            }
+            *visibility = Visibility::Hidden;
+        }
+    }
+    if let Ok(mut visibility) = chest_more_q.single_mut() {
+        *visibility = if preview.has_more {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ChestHudPreviewItem {
+    item_id: ItemId,
+    count: u32,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ChestHudPreview {
+    total_count: u32,
+    items: Vec<ChestHudPreviewItem>,
+    has_more: bool,
+}
+
+fn build_chest_hud_preview(
+    world_pos: IVec3,
+    runtime: Option<&crate::logic::events::block_event_handler::StructureRuntimeState>,
+    item_registry: &ItemRegistry,
+) -> Option<ChestHudPreview> {
+    let runtime = runtime?;
+    let (coord, _) = world_to_chunk_xz(world_pos.x, world_pos.z);
+    let entry = runtime.records_by_chunk.get(&coord).and_then(|entries| {
+        entries
+            .iter()
+            .find(|entry| entry.place_origin == [world_pos.x, world_pos.y, world_pos.z])
+    })?;
+
+    let mut ordered_slots = entry.inventory_slots.clone();
+    ordered_slots.sort_by_key(|slot| slot.slot);
+
+    let mut total_count = 0u32;
+    let mut items = Vec::<ChestHudPreviewItem>::new();
+    let mut by_item = HashMap::<ItemId, usize>::new();
+    for slot in ordered_slots {
+        if slot.count == 0 {
+            continue;
+        }
+        let item_name = slot.item.trim();
+        if item_name.is_empty() {
+            continue;
+        }
+        let Some(item_id) = item_registry.id_opt(item_name) else {
+            continue;
+        };
+        let count = slot.count as u32;
+        total_count = total_count.saturating_add(count);
+        if let Some(index) = by_item.get(&item_id).copied() {
+            items[index].count = items[index].count.saturating_add(count);
+        } else {
+            by_item.insert(item_id, items.len());
+            items.push(ChestHudPreviewItem { item_id, count });
+        }
+    }
+
+    let has_more = items.len() > 5;
+    if items.len() > 5 {
+        items.truncate(5);
+    }
+
+    Some(ChestHudPreview {
+        total_count,
+        items,
+        has_more,
+    })
+}
+
+fn is_chest_structure_meta(
+    meta: &crate::logic::events::block_event_handler::PlacedStructureMetadata,
+) -> bool {
+    if meta.recipe_name.eq_ignore_ascii_case("chest") {
+        return true;
+    }
+    meta.registration.as_ref().is_some_and(|registration| {
+        registration
+            .localized_name
+            .eq_ignore_ascii_case("chest_block")
+    })
+}
+
+fn is_chest_block_id(block_id: u16, registry: &BlockRegistry) -> bool {
+    if block_id == 0 {
+        return false;
+    }
+    registry.def_opt(block_id).is_some_and(|def| {
+        let localized = def.localized_name.to_ascii_lowercase();
+        let key = def.name.to_ascii_uppercase();
+        localized == "chest_block"
+            || localized.starts_with("chest_block_r")
+            || key == "KEY_CHEST_BLOCK"
+            || key.starts_with("KEY_CHEST_BLOCK_R")
+    })
+}
+
+fn reset_hud_chest_preview(
+    count_q: &mut Query<
+        (&mut Paragraph, &mut Visibility),
+        (
+            With<HudLookedBlockChestCount>,
+            Without<HudLookedBlockCard>,
+            Without<HudLookedBlockProgress>,
+            Without<HudLookedBlockDisplayName>,
+            Without<HudLookedBlockLocalizedName>,
+            Without<HudLookedBlockLevel>,
+            Without<HudLookedBlockChestPreviewBadge>,
+        ),
+    >,
+    row_q: &mut Query<
+        &mut Visibility,
+        (
+            With<HudLookedBlockChestPreviewRow>,
+            Without<HudLookedBlockCard>,
+            Without<HudLookedBlockProgress>,
+            Without<HudLookedBlockChestCount>,
+            Without<HudLookedBlockChestPreviewSlot>,
+            Without<HudLookedBlockChestPreviewBadge>,
+            Without<HudLookedBlockChestPreviewMore>,
+        ),
+    >,
+    slot_q: &mut Query<
+        (&HudLookedBlockChestPreviewSlot, &mut Visibility),
+        (
+            Without<HudLookedBlockCard>,
+            Without<HudLookedBlockProgress>,
+            Without<HudLookedBlockChestCount>,
+            Without<HudLookedBlockChestPreviewRow>,
+            Without<HudLookedBlockChestPreviewBadge>,
+            Without<HudLookedBlockChestPreviewMore>,
+        ),
+    >,
+    icon_q: &mut Query<
+        (&HudLookedBlockChestPreviewIcon, &mut ImageNode),
+        (With<HudLookedBlockChestPreviewIcon>, Without<HudLookedBlockIcon>),
+    >,
+    badge_q: &mut Query<
+        (
+            &HudLookedBlockChestPreviewBadge,
+            &mut Paragraph,
+            &mut Visibility,
+        ),
+        (
+            Without<HudLookedBlockCard>,
+            Without<HudLookedBlockProgress>,
+            Without<HudLookedBlockDisplayName>,
+            Without<HudLookedBlockLocalizedName>,
+            Without<HudLookedBlockLevel>,
+            Without<HudLookedBlockChestCount>,
+            Without<HudLookedBlockChestPreviewRow>,
+            Without<HudLookedBlockChestPreviewSlot>,
+            Without<HudLookedBlockChestPreviewMore>,
+        ),
+    >,
+    more_q: &mut Query<
+        &mut Visibility,
+        (
+            With<HudLookedBlockChestPreviewMore>,
+            Without<HudLookedBlockCard>,
+            Without<HudLookedBlockProgress>,
+            Without<HudLookedBlockChestCount>,
+            Without<HudLookedBlockChestPreviewRow>,
+            Without<HudLookedBlockChestPreviewSlot>,
+            Without<HudLookedBlockChestPreviewBadge>,
+        ),
+    >,
+) {
+    if let Ok((mut paragraph, mut visibility)) = count_q.single_mut() {
+        if !paragraph.text.is_empty() {
+            paragraph.text.clear();
+        }
+        *visibility = Visibility::Hidden;
+    }
+    if let Ok(mut visibility) = row_q.single_mut() {
+        *visibility = Visibility::Hidden;
+    }
+    for (_, mut visibility) in slot_q.iter_mut() {
+        *visibility = Visibility::Hidden;
+    }
+    for (_, mut img) in icon_q.iter_mut() {
+        if img.image != Handle::default() {
+            img.image = Handle::default();
+        }
+    }
+    for (_, mut paragraph, mut visibility) in badge_q.iter_mut() {
+        if !paragraph.text.is_empty() {
+            paragraph.text.clear();
+        }
+        *visibility = Visibility::Hidden;
+    }
+    if let Ok(mut visibility) = more_q.single_mut() {
+        *visibility = Visibility::Hidden;
     }
 }
 

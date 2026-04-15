@@ -145,10 +145,7 @@
                         ))
                         .with_children(|content| {
                             content.spawn((
-                                Img {
-                                    src: None,
-                                    ..default()
-                                },
+                                ImageNode::default(),
                                 Node {
                                     width: Val::Px(48.0),
                                     height: Val::Px(48.0),
@@ -200,6 +197,117 @@
                                         UiTextTone::Darker,
                                         Pickable::IGNORE,
                                     ));
+                                    text.spawn((
+                                        Paragraph {
+                                            text: String::new(),
+                                            ..default()
+                                        },
+                                        HudLookedBlockChestCount,
+                                        UiTextTone::Darker,
+                                        Visibility::Hidden,
+                                        Pickable::IGNORE,
+                                    ));
+                                    text.spawn((
+                                        Node {
+                                            width: Val::Percent(100.0),
+                                            flex_direction: FlexDirection::Row,
+                                            column_gap: Val::Px(6.0),
+                                            align_items: AlignItems::Center,
+                                            ..default()
+                                        },
+                                        HudLookedBlockChestPreviewRow,
+                                        Visibility::Hidden,
+                                        Pickable::IGNORE,
+                                    ))
+                                    .with_children(|row| {
+                                        for index in 0..5usize {
+                                            row.spawn((
+                                                Node {
+                                                    width: Val::Px(32.0),
+                                                    height: Val::Px(32.0),
+                                                    min_width: Val::Px(32.0),
+                                                    min_height: Val::Px(32.0),
+                                                    max_width: Val::Px(32.0),
+                                                    max_height: Val::Px(32.0),
+                                                    justify_content: JustifyContent::Center,
+                                                    align_items: AlignItems::Center,
+                                                    border: UiRect::all(Val::Px(1.0)),
+                                                    ..default()
+                                                },
+                                                HudLookedBlockChestPreviewSlot { index },
+                                                BackgroundColor(color_background().into()),
+                                                BorderColor::all(color_background_hover()),
+                                                Visibility::Hidden,
+                                                Pickable::IGNORE,
+                                            ))
+                                            .with_children(|slot| {
+                                                slot.spawn((
+                                                    ImageNode::default(),
+                                                    Node {
+                                                        width: Val::Px(22.0),
+                                                        height: Val::Px(22.0),
+                                                        min_width: Val::Px(22.0),
+                                                        min_height: Val::Px(22.0),
+                                                        max_width: Val::Px(22.0),
+                                                        max_height: Val::Px(22.0),
+                                                        ..default()
+                                                    },
+                                                    HudLookedBlockChestPreviewIcon { index },
+                                                    Pickable::IGNORE,
+                                                ));
+                                                slot.spawn((
+                                                    Paragraph {
+                                                        text: String::new(),
+                                                        ..default()
+                                                    },
+                                                    Node {
+                                                        position_type: PositionType::Absolute,
+                                                        right: Val::Px(1.0),
+                                                        top: Val::Px(1.0),
+                                                        min_width: Val::Px(12.0),
+                                                        height: Val::Px(12.0),
+                                                        padding: UiRect::axes(Val::Px(2.0), Val::Px(0.0)),
+                                                        justify_content: JustifyContent::Center,
+                                                        align_items: AlignItems::Center,
+                                                        ..default()
+                                                    },
+                                                    BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                                    HudLookedBlockChestPreviewBadge { index },
+                                                    Visibility::Hidden,
+                                                    Pickable::IGNORE,
+                                                ));
+                                            });
+                                        }
+                                        row.spawn((
+                                            Node {
+                                                width: Val::Px(32.0),
+                                                height: Val::Px(32.0),
+                                                min_width: Val::Px(32.0),
+                                                min_height: Val::Px(32.0),
+                                                max_width: Val::Px(32.0),
+                                                max_height: Val::Px(32.0),
+                                                justify_content: JustifyContent::Center,
+                                                align_items: AlignItems::Center,
+                                                border: UiRect::all(Val::Px(1.0)),
+                                                ..default()
+                                            },
+                                            HudLookedBlockChestPreviewMore,
+                                            BackgroundColor(color_background().into()),
+                                            BorderColor::all(color_background_hover()),
+                                            Visibility::Hidden,
+                                            Pickable::IGNORE,
+                                        ))
+                                        .with_children(|slot| {
+                                            slot.spawn((
+                                                Paragraph {
+                                                    text: "+".to_string(),
+                                                    ..default()
+                                                },
+                                                UiTextTone::Heading,
+                                                Pickable::IGNORE,
+                                            ));
+                                        });
+                                    });
                                 });
                         });
                         card.spawn((
@@ -880,6 +988,298 @@
                             });
                         });
                 });
+            });
+        })
+        .id();
+
+    let _chest_inventory_root = commands
+        .spawn((
+            Name::new("UI Chest Inventory Root"),
+            ChestInventoryRoot,
+            Visibility::Hidden,
+            full_screen_center_node(),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.40)),
+            ZIndex(54),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Node {
+                    width: Val::Percent(92.0),
+                    max_width: Val::Px(1080.0),
+                    min_height: Val::Px(430.0),
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(12.0),
+                    padding: UiRect::all(Val::Px(14.0)),
+                    border: UiRect::all(Val::Px(2.0)),
+                    ..default()
+                },
+                ChestInventoryMainPanel,
+                BackgroundColor(color_background().into()),
+                BorderColor::all(color_accent()),
+            ))
+            .with_children(|panel| {
+                panel.spawn((
+                    Node {
+                        width: Val::Percent(58.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(10.0),
+                        ..default()
+                    },
+                    BackgroundColor::DEFAULT,
+                ))
+                .with_children(|left| {
+                    left.spawn((
+                        Paragraph {
+                            text: language.localize_name_key("KEY_UI_CHEST_INVENTORY").to_string(),
+                            ..default()
+                        },
+                        CssID(CHEST_INVENTORY_TITLE_ID.to_string()),
+                        UiTextTone::Heading,
+                    ));
+                    left.spawn((
+                        Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            padding: UiRect::all(Val::Px(8.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BackgroundColor(color_single_player_list_background().into()),
+                        BorderColor::all(color_background_hover()),
+                    ))
+                    .with_children(|chest_panel| {
+                        chest_panel.spawn((
+                            Paragraph {
+                                text: language.localize_name_key("KEY_UI_CHEST_INVENTORY").to_string(),
+                                ..default()
+                            },
+                            UiTextTone::CardName,
+                        ));
+                        chest_panel.spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                display: Display::Grid,
+                                grid_template_columns: RepeatedGridTrack::fr(6, 1.0),
+                                grid_auto_rows: vec![GridTrack::px(56.0)],
+                                row_gap: Val::Px(8.0),
+                                column_gap: Val::Px(8.0),
+                                ..default()
+                            },
+                            BackgroundColor::DEFAULT,
+                        ))
+                        .with_children(|grid| {
+                            for i in 1..=CHEST_INVENTORY_SLOTS {
+                                let idx = format!("{i:02}");
+                                grid.spawn((
+                                    Button {
+                                        text: String::new(),
+                                        ..default()
+                                    },
+                                    Visibility::Inherited,
+                                    CssID(format!("{CHEST_SLOT_FRAME_PREFIX}{idx}")),
+                                    UiButtonKind::InventorySlot,
+                                    UiButtonTone::Normal,
+                                ))
+                                .with_children(|slot| {
+                                    slot.spawn((
+                                        Paragraph {
+                                            text: String::new(),
+                                            ..default()
+                                        },
+                                        CssID(format!("{CHEST_SLOT_BADGE_PREFIX}{idx}")),
+                                        BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                        Visibility::Hidden,
+                                        Pickable::IGNORE,
+                                    ));
+                                });
+                            }
+                        });
+                    });
+                    left.spawn((
+                        Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            padding: UiRect::all(Val::Px(8.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BackgroundColor(color_single_player_list_background().into()),
+                        BorderColor::all(color_background_hover()),
+                    ))
+                    .with_children(|inventory_panel| {
+                        inventory_panel.spawn((
+                            Paragraph {
+                                text: language
+                                    .localize_name_key("KEY_UI_WORKBENCH_PLAYER_INVENTORY")
+                                    .to_string(),
+                                ..default()
+                            },
+                            UiTextTone::CardName,
+                        ));
+                        inventory_panel.spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                display: Display::Grid,
+                                grid_template_columns: RepeatedGridTrack::fr(6, 1.0),
+                                grid_auto_rows: vec![GridTrack::px(56.0)],
+                                row_gap: Val::Px(8.0),
+                                column_gap: Val::Px(8.0),
+                                ..default()
+                            },
+                            BackgroundColor::DEFAULT,
+                        ))
+                        .with_children(|grid| {
+                            for i in 1..=PLAYER_INVENTORY_SLOTS {
+                                let idx = format!("{i:02}");
+                                grid.spawn((
+                                    Button {
+                                        text: String::new(),
+                                        ..default()
+                                    },
+                                    Visibility::Inherited,
+                                    CssID(format!("{CHEST_PLAYER_INVENTORY_FRAME_PREFIX}{idx}")),
+                                    UiButtonKind::InventorySlot,
+                                    UiButtonTone::Normal,
+                                ))
+                                .with_children(|slot| {
+                                    slot.spawn((
+                                        Paragraph {
+                                            text: String::new(),
+                                            ..default()
+                                        },
+                                        CssID(format!("{CHEST_PLAYER_INVENTORY_BADGE_PREFIX}{idx}")),
+                                        BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                        Visibility::Hidden,
+                                        Pickable::IGNORE,
+                                    ));
+                                });
+                            }
+                        });
+                    });
+                });
+                panel
+                    .spawn((
+                        Node {
+                            width: Val::Px(448.0),
+                            min_width: Val::Px(448.0),
+                            max_width: Val::Px(448.0),
+                            flex_shrink: 0.0,
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            padding: UiRect::all(Val::Px(10.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BackgroundColor(color_single_player_list_background().into()),
+                        BorderColor::all(color_background_hover()),
+                    ))
+                    .with_children(|right| {
+                        right.spawn((
+                            Paragraph {
+                                text: language.localize_name_key("KEY_UI_ITEMS_TITLE").to_string(),
+                                ..default()
+                            },
+                            UiTextTone::Heading,
+                        ));
+                        right.spawn((
+                            Paragraph {
+                                text: format!(
+                                    "{} 0",
+                                    language.localize_name_key("KEY_UI_REGISTERED")
+                                ),
+                                ..default()
+                            },
+                            CssID(CHEST_ITEMS_TOTAL_ID.to_string()),
+                            UiTextTone::Darker,
+                        ));
+                        right.spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                align_items: AlignItems::Center,
+                                column_gap: Val::Px(8.0),
+                                ..default()
+                            },
+                            BackgroundColor::DEFAULT,
+                        ))
+                        .with_children(|pager| {
+                            pager.spawn((
+                                Button {
+                                    text: "<".to_string(),
+                                    ..default()
+                                },
+                                CssID(CHEST_ITEMS_PREV_ID.to_string()),
+                                UiButtonKind::ActionRow,
+                                UiButtonTone::Normal,
+                            ));
+                            pager.spawn((
+                                Paragraph {
+                                    text: "1/1".to_string(),
+                                    ..default()
+                                },
+                                CssID(CHEST_ITEMS_PAGE_ID.to_string()),
+                                UiTextTone::Darker,
+                            ));
+                            pager.spawn((
+                                Button {
+                                    text: ">".to_string(),
+                                    ..default()
+                                },
+                                CssID(CHEST_ITEMS_NEXT_ID.to_string()),
+                                UiButtonKind::ActionRow,
+                                UiButtonTone::Normal,
+                            ));
+                        });
+                        right.spawn((
+                            ChestInventoryItemGridRoot,
+                            Node {
+                                width: Val::Percent(100.0),
+                                display: Display::Grid,
+                                grid_template_columns: RepeatedGridTrack::fr(
+                                    CREATIVE_PANEL_COLUMNS as u16,
+                                    1.0,
+                                ),
+                                grid_auto_rows: vec![GridTrack::px(56.0)],
+                                row_gap: Val::Px(6.0),
+                                column_gap: Val::Px(6.0),
+                                ..default()
+                            },
+                            BackgroundColor::DEFAULT,
+                        ))
+                        .with_children(|grid| {
+                            for i in 1..=CREATIVE_PANEL_PAGE_SIZE {
+                                let idx = format!("{i:02}");
+                                grid.spawn((
+                                    Button {
+                                        text: String::new(),
+                                        ..default()
+                                    },
+                                    Visibility::Inherited,
+                                    CssID(format!("{CHEST_ITEMS_SLOT_PREFIX}{idx}")),
+                                    UiButtonKind::InventorySlot,
+                                    UiButtonTone::Normal,
+                                ));
+                            }
+                        });
+                        right.spawn((
+                            Button {
+                                text: language.localize_name_key("KEY_UI_TRASH").to_string(),
+                                ..default()
+                            },
+                            CssID(CHEST_TRASH_BUTTON_ID.to_string()),
+                            UiButtonKind::ActionRow,
+                            UiButtonTone::Normal,
+                        ));
+                        right.spawn((
+                            Paragraph {
+                                text: language.localize_name_key("KEY_UI_CHEST_HINT").to_string(),
+                                ..default()
+                            },
+                            CssID(CHEST_INVENTORY_HINT_ID.to_string()),
+                            UiTextTone::Darker,
+                        ));
+                    });
             });
         })
         .id();

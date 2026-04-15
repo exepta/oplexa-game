@@ -283,6 +283,9 @@ fn block_break_handler(
             multiplayer_connection.as_deref(),
             ws.as_deref(),
             region_cache.as_deref_mut(),
+            &mut chunk_map,
+            &mut ev_dirty,
+            &mut break_ev,
         );
         return;
     }
@@ -583,6 +586,9 @@ fn handle_structure_break(
     multiplayer_connection: Option<&MultiplayerConnectionState>,
     ws: Option<&WorldSave>,
     region_cache: Option<&mut RegionCache>,
+    chunk_map: &mut ChunkMap,
+    ev_dirty: &mut MessageWriter<SubChunkNeedRemeshEvent>,
+    break_ev: &mut MessageWriter<BlockBreakByPlayerEvent>,
 ) {
     let Ok(meta) = q_structure_meta.get(structure_entity) else {
         structure_mining.target = None;
@@ -629,6 +635,8 @@ fn handle_structure_break(
     }
 
     structure_mining.target = None;
+    let inventory_drops =
+        structure_inventory_drop_items_for_entity(runtime, structure_entity, item_registry);
     safe_despawn_entity(commands, structure_entity);
 
     let uses_local_save_data = multiplayer_connection
@@ -641,9 +649,34 @@ fn handle_structure_break(
         ws,
         region_cache,
     );
+    if uses_local_save_data {
+        remove_registered_structure_placeholder_block(meta, chunk_map, ev_dirty, break_ev, registry);
+    }
 
     let multiplayer_connected = multiplayer_connection.is_some_and(|state| state.connected);
-    if creative_mode || multiplayer_connected {
+    if multiplayer_connected {
+        return;
+    }
+
+    for (item_id, count) in inventory_drops {
+        if item_id == 0 || count == 0 {
+            continue;
+        }
+        spawn_world_item_with_motion(
+            commands,
+            meshes,
+            registry,
+            item_registry,
+            item_id,
+            count,
+            meta.selection_center_world + Vec3::Y * 0.15,
+            Vec3::ZERO,
+            meta.place_origin,
+            now,
+        );
+    }
+
+    if creative_mode {
         return;
     }
     for requirement in &meta.drop_requirements {
@@ -669,6 +702,89 @@ fn handle_structure_break(
             now,
         );
     }
+}
+
+fn structure_inventory_drop_items_for_entity(
+    runtime: &StructureRuntimeState,
+    structure_entity: Entity,
+    item_registry: &ItemRegistry,
+) -> Vec<(ItemId, u16)> {
+    let Some(key) = runtime.entity_to_key.get(&structure_entity) else {
+        return Vec::new();
+    };
+    let Some(entries) = runtime.records_by_chunk.get(&key.origin_chunk) else {
+        return Vec::new();
+    };
+    let Some(entry) = entries
+        .iter()
+        .find(|entry| structure_entry_matches_key(entry, key))
+    else {
+        return Vec::new();
+    };
+
+    let mut totals: HashMap<ItemId, u32> = HashMap::new();
+    for slot in &entry.inventory_slots {
+        if slot.count == 0 {
+            continue;
+        }
+        let item_name = slot.item.trim();
+        if item_name.is_empty() {
+            continue;
+        }
+        let Some(item_id) = item_registry.id_opt(item_name) else {
+            continue;
+        };
+        totals
+            .entry(item_id)
+            .and_modify(|total| *total = total.saturating_add(slot.count as u32))
+            .or_insert(slot.count as u32);
+    }
+
+    totals
+        .into_iter()
+        .map(|(item_id, total)| (item_id, total.min(u16::MAX as u32) as u16))
+        .collect()
+}
+
+fn remove_registered_structure_placeholder_block(
+    meta: &PlacedStructureMetadata,
+    chunk_map: &mut ChunkMap,
+    ev_dirty: &mut MessageWriter<SubChunkNeedRemeshEvent>,
+    break_ev: &mut MessageWriter<BlockBreakByPlayerEvent>,
+    registry: &BlockRegistry,
+) {
+    let Some(registration) = meta.registration.as_ref() else {
+        return;
+    };
+    let Some(base_block_id) = registration.block_id else {
+        return;
+    };
+    let current_block_id = get_block_world(chunk_map, meta.place_origin);
+    if current_block_id != base_block_id {
+        return;
+    }
+    if let Some(mut access) = world_access_mut(chunk_map, meta.place_origin) {
+        access.set(0);
+        access.set_stacked(0);
+    }
+    mark_dirty_block_and_neighbors(chunk_map, meta.place_origin, ev_dirty);
+
+    let (chunk_coord, local) = world_to_chunk_xz(meta.place_origin.x, meta.place_origin.z);
+    let ly = (meta.place_origin.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+    break_ev.write(BlockBreakByPlayerEvent {
+        chunk_coord,
+        location: meta.place_origin,
+        chunk_x: local.x as u8,
+        chunk_y: ly as u16,
+        chunk_z: local.y as u8,
+        block_id: current_block_id,
+        drop_item_id: 0,
+        block_name: registry
+            .name_opt(current_block_id)
+            .unwrap_or("")
+            .to_string(),
+        drops_item: false,
+    });
 }
 
 fn remove_structure_from_runtime(

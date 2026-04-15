@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Represents connect to server request used by the `core::events::ui_events` module.
 #[derive(Message, Clone, Debug, Default)]
@@ -61,3 +62,43 @@ pub struct OpenStructureBuildMenuRequest;
 /// Represents request to open workbench recipe menu.
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct OpenWorkbenchMenuRequest;
+
+/// Represents request to open chest inventory UI for one chest block.
+#[derive(Message, Clone, Copy, Debug, Default)]
+pub struct OpenChestInventoryMenuRequest {
+    pub world_pos: [i32; 3],
+}
+
+/// Represents event that chest inventory UI has been opened for one chest block.
+#[derive(Message, Clone, Copy, Debug, Default)]
+pub struct ChestInventoryUiOpened {
+    pub world_pos: [i32; 3],
+}
+
+/// Represents event that chest inventory UI has been closed for one chest block.
+#[derive(Message, Clone, Copy, Debug, Default)]
+pub struct ChestInventoryUiClosed {
+    pub world_pos: [i32; 3],
+}
+
+/// One serialized chest-slot payload used for UI sync and persistence.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ChestInventorySlotPayload {
+    pub slot: u16,
+    pub item: String,
+    pub count: u16,
+}
+
+/// Synchronizes chest inventory contents from gameplay layer into UI.
+#[derive(Message, Clone, Debug, Default)]
+pub struct ChestInventoryContentsSync {
+    pub world_pos: [i32; 3],
+    pub slots: Vec<ChestInventorySlotPayload>,
+}
+
+/// Persists UI-edited chest inventory contents back into gameplay layer.
+#[derive(Message, Clone, Debug, Default)]
+pub struct ChestInventoryPersistRequest {
+    pub world_pos: [i32; 3],
+    pub slots: Vec<ChestInventorySlotPayload>,
+}

@@ -10,6 +10,7 @@ pub struct UiInteractionState {
     pub chat_open: bool,
     pub structure_menu_open: bool,
     pub workbench_menu_open: bool,
+    pub chest_menu_open: bool,
     pub benchmark_input_lock: bool,
 }
 
@@ -22,6 +23,7 @@ impl UiInteractionState {
             || self.chat_open
             || self.structure_menu_open
             || self.workbench_menu_open
+            || self.chest_menu_open
             || self.benchmark_input_lock
     }
 }

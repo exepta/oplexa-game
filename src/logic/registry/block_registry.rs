@@ -74,8 +74,11 @@ fn start_block_registry(
                 def.material = placeholder_material.clone();
             }
         }
-        let item_id =
-            item_registry.ensure_runtime_block_item(&asset_server, &block_registry, block_id);
+        let item_id = if registration.item_view {
+            item_registry.ensure_runtime_block_item(&asset_server, &block_registry, block_id)
+        } else {
+            None
+        };
         registration.block_id = Some(block_id);
         registration.item_id = item_id;
     }

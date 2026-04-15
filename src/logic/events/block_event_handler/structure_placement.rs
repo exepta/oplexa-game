@@ -202,6 +202,18 @@ fn structure_has_workbench_ui(meta: &PlacedStructureMetadata) -> bool {
 }
 
 #[inline]
+fn structure_has_chest_ui(meta: &PlacedStructureMetadata) -> bool {
+    if meta.recipe_name.eq_ignore_ascii_case("chest") {
+        return true;
+    }
+    meta.registration.as_ref().is_some_and(|registration| {
+        registration
+            .localized_name
+            .eq_ignore_ascii_case("chest_block")
+    })
+}
+
+#[inline]
 fn block_has_workbench_ui(block_id: u16, registry: &BlockRegistry) -> bool {
     if block_id == 0 {
         return false;
@@ -213,6 +225,21 @@ fn block_has_workbench_ui(block_id: u16, registry: &BlockRegistry) -> bool {
             || localized.starts_with("workbench_block_r")
             || key == "KEY_WORKBENCH_BLOCK"
             || key.starts_with("KEY_WORKBENCH_BLOCK_R")
+    })
+}
+
+#[inline]
+fn block_has_chest_ui(block_id: u16, registry: &BlockRegistry) -> bool {
+    if block_id == 0 {
+        return false;
+    }
+    registry.def_opt(block_id).is_some_and(|def| {
+        let localized = def.localized_name.to_ascii_lowercase();
+        let key = def.name.to_ascii_uppercase();
+        localized == "chest_block"
+            || localized.starts_with("chest_block_r")
+            || key == "KEY_CHEST_BLOCK"
+            || key.starts_with("KEY_CHEST_BLOCK_R")
     })
 }
 

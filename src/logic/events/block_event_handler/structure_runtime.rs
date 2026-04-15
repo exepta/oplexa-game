@@ -115,6 +115,69 @@ fn sync_structures_for_loaded_chunks(
     }
 }
 
+fn sync_chest_inventory_contents_for_opened_ui(
+    mut opened: MessageReader<ChestInventoryUiOpened>,
+    runtime: Res<StructureRuntimeState>,
+    item_registry: Res<ItemRegistry>,
+    mut sync: MessageWriter<ChestInventoryContentsSync>,
+) {
+    for message in opened.read() {
+        let (coord, _) = world_to_chunk_xz(message.world_pos[0], message.world_pos[2]);
+        let slots = runtime
+            .records_by_chunk
+            .get(&coord)
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| entry.place_origin == message.world_pos)
+            })
+            .map(|entry| chest_payload_slots_from_region_slots(entry, &item_registry))
+            .unwrap_or_default();
+
+        sync.write(ChestInventoryContentsSync {
+            world_pos: message.world_pos,
+            slots,
+        });
+    }
+}
+
+fn persist_chest_inventory_from_ui_requests(
+    mut requests: MessageReader<ChestInventoryPersistRequest>,
+    item_registry: Res<ItemRegistry>,
+    multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
+    ws: Option<Res<WorldSave>>,
+    mut region_cache: Option<ResMut<RegionCache>>,
+    mut runtime: ResMut<StructureRuntimeState>,
+) {
+    let uses_local_save_data = multiplayer_connection
+        .as_deref()
+        .map(MultiplayerConnectionState::uses_local_save_data)
+        .unwrap_or(true);
+
+    for request in requests.read() {
+        let (coord, _) = world_to_chunk_xz(request.world_pos[0], request.world_pos[2]);
+        let Some(entries) = runtime.records_by_chunk.get_mut(&coord) else {
+            continue;
+        };
+        let Some(entry) = entries
+            .iter_mut()
+            .find(|entry| entry.place_origin == request.world_pos)
+        else {
+            continue;
+        };
+
+        entry.inventory_slots =
+            chest_region_inventory_slots_from_payload(request.slots.as_slice(), &item_registry);
+        if !uses_local_save_data {
+            continue;
+        }
+        let (Some(ws), Some(cache)) = (ws.as_deref(), region_cache.as_deref_mut()) else {
+            continue;
+        };
+        let _ = persist_structure_records_for_chunk(ws, cache, coord, entries);
+    }
+}
+
 fn collect_multiplayer_structure_reconcile_chunks(
     multiplayer_connection: Res<MultiplayerConnectionState>,
     mut dirty_events: MessageReader<SubChunkNeedRemeshEvent>,
@@ -267,6 +330,7 @@ fn reconcile_multiplayer_structure_visuals(
                     rotation_steps: Some(key.rotation_steps),
                     style_item: String::new(),
                     drop_items: Vec::new(),
+                    inventory_slots: Vec::new(),
                 };
                 let drop_requirements = resolve_structure_drop_requirements_for_entry(
                     &fallback_entry,
@@ -347,6 +411,7 @@ fn register_structure_in_runtime(
             rotation_steps: Some(rotation_steps),
             style_item,
             drop_items,
+            inventory_slots: Vec::new(),
         });
     }
 
@@ -357,6 +422,107 @@ fn register_structure_in_runtime(
         return;
     };
     let _ = persist_structure_records_for_chunk(ws, cache, origin_chunk, entries);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_spawn_runtime_structure_for_registered_block(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    structure_recipe_registry: Option<&BuildingStructureRecipeRegistry>,
+    block_registry: &BlockRegistry,
+    item_registry: &ItemRegistry,
+    world_pos: IVec3,
+    block_id: u16,
+    runtime: &mut StructureRuntimeState,
+    uses_local_save_data: bool,
+    ws: Option<&WorldSave>,
+    region_cache: Option<&mut RegionCache>,
+) -> bool {
+    let Some(structure_recipe_registry) = structure_recipe_registry else {
+        return false;
+    };
+    let Some((recipe, rotation_quarters, rotation_steps)) =
+        recipe_for_registered_runtime_block(structure_recipe_registry, block_registry, block_id)
+    else {
+        return false;
+    };
+
+    let (origin_chunk, _) = world_to_chunk_xz(world_pos.x, world_pos.z);
+    let key = placed_structure_key(
+        origin_chunk,
+        recipe.name.clone(),
+        world_pos,
+        rotation_quarters,
+        rotation_steps,
+    );
+    if runtime.spawned_entities.contains_key(&key) {
+        return true;
+    }
+
+    let fallback_entry = StructureRegionEntry {
+        recipe_name: recipe.name.clone(),
+        place_origin: [world_pos.x, world_pos.y, world_pos.z],
+        rotation_quarters,
+        rotation_steps: Some(rotation_steps),
+        style_item: String::new(),
+        drop_items: Vec::new(),
+        inventory_slots: Vec::new(),
+    };
+    let drop_requirements =
+        resolve_structure_drop_requirements_for_entry(&fallback_entry, recipe, item_registry);
+    let style_source_item_id = resolve_structure_style_source_item_id_for_entry(
+        &fallback_entry,
+        drop_requirements.as_slice(),
+        recipe,
+        item_registry,
+    );
+    let structure_entity = spawn_structure_model_entity(
+        commands,
+        asset_server,
+        recipe,
+        world_pos,
+        rotation_quarters,
+        rotation_steps,
+        drop_requirements.clone(),
+        style_source_item_id,
+    );
+    register_structure_in_runtime(
+        runtime,
+        structure_entity,
+        recipe,
+        world_pos,
+        rotation_quarters,
+        rotation_steps,
+        style_source_item_id,
+        drop_requirements.as_slice(),
+        item_registry,
+        uses_local_save_data,
+        ws,
+        region_cache,
+    );
+    true
+}
+
+fn recipe_for_registered_runtime_block<'a>(
+    structure_recipe_registry: &'a BuildingStructureRecipeRegistry,
+    block_registry: &BlockRegistry,
+    block_id: u16,
+) -> Option<(&'a BuildingStructureRecipe, u8, u8)> {
+    for recipe in &structure_recipe_registry.recipes {
+        for rotation_quarters in 0..4u8 {
+            let Some(runtime_block_id) =
+                structure_runtime_placeholder_block_id(recipe, block_registry, rotation_quarters)
+            else {
+                continue;
+            };
+            if runtime_block_id != block_id {
+                continue;
+            }
+            let rotation_steps = normalize_rotation_steps((rotation_quarters as i32) * 2);
+            return Some((recipe, rotation_quarters, rotation_steps));
+        }
+    }
+    None
 }
 
 fn placed_structure_key(
@@ -413,6 +579,66 @@ fn persist_structure_records_for_chunk(
     let old = cache.read_chunk(ws, coord).ok().flatten();
     let merged = container_upsert(old.as_deref(), TAG_STR1, payload.as_slice());
     cache.write_chunk_replace(ws, coord, merged.as_slice())
+}
+
+fn chest_payload_slots_from_region_slots(
+    entry: &StructureRegionEntry,
+    item_registry: &ItemRegistry,
+) -> Vec<ChestInventorySlotPayload> {
+    let mut slots = Vec::new();
+    let mut occupied = HashSet::new();
+    for saved in &entry.inventory_slots {
+        if saved.count == 0 || !occupied.insert(saved.slot) {
+            continue;
+        }
+        let item_name = saved.item.trim();
+        if item_name.is_empty() {
+            continue;
+        }
+        let Some(item_id) = item_registry.id_opt(item_name) else {
+            continue;
+        };
+        let Some(item_def) = item_registry.def_opt(item_id) else {
+            continue;
+        };
+        slots.push(ChestInventorySlotPayload {
+            slot: saved.slot,
+            item: item_def.localized_name.clone(),
+            count: saved.count.max(1),
+        });
+    }
+    slots.sort_by_key(|slot| slot.slot);
+    slots
+}
+
+fn chest_region_inventory_slots_from_payload(
+    slots: &[ChestInventorySlotPayload],
+    item_registry: &ItemRegistry,
+) -> Vec<StructureRegionInventorySlot> {
+    let mut saved_slots = Vec::new();
+    let mut occupied = HashSet::new();
+    for slot in slots {
+        if slot.count == 0 || !occupied.insert(slot.slot) {
+            continue;
+        }
+        let item_name = slot.item.trim();
+        if item_name.is_empty() {
+            continue;
+        }
+        let Some(item_id) = item_registry.id_opt(item_name) else {
+            continue;
+        };
+        let Some(item_def) = item_registry.def_opt(item_id) else {
+            continue;
+        };
+        saved_slots.push(StructureRegionInventorySlot {
+            slot: slot.slot,
+            item: item_def.localized_name.clone(),
+            count: slot.count.max(1),
+        });
+    }
+    saved_slots.sort_by_key(|slot| slot.slot);
+    saved_slots
 }
 
 fn structure_region_drop_items_from_requirements(
@@ -616,6 +842,8 @@ fn spawn_structure_model_entity(
             Name::new(format!("Structure:{}", recipe.name)),
             PlacedStructureMetadata {
                 recipe_name: recipe.name.clone(),
+                model_asset_path: recipe.model_asset_path.clone(),
+                model_animated: recipe.model_meta.animated,
                 stats: recipe.model_meta.stats.clone(),
                 place_origin,
                 rotation_quarters,

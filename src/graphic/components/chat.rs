@@ -56,6 +56,7 @@ fn update_chat_ui_state(
         || ui_interaction.inventory_open
         || ui_interaction.structure_menu_open
         || ui_interaction.workbench_menu_open
+        || ui_interaction.chest_menu_open
     {
         chat_ui.open = false;
     }
@@ -65,6 +66,7 @@ fn update_chat_ui_state(
         && !ui_interaction.inventory_open
         && !ui_interaction.structure_menu_open
         && !ui_interaction.workbench_menu_open
+        && !ui_interaction.chest_menu_open
         && keyboard.just_pressed(open_chat_key)
     {
         chat_ui.open = true;

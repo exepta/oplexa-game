@@ -11,9 +11,10 @@ use crate::core::entities::player::{
     FlightState, FpsController, GameMode, GameModeState, Player, PlayerCamera,
 };
 use crate::core::events::ui_events::{
-    ConnectToServerRequest, CraftHandCraftedRequest, CraftWorkTableRequest,
-    DisconnectFromServerRequest, DropItemRequest, OpenStructureBuildMenuRequest,
-    OpenWorkbenchMenuRequest,
+    ChestInventoryContentsSync, ChestInventoryPersistRequest, ChestInventorySlotPayload,
+    ChestInventoryUiClosed, ChestInventoryUiOpened, ConnectToServerRequest,
+    CraftHandCraftedRequest, CraftWorkTableRequest, DisconnectFromServerRequest, DropItemRequest,
+    OpenChestInventoryMenuRequest, OpenStructureBuildMenuRequest, OpenWorkbenchMenuRequest,
 };
 use crate::core::inventory::creative_panel::{
     CREATIVE_PANEL_COLUMNS, CREATIVE_PANEL_PAGE_SIZE, CreativePanelState,
@@ -177,6 +178,19 @@ const WORKBENCH_ITEMS_NEXT_ID: &str = "workbench-items-next";
 const WORKBENCH_ITEMS_SLOT_PREFIX: &str = "workbench-items-slot-";
 const WORKBENCH_RECIPE_HINT_ID: &str = "workbench-recipe-hint";
 const WORKBENCH_TRASH_BUTTON_ID: &str = "workbench-trash-button";
+const CHEST_INVENTORY_TITLE_ID: &str = "chest-inventory-title";
+const CHEST_INVENTORY_HINT_ID: &str = "chest-inventory-hint";
+const CHEST_INVENTORY_SLOTS: usize = 18;
+const CHEST_SLOT_FRAME_PREFIX: &str = "chest-slot-frame-";
+const CHEST_SLOT_BADGE_PREFIX: &str = "chest-slot-badge-";
+const CHEST_PLAYER_INVENTORY_FRAME_PREFIX: &str = "chest-player-inventory-frame-";
+const CHEST_PLAYER_INVENTORY_BADGE_PREFIX: &str = "chest-player-inventory-badge-";
+const CHEST_ITEMS_TOTAL_ID: &str = "chest-items-total";
+const CHEST_ITEMS_PAGE_ID: &str = "chest-items-page";
+const CHEST_ITEMS_PREV_ID: &str = "chest-items-prev";
+const CHEST_ITEMS_NEXT_ID: &str = "chest-items-next";
+const CHEST_ITEMS_SLOT_PREFIX: &str = "chest-items-slot-";
+const CHEST_TRASH_BUTTON_ID: &str = "chest-trash-button";
 const CREATIVE_PANEL_TOTAL_ID: &str = "creative-panel-total";
 const CREATIVE_PANEL_PAGE_ID: &str = "creative-panel-page";
 const CREATIVE_PANEL_PREV_ID: &str = "creative-panel-prev";
@@ -298,6 +312,30 @@ struct HudLookedBlockLocalizedName;
 /// Represents looked block hud mining level text used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct HudLookedBlockLevel;
+/// Represents looked block hud chest item count text used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HudLookedBlockChestCount;
+/// Represents looked block hud chest preview row used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HudLookedBlockChestPreviewRow;
+/// Represents looked block hud one chest preview slot root used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HudLookedBlockChestPreviewSlot {
+    index: usize,
+}
+/// Represents looked block hud one chest preview slot icon used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HudLookedBlockChestPreviewIcon {
+    index: usize,
+}
+/// Represents looked block hud one chest preview slot badge used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HudLookedBlockChestPreviewBadge {
+    index: usize,
+}
+/// Represents looked block hud chest preview "more items" slot used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct HudLookedBlockChestPreviewMore;
 /// Represents looked block hud mining progress bar used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct HudLookedBlockProgress;
@@ -310,6 +348,15 @@ struct StructureBuildRoot;
 /// Represents workbench recipe root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct WorkbenchRecipeRoot;
+/// Represents chest inventory root used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct ChestInventoryRoot;
+/// Represents chest inventory main panel used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct ChestInventoryMainPanel;
+/// Represents chest inventory item grid root used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct ChestInventoryItemGridRoot;
 /// Represents workbench recipe main panel used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct WorkbenchRecipeMainPanel;
@@ -524,6 +571,28 @@ struct StructureBuildMenuState {
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct WorkbenchRecipeMenuState {
     open: bool,
+}
+
+/// Represents chest inventory menu state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+struct ChestInventoryMenuState {
+    open: bool,
+    world_pos: Option<[i32; 3]>,
+}
+
+/// Represents chest inventory slots ui state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Clone, Copy)]
+struct ChestInventoryUiState {
+    slots: [InventorySlot; CHEST_INVENTORY_SLOTS],
+}
+
+impl Default for ChestInventoryUiState {
+    /// Runs the `default` routine for default in the `graphic::hardcoded_ui` module.
+    fn default() -> Self {
+        Self {
+            slots: [InventorySlot::default(); CHEST_INVENTORY_SLOTS],
+        }
+    }
 }
 
 /// Represents workbench crafting progress state used by the `graphic::hardcoded_ui` module.
@@ -866,6 +935,8 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<PlayerInventoryUiState>()
             .init_resource::<StructureBuildMenuState>()
             .init_resource::<WorkbenchRecipeMenuState>()
+            .init_resource::<ChestInventoryMenuState>()
+            .init_resource::<ChestInventoryUiState>()
             .init_resource::<WorkbenchCraftProgressState>()
             .init_resource::<WorkbenchToolSlotsState>()
             .init_resource::<InventoryCursorItemState>()
@@ -1101,8 +1172,13 @@ impl Plugin for HardcodedUiPlugin {
                 (
                     handle_open_structure_build_menu_request.in_set(InGameInventoryUiSet::Input),
                     handle_open_workbench_recipe_menu_request.in_set(InGameInventoryUiSet::Input),
+                    handle_open_chest_inventory_menu_request.in_set(InGameInventoryUiSet::Input),
                     handle_structure_build_menu_input.in_set(InGameInventoryUiSet::Input),
                     handle_workbench_recipe_menu_input.in_set(InGameInventoryUiSet::Input),
+                    handle_chest_inventory_menu_input.in_set(InGameInventoryUiSet::Input),
+                    handle_chest_inventory_contents_sync.in_set(InGameInventoryUiSet::Input),
+                    handle_chest_inventory_menu_navigation.in_set(InGameInventoryUiSet::Input),
+                    handle_chest_inventory_menu_item_clicks.in_set(InGameInventoryUiSet::Input),
                     handle_workbench_recipe_menu_navigation.in_set(InGameInventoryUiSet::Input),
                     handle_workbench_recipe_menu_item_clicks.in_set(InGameInventoryUiSet::Input),
                     tick_workbench_craft_progress.in_set(InGameInventoryUiSet::Input),
@@ -1124,6 +1200,7 @@ impl Plugin for HardcodedUiPlugin {
                 (
                     sync_structure_build_menu_ui.in_set(InGameInventoryUiSet::Sync),
                     sync_workbench_recipe_menu_ui.in_set(InGameInventoryUiSet::Sync),
+                    sync_chest_inventory_menu_ui.in_set(InGameInventoryUiSet::Sync),
                     sync_player_inventory_ui.in_set(InGameInventoryUiSet::Sync),
                     sync_creative_panel_ui.in_set(InGameInventoryUiSet::Sync),
                     sync_inventory_cursor_item_ui.in_set(InGameInventoryUiSet::Sync),
@@ -1145,6 +1222,7 @@ impl Plugin for HardcodedUiPlugin {
                     close_player_inventory_ui,
                     close_structure_build_menu_ui,
                     close_workbench_recipe_menu_ui,
+                    close_chest_inventory_menu_ui,
                     persist_inventory_on_world_exit,
                     clear_inventory_after_world_exit,
                 )
@@ -1202,6 +1280,7 @@ include!("components/inventory.rs");
 include!("components/inventory_creative.rs");
 include!("components/structure_builder.rs");
 include!("components/workbench.rs");
+include!("components/chest.rs");
 include!("components/inventory_persistence.rs");
 include!("components/ui_interaction_sync.rs");
 include!("components/debug_overlay.rs");

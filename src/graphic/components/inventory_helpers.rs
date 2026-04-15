@@ -96,6 +96,7 @@ fn recipe_preview_tab_icon_path(crafting_type: RecipePreviewCraftingType) -> &'s
 fn hovered_item_id(
     slot_states: &Query<(&CssID, &UIWidgetState), With<Button>>,
     inventory: &PlayerInventory,
+    chest_inventory: &ChestInventoryUiState,
     hand_crafted: &HandCraftedState,
     work_table_crafting: &WorkTableCraftingState,
     workbench_tools: &WorkbenchToolSlotsState,
@@ -119,6 +120,20 @@ fn hovered_item_id(
 
         if let Some(slot_index) = parse_workbench_player_inventory_slot_index(css_id.0.as_str())
             && let Some(slot) = inventory.slots.get(slot_index)
+            && !slot.is_empty()
+        {
+            return Some(slot.item_id);
+        }
+
+        if let Some(slot_index) = parse_chest_player_inventory_slot_index(css_id.0.as_str())
+            && let Some(slot) = inventory.slots.get(slot_index)
+            && !slot.is_empty()
+        {
+            return Some(slot.item_id);
+        }
+
+        if let Some(slot_index) = parse_chest_slot_index(css_id.0.as_str())
+            && let Some(slot) = chest_inventory.slots.get(slot_index)
             && !slot.is_empty()
         {
             return Some(slot.item_id);
@@ -168,6 +183,12 @@ fn hovered_item_id(
         }
 
         if let Some(index) = parse_workbench_item_slot_index(css_id.0.as_str())
+            && let Some(item_id) = creative_panel.item_at_page_slot(index)
+        {
+            return Some(item_id);
+        }
+
+        if let Some(index) = parse_chest_item_slot_index(css_id.0.as_str())
             && let Some(item_id) = creative_panel.item_at_page_slot(index)
         {
             return Some(item_id);

@@ -107,6 +107,7 @@ pub enum BuildingModelAnchor {
 /// Runtime metadata loaded from `assets/models/{name}/data.meta.json`.
 #[derive(Clone, Debug, Default)]
 pub struct BuildingStructureModelMeta {
+    pub animated: bool,
     pub model_anchor: BuildingModelAnchor,
     pub model_rotation_quarters: u8,
     pub model_offset: Vec3,
@@ -156,6 +157,7 @@ pub enum BuildingStructureColliderSource {
 pub struct BuildingStructureBlockRegistration {
     pub localized_name: String,
     pub name: String,
+    pub item_view: bool,
     pub block_id: Option<u16>,
     pub item_id: Option<ItemId>,
 }
@@ -178,6 +180,8 @@ impl Default for BuildingStructureColliderSource {
 #[derive(Deserialize, Default)]
 struct BuildingModelMetaJson {
     #[serde(default)]
+    animated: bool,
+    #[serde(default)]
     model_anchor: BuildingModelAnchor,
     #[serde(default)]
     model_rotation_quarters: i32,
@@ -195,6 +199,8 @@ struct BuildingModelMetaJson {
     localized_name: String,
     #[serde(default)]
     name: String,
+    #[serde(default = "default_item_view")]
+    item_view: bool,
     #[serde(default)]
     textures: HashMap<String, BuildingModelTextureBindingJson>,
 }
@@ -468,6 +474,7 @@ fn load_structure_model_meta(path: &str) -> Option<BuildingStructureModelMeta> {
             Some(BuildingStructureBlockRegistration {
                 localized_name,
                 name,
+                item_view: parsed.item_view,
                 block_id: None,
                 item_id: None,
             })
@@ -475,6 +482,7 @@ fn load_structure_model_meta(path: &str) -> Option<BuildingStructureModelMeta> {
     };
 
     Some(BuildingStructureModelMeta {
+        animated: parsed.animated,
         model_anchor: parsed.model_anchor,
         model_rotation_quarters: normalize_rotation_quarters(parsed.model_rotation_quarters),
         model_offset: Vec3::new(
@@ -625,6 +633,11 @@ fn default_build_time_secs() -> f32 {
 #[inline]
 fn default_model_offset() -> [f32; 3] {
     [0.0, 0.0, 0.0]
+}
+
+#[inline]
+fn default_item_view() -> bool {
+    true
 }
 
 #[inline]

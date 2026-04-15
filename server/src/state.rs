@@ -110,7 +110,7 @@ impl ServerState {
     /// Creates a new instance for the `state` module.
     pub fn new(world_root: PathBuf, world_seed: i32) -> Self {
         let mut block_registry = BlockRegistry::load_headless("assets/blocks");
-        let item_registry = ItemRegistry::load_headless("assets/items", &block_registry);
+        let mut item_registry = ItemRegistry::load_headless("assets/items", &block_registry);
         let mut structure_recipe_registry =
             load_building_structure_recipe_registry("assets/recipes/structures", &item_registry);
         for recipe in &mut structure_recipe_registry.recipes {
@@ -132,7 +132,13 @@ impl ServerState {
                     recipe.model_meta.stats.clone(),
                 );
             }
+            let item_id = if registration.item_view {
+                item_registry.ensure_runtime_block_item_headless(&block_registry, block_id)
+            } else {
+                None
+            };
             registration.block_id = Some(block_id);
+            registration.item_id = item_id;
         }
 
         let block_registry = Arc::new(block_registry);

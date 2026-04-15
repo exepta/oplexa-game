@@ -15,7 +15,11 @@ fn handle_open_workbench_recipe_menu_request(
     if !requested {
         return;
     }
-    if ui_interaction.menu_open || ui_interaction.chat_open || ui_interaction.inventory_open {
+    if ui_interaction.menu_open
+        || ui_interaction.chat_open
+        || ui_interaction.inventory_open
+        || ui_interaction.chest_menu_open
+    {
         return;
     }
 

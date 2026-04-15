@@ -66,6 +66,8 @@ pub struct StructureRegionEntry {
     pub style_item: String,
     #[serde(default)]
     pub drop_items: Vec<StructureRegionDropItem>,
+    #[serde(default)]
+    pub inventory_slots: Vec<StructureRegionInventorySlot>,
 }
 
 /// Persisted concrete material stack consumed for one structure placement.
@@ -76,8 +78,22 @@ pub struct StructureRegionDropItem {
     pub count: u16,
 }
 
+/// Persisted one inventory stack for a structure-local container (e.g. chest).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StructureRegionInventorySlot {
+    pub slot: u16,
+    pub item: String,
+    #[serde(default = "default_structure_inventory_count")]
+    pub count: u16,
+}
+
 #[inline]
 fn default_structure_drop_count() -> u16 {
+    1
+}
+
+#[inline]
+fn default_structure_inventory_count() -> u16 {
     1
 }
 
