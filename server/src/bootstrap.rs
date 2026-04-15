@@ -121,7 +121,10 @@ pub fn spawn_server(mut commands: Commands, config: Res<ServerBootstrapConfig>) 
     let server_entity = commands
         .spawn((
             Name::new("NetworkServer"),
-            NetcodeServer::new(NetcodeConfig::default()),
+            NetcodeServer::new(
+                NetcodeConfig::default()
+                    .with_client_timeout_secs(config.netcode_client_timeout_secs),
+            ),
             LocalAddr(config.bind_addr),
             WebSocketServerIo {
                 config: ServerConfig::builder()
@@ -137,13 +140,17 @@ pub fn spawn_server(mut commands: Commands, config: Res<ServerBootstrapConfig>) 
         },
         EntityTrigger,
     );
-    info!("Lightyear server started on {}", config.bind_addr);
+    info!(
+        "Lightyear server started on {} (netcode_timeout={}s)",
+        config.bind_addr, config.netcode_client_timeout_secs
+    );
 }
 
 /// Resource injected before App::run() so `spawn_server` can read the bind address.
 #[derive(Resource)]
 pub struct ServerBootstrapConfig {
     pub bind_addr: SocketAddr,
+    pub netcode_client_timeout_secs: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

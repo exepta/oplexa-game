@@ -62,6 +62,8 @@ pub struct ClientNetworkSettings {
     pub client_uuid: Option<String>,
     pub lan_discovery: bool,
     pub lan_discovery_port: u16,
+    #[serde(default = "default_client_netcode_timeout_secs")]
+    pub netcode_timeout_secs: u64,
     pub transform_send_interval_ms: u64,
 }
 
@@ -77,6 +79,7 @@ impl Default for ClientNetworkSettings {
             client_uuid: None,
             lan_discovery: true,
             lan_discovery_port: 14192,
+            netcode_timeout_secs: default_client_netcode_timeout_secs(),
             transform_send_interval_ms: 50,
         }
     }
@@ -219,6 +222,11 @@ fn default_max_players() -> usize {
 /// Runs the `default_client_timeout` routine for default client timeout in the `core::network::config` module.
 fn default_client_timeout() -> u64 {
     60
+}
+
+/// Runs the `default_client_netcode_timeout_secs` routine for default client netcode timeout secs in the `core::network::config` module.
+fn default_client_netcode_timeout_secs() -> u64 {
+    30
 }
 
 /// Runs the `default_chunk_stream_sends_per_tick_base` routine for default chunk stream sends per tick base in the `core::network::config` module.

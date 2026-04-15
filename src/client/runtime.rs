@@ -160,6 +160,7 @@ pub(super) struct MultiplayerClientRuntime {
     pub(super) player_name: String,
     pub(super) session_url: String,
     pub(super) client_uuid: String,
+    pub(super) netcode_timeout_secs: i32,
     pub(super) auto_connect_lan: bool,
     pub(super) connection_entity: Option<Entity>,
     pub(super) local_player_id: Option<u64>,
@@ -192,6 +193,10 @@ impl MultiplayerClientRuntime {
             player_name: identity.player_name,
             session_url: settings.client.session_url.clone(),
             client_uuid: identity.uuid,
+            netcode_timeout_secs: settings
+                .client
+                .netcode_timeout_secs
+                .clamp(1, i32::MAX as u64) as i32,
             auto_connect_lan,
             connection_entity: None,
             local_player_id: None,
@@ -234,7 +239,13 @@ pub(super) fn do_connect(
         protocol_id: 0,
     };
 
-    let netcode_client = match NetcodeClient::new(auth, NetcodeConfig::default()) {
+    let netcode_config = NetcodeConfig {
+        client_timeout_secs: runtime.netcode_timeout_secs,
+        token_expire_secs: runtime.netcode_timeout_secs.saturating_mul(4).max(30),
+        ..NetcodeConfig::default()
+    };
+
+    let netcode_client = match NetcodeClient::new(auth, netcode_config) {
         Ok(c) => c,
         Err(e) => {
             warn!("Failed to create netcode client: {:?}", e);

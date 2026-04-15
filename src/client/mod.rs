@@ -870,10 +870,17 @@ fn on_server_disconnected(
     // NetcodeClient has #[require(Disconnected)], so Disconnected is added on spawn
     // with reason: None. Real disconnects always have reason: Some(...). Skip the
     // initial spawn-time Disconnected so we don't immediately despawn the entity.
-    if let Ok(disconnected) = q_disconnected.get(trigger.entity) {
-        if disconnected.reason.is_none() {
-            return;
-        }
+    let disconnect_reason = q_disconnected
+        .get(trigger.entity)
+        .ok()
+        .and_then(|disconnected| {
+            if disconnected.reason.is_none() {
+                return None;
+            }
+            disconnected.reason.clone()
+        });
+    if disconnect_reason.is_none() {
+        return;
     }
 
     for entity in runtime.remote_players.drain().map(|(_, e)| e) {
@@ -911,7 +918,9 @@ fn on_server_disconnected(
     multiplayer_connection.last_error = if disconnected_by_request {
         existing_error
     } else {
-        existing_error.or_else(|| Some(SERVER_TIMEOUT_ERROR_TEXT.to_string()))
+        existing_error
+            .or(disconnect_reason)
+            .or_else(|| Some(SERVER_TIMEOUT_ERROR_TEXT.to_string()))
     };
 
     runtime.connection_entity = None;
