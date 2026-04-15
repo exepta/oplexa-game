@@ -210,7 +210,15 @@ fn toggle_benchmark(
     mut gpu_load_state: ResMut<DebugGpuLoadState>,
     mut gpu_clock_state: ResMut<DebugGpuClockState>,
     gpu_adapter: Option<Res<RenderAdapterInfo>>,
+    ui_interaction: Option<Res<UiInteractionState>>,
 ) {
+    if ui_interaction
+        .as_ref()
+        .is_some_and(|state| state.benchmark_input_lock)
+    {
+        return;
+    }
+
     let benchmark_key = convert(global_config.input.benchmark.as_str()).unwrap_or(KeyCode::KeyB);
     if !keyboard.just_pressed(benchmark_key) {
         return;
@@ -219,6 +227,31 @@ fn toggle_benchmark(
     if benchmark.active {
         stop_benchmark(&mut benchmark, Some(time.elapsed_secs_f64()));
         info!("Benchmark: false");
+        return;
+    }
+
+    start_benchmark(
+        &mut benchmark,
+        &time,
+        &mut stats,
+        &mut vram_state,
+        &mut gpu_load_state,
+        &mut gpu_clock_state,
+        gpu_adapter.as_deref(),
+    );
+    info!("Benchmark: true");
+}
+
+fn start_benchmark(
+    benchmark: &mut BenchmarkRuntime,
+    time: &Time<bevy::time::Real>,
+    stats: &mut SysStats,
+    vram_state: &mut DebugVramState,
+    gpu_load_state: &mut DebugGpuLoadState,
+    gpu_clock_state: &mut DebugGpuClockState,
+    gpu_adapter: Option<&RenderAdapterInfo>,
+) {
+    if benchmark.active {
         return;
     }
 
@@ -233,7 +266,6 @@ fn toggle_benchmark(
     benchmark.os_name = detect_os_name();
     benchmark.desktop_manager = detect_desktop_manager();
     benchmark.gpu_name = gpu_adapter
-        .as_ref()
         .map(|adapter| adapter.name.clone())
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| "Unknown GPU".to_string());
@@ -248,14 +280,12 @@ fn toggle_benchmark(
         .unwrap_or_else(|| "Unknown CPU".to_string());
 
     poll_benchmark_system_metrics(
-        &mut benchmark,
-        &mut stats,
-        &mut vram_state,
-        &mut gpu_load_state,
-        &mut gpu_clock_state,
+        benchmark,
+        stats,
+        vram_state,
+        gpu_load_state,
+        gpu_clock_state,
     );
-
-    info!("Benchmark: true");
 }
 
 #[allow(clippy::too_many_arguments)]
