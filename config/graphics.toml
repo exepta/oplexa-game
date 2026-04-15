@@ -17,6 +17,7 @@ graphic_backend = "AUTO"
 
 # View distance in chunk units.
 # Impact: the biggest single cost driver for generation, meshing, memory, and draw calls.
+# 1 chunk is 32 x 32 | 8 means 8x32 = 256 blocks view range
 chunk_range = 8
 
 # Local (singleplayer) chunk generation/meshing budgets.
@@ -38,4 +39,4 @@ fog_end_factor = 1.08
 
 # Extra camera far clip distance beyond chunk bounds.
 # Impact: higher value increases visible geometry and potential GPU cost.
-far_clip_extra = 14.0
+far_clip_extra = 16.0

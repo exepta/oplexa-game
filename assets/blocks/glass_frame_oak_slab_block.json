@@ -5,6 +5,7 @@
   "texture": {
     "all": "glass"
   },
+  "water_logged": true,
   "connected_texture": {
     "group": "glass",
     "mode": "mask4",

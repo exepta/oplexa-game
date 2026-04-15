@@ -54,7 +54,11 @@ fn track_water_flow_sources_from_block_events(
     }
 
     for event in break_events.read() {
-        flow_state.sources.remove(&event.location);
+        if get_block_world(&chunk_map, event.location) == flow_ids.source_id {
+            flow_state.sources.insert(event.location);
+        } else {
+            flow_state.sources.remove(&event.location);
+        }
         queue_water_reactivation_for_change(event.location, &chunk_map, &flow_ids, &mut flow_state);
     }
 
@@ -68,7 +72,11 @@ fn track_water_flow_sources_from_block_events(
     }
 
     for event in observed_break_events.read() {
-        flow_state.sources.remove(&event.location);
+        if get_block_world(&chunk_map, event.location) == flow_ids.source_id {
+            flow_state.sources.insert(event.location);
+        } else {
+            flow_state.sources.remove(&event.location);
+        }
         queue_water_reactivation_for_change(event.location, &chunk_map, &flow_ids, &mut flow_state);
     }
 }
@@ -726,7 +734,15 @@ fn water_can_flow_into(
     let id = get_block_world(chunk_map, pos);
     if id == 0 || flow_ids.contains(id) || registry.is_overridable(id) {
         let stacked = get_stacked_block_world(chunk_map, pos);
-        return stacked == 0 || flow_ids.contains(stacked) || registry.is_overridable(stacked);
+        if stacked == 0 || flow_ids.contains(stacked) || registry.is_overridable(stacked) {
+            return true;
+        }
+        if id != 0 && flow_ids.contains(id) && registry.is_water_logged(stacked) {
+            // Keep existing water + single-waterlogged-block cells (e.g. one slab in water)
+            // traversable for simulation so non-source water does not get stripped away.
+            return true;
+        }
+        return false;
     }
     if !registry.is_fluid(id) && registry.is_water_logged(id) {
         // Waterlogged solids are only filled by explicit player placement of water,

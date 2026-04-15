@@ -5,6 +5,7 @@
   "texture": {
     "all": "deep_stone"
   },
+  "water_logged": true,
   "stats": {
     "hardness": 5.75,
     "blast_resistance": 4.0,

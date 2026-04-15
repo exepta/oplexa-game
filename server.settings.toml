@@ -34,4 +34,4 @@ locate-search-radius = 1000
 
 # Maintenance cadence for dead entities.
 # Impact: the lower interval cleans up faster but adds periodic CPU work.
-dead-entity-check-interval-secs = 20
+dead-entity-check-interval-secs = 30

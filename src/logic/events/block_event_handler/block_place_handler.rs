@@ -320,6 +320,7 @@ fn block_place_handler(
         && registry.is_fluid(place_id)
         && existing_primary_id != 0
         && !registry.is_fluid(existing_primary_id)
+        && !is_horizontal_slab_variant(existing_primary_id, &registry)
         && registry.is_water_logged(existing_primary_id)
         && existing_stacked_id == 0;
     let can_place = if waterlog_existing_primary {

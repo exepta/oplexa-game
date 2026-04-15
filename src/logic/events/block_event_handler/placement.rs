@@ -191,6 +191,14 @@ fn slab_variant_from_block_id(block_id: BlockId, registry: &BlockRegistry) -> Op
     slab_variant_from_name(name)
 }
 
+#[inline]
+fn is_horizontal_slab_variant(block_id: BlockId, registry: &BlockRegistry) -> bool {
+    matches!(
+        slab_variant_from_block_id(block_id, registry),
+        Some(SlabVariant::Bottom | SlabVariant::Top)
+    )
+}
+
 fn resolve_slab_variant_for_click(
     hit: crate::core::entities::player::block_selection::BlockHit,
     mode: SlabPlacementMode,
