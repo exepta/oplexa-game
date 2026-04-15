@@ -14,7 +14,10 @@ use api::{
         },
     },
     generator::chunk::{
-        chunk_utils::{encode_chunk, load_or_gen_chunk_async_with_origin, save_chunk_at_root_sync},
+        chunk_utils::{
+            decode_chunk, encode_chunk, load_chunk_at_root_sync,
+            load_or_gen_chunk_async_with_origin, save_chunk_at_root_sync,
+        },
         trees::registry::TreeRegistry,
     },
 };
@@ -213,15 +216,29 @@ impl ServerState {
         refill_ocean_water: bool,
     ) -> std::io::Result<()> {
         let water_id = self.block_registry.id_opt("water_block").unwrap_or(0);
-
-        let (mut chunk, _generated) = future::block_on(load_or_gen_chunk_async_with_origin(
-            self.world_root.clone(),
-            coord,
-            &self.block_registry,
-            &self.biome_registry,
-            &self.tree_registry,
-            self.world_gen_config.clone(),
-        ));
+        let mut chunk = if let Some(encoded) = self.streamed_chunk_cache.get(&coord) {
+            decode_chunk(encoded).map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to decode streamed chunk {coord:?}: {error}"),
+                )
+            })?
+        } else if let Some(chunk) = load_chunk_at_root_sync(self.world_root.as_path(), coord) {
+            chunk
+        } else {
+            // Fallback for chunks not yet cached on server: preserve legacy behavior
+            // so player actions are accepted instead of dropped.
+            let (generated_chunk, _generated) =
+                future::block_on(load_or_gen_chunk_async_with_origin(
+                    self.world_root.clone(),
+                    coord,
+                    &self.block_registry,
+                    &self.biome_registry,
+                    &self.tree_registry,
+                    self.world_gen_config.clone(),
+                ));
+            generated_chunk
+        };
 
         for (lx, ly, lz, block_id, stacked_block_id) in edits {
             chunk.set(*lx, *ly, *lz, *block_id);

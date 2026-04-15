@@ -128,19 +128,10 @@ fn run_water_flow_simulation(
     mut chunk_map: ResMut<ChunkMap>,
     mut fluids: ResMut<FluidMap>,
     mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
+    mut break_ev: MessageWriter<BlockBreakByPlayerEvent>,
+    mut place_ev: MessageWriter<BlockPlaceByPlayerEvent>,
 ) {
     if !flow_ids.initialized || flow_ids.source_id == 0 {
-        return;
-    }
-
-    // Multiplayer stays server-authoritative: this local runtime simulation only runs
-    // for local-save worlds.
-    if !multiplayer_connection.uses_local_save_data() {
-        flow_state.frontier.clear();
-        flow_state.queued.clear();
-        flow_state.pending_per_subchunk.clear();
-        flow_state.sleeping_subchunks.clear();
-        flow_state.accumulator_secs = 0.0;
         return;
     }
 
@@ -178,6 +169,8 @@ fn run_water_flow_simulation(
             &mut fluids,
             now,
             &mut dirty_subchunks,
+            &mut break_ev,
+            &mut place_ev,
         );
         if flow_state.frontier.is_empty() {
             break;
@@ -200,6 +193,8 @@ fn run_single_water_flow_step(
     fluids: &mut FluidMap,
     now: f32,
     dirty_subchunks: &mut HashSet<(IVec2, usize)>,
+    break_ev: &mut MessageWriter<BlockBreakByPlayerEvent>,
+    place_ev: &mut MessageWriter<BlockPlaceByPlayerEvent>,
 ) {
     let stale_sources: Vec<IVec3> = flow_state
         .sources
@@ -244,15 +239,18 @@ fn run_single_water_flow_step(
             continue;
         }
 
-        let is_explicit_source = flow_state.sources.contains(&pos);
+        let current = get_block_world(chunk_map, pos);
+        let current_stacked = get_stacked_block_world(chunk_map, pos);
+        let is_block_source = current == flow_ids.source_id;
+        if is_block_source {
+            flow_state.sources.insert(pos);
+        }
+        let is_explicit_source = flow_state.sources.contains(&pos) || is_block_source;
         let desired_level = if is_explicit_source {
             WATER_FLOW_SOURCE_LEVEL
         } else {
             desired_water_level_two_phase(pos, chunk_map, registry, flow_ids, flow_state)
         };
-
-        let current = get_block_world(chunk_map, pos);
-        let current_stacked = get_stacked_block_world(chunk_map, pos);
         let mut changed = false;
         if desired_level == 0 {
             let is_runtime_flow = flow_ids.contains(current)
@@ -358,6 +356,9 @@ fn run_single_water_flow_step(
     }
 
     for pos in changed_positions {
+        if multiplayer_connection.connected {
+            emit_multiplayer_block_sync_for_world_pos(pos, registry, chunk_map, break_ev, place_ev);
+        }
         collect_dirty_subchunks_for_block_and_neighbors(pos, chunk_map, dirty_subchunks);
     }
 
@@ -369,6 +370,42 @@ fn run_single_water_flow_step(
             flow_state.sleeping_subchunks.insert(key);
         }
     }
+}
+
+#[inline]
+fn emit_multiplayer_block_sync_for_world_pos(
+    world_pos: IVec3,
+    registry: &BlockRegistry,
+    chunk_map: &ChunkMap,
+    break_ev: &mut MessageWriter<BlockBreakByPlayerEvent>,
+    place_ev: &mut MessageWriter<BlockPlaceByPlayerEvent>,
+) {
+    let primary = get_block_world(chunk_map, world_pos);
+    let stacked = get_stacked_block_world(chunk_map, world_pos);
+
+    if primary == 0 && stacked == 0 {
+        let (chunk_coord, local) = world_to_chunk_xz(world_pos.x, world_pos.z);
+        let ly = (world_pos.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+        break_ev.write(BlockBreakByPlayerEvent {
+            chunk_coord,
+            location: world_pos,
+            chunk_x: local.x as u8,
+            chunk_y: ly as u16,
+            chunk_z: local.y as u8,
+            block_id: 0,
+            drop_item_id: 0,
+            block_name: String::new(),
+            drops_item: false,
+        });
+        return;
+    }
+
+    place_ev.write(BlockPlaceByPlayerEvent {
+        location: world_pos,
+        block_id: primary,
+        stacked_block_id: stacked,
+        block_name: registry.name_opt(primary).unwrap_or("").to_string(),
+    });
 }
 
 #[inline]
@@ -713,7 +750,7 @@ fn water_is_source_like(
         return true;
     }
     let id = get_block_world(chunk_map, pos);
-    id != 0 && id == flow_ids.settled_id
+    id != 0 && (id == flow_ids.source_id || id == flow_ids.settled_id)
 }
 
 #[inline]

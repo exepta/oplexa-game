@@ -462,6 +462,9 @@ fn check_base_gen_world_ready(
     mut commands: Commands,
 ) {
     let initial_radius = visible_radius(game_config.graphics.chunk_range);
+    // Keep multiplayer joins responsive, but require a meaningful ready radius
+    // around spawn so nearby terrain does not visibly pop in after entering.
+    let multiplayer_mesh_ready_radius = (initial_radius / 2).clamp(2, 8);
     let center = load_center
         .as_ref()
         .map(|lc| lc.world_xz)
@@ -477,7 +480,17 @@ fn check_base_gen_world_ready(
             &backlog,
         )
     } else {
+        // For multiplayer we can enter the world as soon as streamed chunks exist,
+        // but keep a small mesh-ready radius so the spawn area does not pop in late.
         area_chunks_in_map(center, initial_radius, &chunk_map)
+            && area_ready(
+                center,
+                initial_radius.min(multiplayer_mesh_ready_radius).max(1),
+                &chunk_map,
+                &pending_gen,
+                &pending_mesh,
+                &backlog,
+            )
     };
 
     if ready {
