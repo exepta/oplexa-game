@@ -1,6 +1,6 @@
 use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::biome::{Biome, BiomeSize};
-use crate::core::world::chunk_dimension::Y_MIN;
+use crate::core::world::chunk_dimension::{CX, Y_MIN};
 use bevy::prelude::*;
 
 /* ======================================================================= */
@@ -65,6 +65,10 @@ pub const SUB_PRESENT_MAX: f32 = 0.70;
 /// Core zone influence (smoothstep window).
 pub const SUB_CORE_START: f32 = 0.28;
 pub const SUB_CORE_END: f32 = 1.05;
+/// Lower threshold for ocean sub-biome switches so ocean subs appear reliably.
+pub const OCEAN_SUB_CORE_SWITCH: f32 = 0.14;
+/// Default smooth fade band after `min_land_distance_blocks` for ocean subs.
+pub const OCEAN_SUB_MIN_LAND_BLEND_DEFAULT_BLOCKS: f32 = 128.0;
 /// Edge noise parameters for sub-biome shapes.
 pub const SUB_EDGE_NOISE_FREQ: f32 = 0.02;
 pub const SUB_EDGE_NOISE_AMP: f32 = 0.06;
@@ -196,12 +200,24 @@ pub fn dominant_biome_at_p_chunks(
     // Coast/ocean override based on the better of two site scores.
     let s_for_coast = s0.min(s1);
     let t_ocean = smoothstep(1.0 - COAST_INSET_SCORE, 1.0 + COAST_BAND_SCORE, s_for_coast);
-    let ocean =
-        if let Some((b, _, _, _)) = best_land_and_ocean_sites(biomes, p_chunks, world_seed).1 {
-            b
-        } else {
-            any_ocean_biome(biomes).unwrap_or(land_mats)
-        };
+    let ocean = if let Some((b, ocean_pos, ocean_r, ocean_s)) =
+        best_land_and_ocean_sites(biomes, p_chunks, world_seed).1
+    {
+        let mut ocean_mats = b;
+        if b.stand_alone && ocean_s.is_finite() && ocean_s < SUB_COAST_LIMIT {
+            if let Some((sub_b, s_sub)) =
+                pick_sub_biome_in_host(biomes, b, ocean_pos, ocean_r, p_chunks, world_seed)
+            {
+                let core = sub_core_factor(s_sub);
+                if core > OCEAN_SUB_CORE_SWITCH {
+                    ocean_mats = sub_b;
+                }
+            }
+        }
+        ocean_mats
+    } else {
+        any_ocean_biome(biomes).unwrap_or(land_mats)
+    };
 
     if (1.0 - t_ocean) >= 0.5 {
         land_mats
@@ -446,6 +462,46 @@ pub fn best_second_land_site<'a>(
     best
 }
 
+/// Find the second-best *ocean* site distinct from `host_site_pos`.
+pub fn best_second_ocean_site<'a>(
+    biomes: &'a BiomeRegistry,
+    p_chunks: Vec2,
+    world_seed: i32,
+    host_site_pos: Vec2,
+) -> Option<(&'a Biome, Vec2, f32, f32)> {
+    let gx = (p_chunks.x.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
+    let gz = (p_chunks.y.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
+
+    let mut best: Option<(&'a Biome, Vec2, f32, f32)> = None;
+
+    for dz in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
+        for dx in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
+            let cx = gx + dx;
+            let cz = gz + dz;
+
+            let (site_pos, site_biome, site_radius) =
+                site_properties_for_cell(biomes, cx, cz, world_seed);
+
+            if !is_ocean_biome(site_biome) {
+                continue;
+            }
+            // Filter the exact same site (same center) as host.
+            if (site_pos - host_site_pos).length_squared() < 1e-6 {
+                continue;
+            }
+
+            let d = p_chunks.distance(site_pos);
+            let score = d / site_radius.max(1.0);
+
+            if best.map_or(true, |(_, _, _, s)| score < s) {
+                best = Some((site_biome, site_pos, site_radius, score));
+            }
+        }
+    }
+
+    best
+}
+
 /// Compute site position, chosen biome and radius for a cell.
 pub fn site_properties_for_cell(
     biomes: &BiomeRegistry,
@@ -581,6 +637,30 @@ fn pick_sub_biome_in_host_internal<'a>(
     if subs.is_empty() {
         return None;
     }
+    let host_is_ocean = is_ocean_biome(host);
+    let (nearest_land_edge_blocks, second_land_edge_blocks) = if host_is_ocean {
+        if let Some((_, land_pos, land_r, _)) = best_land_and_ocean_sites(biomes, p, world_seed).0 {
+            let dist_chunks = p.distance(land_pos);
+            let edge_dist_chunks = (dist_chunks - land_r).max(0.0);
+            let first = edge_dist_chunks * (CX as f32);
+
+            let second = if let Some((_, land2_pos, land2_r, _)) =
+                best_second_land_site(biomes, p, world_seed, land_pos)
+            {
+                let dist2_chunks = p.distance(land2_pos);
+                let edge2_dist_chunks = (dist2_chunks - land2_r).max(0.0);
+                edge2_dist_chunks * (CX as f32)
+            } else {
+                f32::INFINITY
+            };
+
+            (first, second)
+        } else {
+            (f32::INFINITY, f32::INFINITY)
+        }
+    } else {
+        (f32::INFINITY, f32::INFINITY)
+    };
 
     let mut best: Option<(&Biome, f32)> = None;
 
@@ -593,6 +673,48 @@ fn pick_sub_biome_in_host_internal<'a>(
             && sub.settings.mount_amp.is_none()
             && sub.settings.mount_freq.is_none()
         {
+            continue;
+        }
+        let ocean_land_distance_gate = if host_is_ocean {
+            if let Some(min_land_dist_blocks) = sub.settings.sub_min_land_distance_blocks {
+                let min_land_dist_blocks = min_land_dist_blocks.max(0.0);
+                if !min_land_dist_blocks.is_finite() || min_land_dist_blocks <= 0.0 {
+                    1.0
+                } else {
+                    let fade_blocks = sub
+                        .settings
+                        .sub_min_land_distance_blend_blocks
+                        .unwrap_or(OCEAN_SUB_MIN_LAND_BLEND_DEFAULT_BLOCKS);
+                    let fade_blocks = if fade_blocks.is_finite() {
+                        fade_blocks.max(1.0)
+                    } else {
+                        OCEAN_SUB_MIN_LAND_BLEND_DEFAULT_BLOCKS
+                    };
+                    let mut gate = smoothstep(
+                        min_land_dist_blocks,
+                        min_land_dist_blocks + fade_blocks,
+                        nearest_land_edge_blocks,
+                    );
+                    if second_land_edge_blocks.is_finite() {
+                        // Narrow sea between two land biomes should not immediately become deep ocean.
+                        let corridor_width_blocks =
+                            nearest_land_edge_blocks + second_land_edge_blocks;
+                        let corridor_gate = smoothstep(
+                            min_land_dist_blocks * 2.0,
+                            min_land_dist_blocks * 2.0 + fade_blocks,
+                            corridor_width_blocks,
+                        );
+                        gate *= corridor_gate;
+                    }
+                    gate
+                }
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        if ocean_land_distance_gate <= 0.0 {
             continue;
         }
 
@@ -619,7 +741,15 @@ fn pick_sub_biome_in_host_internal<'a>(
             let t_r = rand01(host_pos.x as i32 + k, host_pos.y as i32 - k, s_seed ^ 0xA1);
             let area_site = area_min + t_r * (area_max - area_min);
             let mut r_site = (area_site / std::f32::consts::PI).sqrt();
-            r_site = r_site.min(host_r * 0.75).max(4.0);
+            r_site = if host_is_ocean {
+                // Ocean subs should be broad fields, not tiny pockets, otherwise
+                // seafloor profiles change too quickly and create hard walls.
+                let ocean_min_r = (host_r * 0.35).max(18.0);
+                let ocean_max_r = (host_r * 0.92).max(ocean_min_r + 1.0);
+                r_site.clamp(ocean_min_r, ocean_max_r)
+            } else {
+                r_site.min(host_r * 0.75).max(4.0)
+            };
 
             // Bias placement toward mid/outer ring to reduce overlap with host center.
             let u = rand01(
@@ -627,10 +757,17 @@ fn pick_sub_biome_in_host_internal<'a>(
                 host_pos.y as i32 + 19 * k,
                 s_seed ^ 0xB7,
             );
-            let d_edge_bias = u.powf(0.25);
-            let max_d = (host_r - r_site).max(1.0);
-            let min_d = (0.55 * host_r).min(max_d);
-            let d = min_d + (max_d - min_d) * d_edge_bias;
+            let d = if host_is_ocean {
+                // Ocean subs (e.g. deep ocean) should prefer inner ocean areas,
+                // not only outer/coast rings.
+                let max_d = ((host_r - r_site).max(1.0) * 0.55).max(1.0);
+                u.powf(2.0) * max_d
+            } else {
+                let d_edge_bias = u.powf(0.25);
+                let max_d = (host_r - r_site).max(1.0);
+                let min_d = (0.55 * host_r).min(max_d);
+                min_d + (max_d - min_d) * d_edge_bias
+            };
 
             // Random angle with slight rotation per site index.
             let ang = (rand01(
@@ -642,7 +779,14 @@ fn pick_sub_biome_in_host_internal<'a>(
             let sub_pos = host_pos + Vec2::new(ang.cos(), ang.sin()) * d;
 
             // Score = normalized distance to the sub site.
-            let s = p.distance(sub_pos) / r_site.max(1.0);
+            let s_raw = p.distance(sub_pos) / r_site.max(1.0);
+            let s = if host_is_ocean && ocean_land_distance_gate < 1.0 {
+                // Near the land-distance threshold, softly down-weight ocean subs
+                // instead of creating a binary ocean/deep-ocean wall.
+                (s_raw + (1.0 - ocean_land_distance_gate) * 1.25).min(4.0)
+            } else {
+                s_raw
+            };
             if best.map_or(true, |(_, sb)| s < sb) {
                 best = Some((sub, s));
             }
@@ -842,14 +986,38 @@ pub fn supports_sub(host: &Biome, sub_name: &str) -> bool {
     if !host.stand_alone {
         return false;
     }
+    let needle = normalized_biome_lookup_key(sub_name);
     if let Some(list) = &host.subs {
         for s in list {
-            if s.eq_ignore_ascii_case(sub_name) {
+            if s.eq_ignore_ascii_case(sub_name)
+                || (!needle.is_empty() && normalized_biome_lookup_key(s.as_str()) == needle)
+            {
                 return true;
             }
         }
     }
     false
+}
+
+#[inline]
+fn normalized_biome_lookup_key(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut last_sep = false;
+    for ch in name.trim().chars() {
+        let is_sep = ch == '_' || ch == '-' || ch.is_whitespace();
+        if is_sep {
+            if !last_sep {
+                out.push('_');
+                last_sep = true;
+            }
+            continue;
+        }
+        for lc in ch.to_lowercase() {
+            out.push(lc);
+        }
+        last_sep = false;
+    }
+    out.trim_matches('_').to_string()
 }
 
 /// Case-insensitive lookup for dynamic sub-biome references.
@@ -858,8 +1026,12 @@ pub fn get_biome_case_insensitive<'a>(biomes: &'a BiomeRegistry, name: &str) -> 
     if let Some(b) = biomes.by_name.get(name) {
         return Some(b);
     }
+    let key = normalized_biome_lookup_key(name);
     for b in biomes.by_name.values() {
         if b.name.eq_ignore_ascii_case(name) {
+            return Some(b);
+        }
+        if !key.is_empty() && normalized_biome_lookup_key(b.name.as_str()) == key {
             return Some(b);
         }
     }

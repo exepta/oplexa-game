@@ -97,7 +97,13 @@ pub fn collect_creative_panel_item_ids(item_registry: &ItemRegistry) -> Vec<Item
         let Ok(item_id) = ItemId::try_from(raw) else {
             break;
         };
-        if item_id == EMPTY_ITEM_ID || item_registry.def_opt(item_id).is_none() {
+        let Some(item_def) = item_registry.def_opt(item_id) else {
+            continue;
+        };
+        if item_id == EMPTY_ITEM_ID {
+            continue;
+        }
+        if item_def.block_item && key_is_flow_variant(item_def.key.as_str()) {
             continue;
         }
         ids.push(item_id);
@@ -113,4 +119,12 @@ pub fn collect_creative_panel_item_ids(item_registry: &ItemRegistry) -> Vec<Item
             .then_with(|| left_def.localized_name.cmp(&right_def.localized_name))
     });
     ids
+}
+
+#[inline]
+fn key_is_flow_variant(key: &str) -> bool {
+    let Some((_, suffix)) = key.rsplit_once("_flow_") else {
+        return false;
+    };
+    !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit())
 }

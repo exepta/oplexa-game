@@ -99,6 +99,14 @@ fn try_resolve_slab_stack(
     // Rule: slab on slab should share one voxel slot whenever possible.
     let hit_existing_id = get_block_world(chunk_map, hit.block_pos);
     let hit_stacked_id = get_stacked_block_world(chunk_map, hit.block_pos);
+    if slab_cell_accepts_second_slab_in_waterlogged_cell(
+        hit_existing_id,
+        hit_stacked_id,
+        same_voxel_stack_id,
+        registry,
+    ) {
+        return Some((hit.block_pos, true));
+    }
     if slab_cell_accepts_second_slab_for_incoming(
         hit_existing_id,
         hit_stacked_id,
@@ -110,6 +118,14 @@ fn try_resolve_slab_stack(
 
     let place_existing_id = get_block_world(chunk_map, place_pos);
     let place_stacked_id = get_stacked_block_world(chunk_map, place_pos);
+    if slab_cell_accepts_second_slab_in_waterlogged_cell(
+        place_existing_id,
+        place_stacked_id,
+        adjacent_stack_id,
+        registry,
+    ) {
+        return Some((place_pos, false));
+    }
     if slab_cell_accepts_second_slab_for_incoming(
         place_existing_id,
         place_stacked_id,
@@ -157,9 +173,30 @@ fn slab_cell_accepts_second_slab_for_incoming(
 }
 
 #[inline]
+fn slab_cell_accepts_second_slab_in_waterlogged_cell(
+    existing_id: BlockId,
+    existing_stacked_id: BlockId,
+    incoming_id: BlockId,
+    registry: &BlockRegistry,
+) -> bool {
+    if !registry.is_fluid(existing_id) || existing_stacked_id == 0 {
+        return false;
+    }
+    slab_cell_accepts_second_slab_for_incoming(existing_stacked_id, 0, incoming_id, registry)
+}
+
+#[inline]
 fn slab_variant_from_block_id(block_id: BlockId, registry: &BlockRegistry) -> Option<SlabVariant> {
     let name = registry.name_opt(block_id)?;
     slab_variant_from_name(name)
+}
+
+#[inline]
+fn is_horizontal_slab_variant(block_id: BlockId, registry: &BlockRegistry) -> bool {
+    matches!(
+        slab_variant_from_block_id(block_id, registry),
+        Some(SlabVariant::Bottom | SlabVariant::Top)
+    )
 }
 
 fn resolve_slab_variant_for_click(
@@ -423,7 +460,7 @@ fn remove_hit_block_occupant(
     true
 }
 
-/// Checks whether place from selected slot in the `logic::events::block_event_handler` module.
+/// Returns whether the selected inventory source can place `block_id`.
 fn can_place_from_selected_slot(
     inventory: &PlayerInventory,
     hotbar_selection: Option<&HotbarSelectionState>,
@@ -457,7 +494,7 @@ fn can_place_from_selected_slot(
     })
 }
 
-/// Runs the `consume_from_selected_slot` routine for consume from selected slot in the `logic::events::block_event_handler` module.
+/// Consumes one placeable item for `block_id` from the selected source.
 fn consume_from_selected_slot(
     inventory: &mut PlayerInventory,
     hotbar_selection: Option<&HotbarSelectionState>,
@@ -537,7 +574,7 @@ fn selected_hotbar_item_id(
     Some(slot.item_id)
 }
 
-/// Runs the `selected_hotbar_tool` routine for selected hotbar tool in the `logic::events::block_event_handler` module.
+/// Resolves the currently selected hotbar tool, if any.
 fn selected_hotbar_tool(
     inventory: &PlayerInventory,
     hotbar_selection: Option<&HotbarSelectionState>,

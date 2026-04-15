@@ -5,6 +5,7 @@
   "texture": {
     "all": "stone"
   },
+  "water_logged": true,
   "stats": {
     "hardness": 4.5,
     "blast_resistance": 3.5,

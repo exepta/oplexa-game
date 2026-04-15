@@ -7,7 +7,9 @@ use crate::core::entities::player::block_selection::SelectionState;
 use crate::core::entities::player::inventory::{
     InventorySlot, PLAYER_INVENTORY_SLOTS, PLAYER_INVENTORY_STACK_MAX, PlayerInventory,
 };
-use crate::core::entities::player::{FpsController, GameMode, GameModeState, Player};
+use crate::core::entities::player::{
+    FlightState, FpsController, GameMode, GameModeState, Player, PlayerCamera,
+};
 use crate::core::events::ui_events::{
     ConnectToServerRequest, CraftHandCraftedRequest, CraftWorkTableRequest,
     DisconnectFromServerRequest, DropItemRequest, OpenStructureBuildMenuRequest,
@@ -47,9 +49,6 @@ use crate::generator::chunk::chunk_builder::{
     ChunkStageTelemetry, ColliderBacklog, PendingColliderBuild,
 };
 use crate::generator::chunk::chunk_struct::{MeshBacklog, PendingGen, PendingMesh};
-use crate::generator::chunk::water_builder::{
-    PendingWaterLoad, PendingWaterMesh, WaterMeshBacklog, WaterMeshingTodo, WaterReadySet,
-};
 use crate::utils::key_utils::convert;
 use api::core::network::config::NetworkSettings;
 use api::core::network::discovery::{LanDiscoveryClient, LanServerInfo};
@@ -100,6 +99,9 @@ const CREATE_WORLD_NAME_INPUT_ID: &str = "create-world-name-input";
 const CREATE_WORLD_SEED_INPUT_ID: &str = "create-world-seed-input";
 const CREATE_WORLD_CREATE_ID: &str = "create-world-create";
 const CREATE_WORLD_ABORT_ID: &str = "create-world-abort";
+const BENCHMARK_DIALOG_TEXT_ID: &str = "benchmark-dialog-text";
+const BENCHMARK_DIALOG_START_ID: &str = "benchmark-dialog-start";
+const BENCHMARK_DIALOG_ABORT_ID: &str = "benchmark-dialog-abort";
 
 const MULTIPLAYER_CARD_PREFIX: &str = "multi-player-server-card-";
 const MULTIPLAYER_JOIN_ID: &str = "multi-player-join-server";
@@ -190,6 +192,7 @@ const ID_BUILD: &str = "debug-build";
 const ID_CPU_NAME: &str = "debug-cpu-name";
 const ID_GPU_NAME: &str = "debug-gpu-name";
 const ID_GPU_LOAD: &str = "debug-gpu-load";
+const ID_GPU_CLOCK: &str = "debug-gpu-clock";
 const ID_VRAM: &str = "debug-vram";
 const ID_BIOME: &str = "debug-biome";
 const ID_BIOME_CLIMATE: &str = "debug-biome-climate";
@@ -197,6 +200,9 @@ const ID_GLOBAL_CPU: &str = "debug-global-cpu";
 const ID_APP_CPU: &str = "debug-app-cpu";
 const ID_APP_MEM: &str = "debug-app-mem";
 const ID_FPS: &str = "debug-fps";
+const ID_FPS_LOW: &str = "debug-fps-low";
+const ID_STREAM_DECODE_QUEUE: &str = "debug-stream-decode-queue";
+const ID_STREAM_REMESH_QUEUE: &str = "debug-stream-remesh-queue";
 const ID_TICK_SPEED: &str = "debug-tick-speed";
 const ID_LOOK_BLOCK: &str = "debug-look-block";
 const ID_PLAYER_POS: &str = "debug-player-pos";
@@ -346,6 +352,21 @@ struct CreativePanelGridRoot;
 /// Represents debug overlay root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct DebugOverlayRoot;
+/// Represents benchmark border root used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct BenchmarkBorderRoot;
+/// Represents benchmark menu dialog root used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct BenchmarkMenuDialogRoot;
+/// Represents benchmark menu dialog text used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct BenchmarkMenuDialogText;
+/// Represents benchmark automation timer root used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct BenchmarkAutomationTimerRoot;
+/// Represents benchmark automation timer text used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct BenchmarkAutomationTimerText;
 
 /// Defines the possible ui button kind variants in the `graphic::hardcoded_ui` module.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -457,6 +478,11 @@ impl Default for HotbarSelectionTooltipState {
 struct RuntimePerfSampleState {
     last_local_tick: Option<Tick>,
     last_sample_real_secs: Option<f64>,
+    fps_window_secs: f32,
+    fps_window_sum: f32,
+    fps_window_count: u32,
+    low_window_secs: f32,
+    low_window_fps_samples: Vec<f32>,
 }
 
 /// Represents world unload ui state used by the `graphic::hardcoded_ui` module.
@@ -598,6 +624,7 @@ struct CreativePanelUiState {
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct DebugVramState {
     bytes: Option<u64>,
+    total_bytes: Option<u64>,
     source: Option<&'static str>,
     scope: Option<&'static str>,
 }
@@ -606,6 +633,14 @@ struct DebugVramState {
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct DebugGpuLoadState {
     percent: Option<f32>,
+    source: Option<&'static str>,
+    scope: Option<&'static str>,
+}
+
+/// Represents debug gpu clock state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+struct DebugGpuClockState {
+    hz: Option<u64>,
     source: Option<&'static str>,
     scope: Option<&'static str>,
 }
@@ -635,6 +670,19 @@ struct SinglePlayerUiState {
     pending_delete_index: Option<usize>,
     last_card_click: Option<(usize, f64)>,
     closing_for_world_load: bool,
+}
+
+/// Represents benchmark automation runtime state used by the `graphic::hardcoded_ui` module.
+#[derive(Resource, Debug, Default)]
+struct BenchmarkAutomationState {
+    dialog_open: bool,
+    active_world: Option<SavedWorldEntry>,
+    session_started_elapsed_secs: Option<f64>,
+    measure_started_elapsed_secs: Option<f64>,
+    warmup_duration_secs: f64,
+    run_duration_secs: f64,
+    abort_requested: bool,
+    cleanup_pending_world_path: Option<PathBuf>,
 }
 
 /// Represents world meta used by the `graphic::hardcoded_ui` module.
@@ -827,8 +875,10 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<ChatUiState>()
             .init_resource::<DebugVramState>()
             .init_resource::<DebugGpuLoadState>()
+            .init_resource::<DebugGpuClockState>()
             .init_resource::<SinglePlayerUiState>()
             .init_resource::<MultiplayerUiState>()
+            .init_resource::<BenchmarkAutomationState>()
             .init_resource::<DebugOverlayState>()
             .init_resource::<DebugGridState>()
             .init_resource::<SysStats>()
@@ -839,6 +889,7 @@ impl Plugin for HardcodedUiPlugin {
             .init_resource::<ChunkDebugStats>()
             .init_resource::<WorldGenProgressLogState>()
             .init_resource::<ActiveInventorySavePath>()
+            .init_resource::<BenchmarkRuntime>()
             .insert_non_send_resource(ServerProbeRuntime::default())
             .add_plugins(ExtendedUiPlugin)
             .configure_sets(
@@ -886,7 +937,14 @@ impl Plugin for HardcodedUiPlugin {
             )
             .add_systems(
                 Update,
-                (set_menu_cursor, handle_main_menu_buttons)
+                (
+                    set_menu_cursor,
+                    toggle_benchmark_menu_dialog,
+                    handle_benchmark_menu_dialog_buttons,
+                    sync_benchmark_menu_dialog,
+                    cleanup_benchmark_temp_world_if_needed,
+                    handle_main_menu_buttons,
+                )
                     .chain()
                     .run_if(in_state(AppState::Screen(BeforeUiState::Menu))),
             )
@@ -956,7 +1014,7 @@ impl Plugin for HardcodedUiPlugin {
                     .chain(),
             )
             .add_systems(
-                OnExit(AppState::Loading(LoadingStates::WaterGen)),
+                OnExit(AppState::Loading(LoadingStates::CaveGen)),
                 hide_world_gen_ui,
             )
             .add_systems(
@@ -1095,6 +1153,18 @@ impl Plugin for HardcodedUiPlugin {
             .add_systems(
                 Update,
                 (
+                    run_benchmark_automation,
+                    toggle_benchmark,
+                    sample_benchmark_runtime,
+                    sync_benchmark_border,
+                    sync_benchmark_automation_timer,
+                )
+                    .chain()
+                    .run_if(in_state(AppState::InGame(InGameStates::Game))),
+            )
+            .add_systems(
+                Update,
+                (
                     toggle_system_last_ui,
                     sample_runtime_perf_stats,
                     sample_chunk_debug_stats,
@@ -1106,6 +1176,14 @@ impl Plugin for HardcodedUiPlugin {
         app.add_systems(
             OnExit(AppState::InGame(InGameStates::Game)),
             close_system_last_ui,
+        );
+        app.add_systems(
+            OnExit(AppState::InGame(InGameStates::Game)),
+            force_stop_benchmark_on_game_exit,
+        );
+        app.add_systems(
+            OnExit(AppState::InGame(InGameStates::Game)),
+            reset_benchmark_automation_on_world_exit,
         );
     }
 }
@@ -1127,6 +1205,8 @@ include!("components/workbench.rs");
 include!("components/inventory_persistence.rs");
 include!("components/ui_interaction_sync.rs");
 include!("components/debug_overlay.rs");
+include!("components/benchmark_auto.rs");
+include!("components/benchmark.rs");
 
 /// Runs the `bytes_to_mib` routine for bytes to mib in the `graphic::hardcoded_ui` module.
 #[inline]

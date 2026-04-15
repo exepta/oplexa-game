@@ -10,6 +10,7 @@
 /saves/
 /worlds/
 /dist/
+benchmark-*.txt
 server.settings.toml
 
 # OS

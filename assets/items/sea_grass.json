@@ -1,0 +1,19 @@
+{
+  "localized_name": "oplexa:sea_grass",
+  "name": "KEY_SEA_GRASS",
+  "max_stack_size": -1,
+  "category": "nature",
+  "block_item": true,
+  "placeable": true,
+  "block": "sea_grass_block",
+  "tags": ["block", "prop", "nature", "water", "plant"],
+  "rarity": "common",
+  "texture": "textures/blocks/sea_grass/sea_grass.png",
+  "render": {
+    "type": "flat",
+    "texture": "textures/blocks/sea_grass/sea_grass.png"
+  },
+  "world_drop": {
+    "pickupable": true
+  }
+}

@@ -3,9 +3,10 @@ use crate::core::world::biome::func::*;
 use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::{BlockId, BlockRegistry};
 use crate::core::world::chunk::{ChunkData, SEA_LEVEL};
-use crate::core::world::chunk_dimension::{CX, CY, CZ, Y_MAX, Y_MIN};
+use crate::core::world::chunk_dimension::{CX, CY, CZ, Y_MAX, Y_MIN, world_y_to_local};
 use crate::generator::chunk::cave_utils::{CaveParams, worm_edits_for_chunk};
 use crate::generator::chunk::chunk_utils::map01;
+use crate::generator::chunk::fluid::fluid_gen::apply_settled_water_worldgen;
 use crate::generator::chunk::river_utils::RiverSystem;
 use crate::generator::chunk::trees::registry::TreeRegistry;
 use crate::generator::chunk::trees::tree_gen::populate_trees_in_chunk;
@@ -13,6 +14,16 @@ use crate::generator::chunk::vegetation::prop_gen::populate_vegetation_props_in_
 use bevy::prelude::*;
 use fastnoise_lite::*;
 /* ========================= Generator =================================== */
+
+const OCEAN_CAVE_MIN_ROOF_THICKNESS_BLOCKS: usize = 9;
+const OCEAN_CAVE_MAX_WORLD_Y: i32 = 20;
+const OCEAN_SURFACE_FLUID_SCAN_UP_BLOCKS: usize = 2;
+const OCEAN_SUB_BLEND_START: f32 = 0.00;
+const OCEAN_SUB_BLEND_END: f32 = 0.94;
+const OCEAN_SUB_HEIGHT_BLEND_STRENGTH: f32 = 0.74;
+const OCEAN_SUB_HEIGHT_MAX_DELTA: f32 = 28.0;
+const OPEN_OCEAN_SURFACE_CAP_START: f32 = 0.50;
+const OPEN_OCEAN_SURFACE_CAP_END: f32 = 0.78;
 
 /// Generates chunk async biome for the `generator::chunk::chunk_gen` module.
 pub(crate) async fn generate_chunk_async_biome(
@@ -48,6 +59,7 @@ pub(crate) async fn generate_chunk_async_biome(
 
     let pick_seed: u32 = (cfg_seed as u32) ^ 0x0CE4_11CE;
     let mut chunk = ChunkData::new();
+    let mut ocean_like_columns = 0usize;
 
     // --- Rivers: init once per chunk -------------------------------------
     // Deterministic river system, fed by world seed.
@@ -288,20 +300,75 @@ pub(crate) async fn generate_chunk_async_biome(
             // Choose materials from whichever land site dominates locally
             let land_biome_for_materials = if w0 >= w1 { mats0 } else { mats1 };
 
-            // Ocean biome/materials (fallback to any ocean or current land materials)
-            let ocean_biome = if let Some((b, _p, _r, _s)) = best_ocean {
-                b
-            } else {
-                any_ocean_biome(biomes).unwrap_or(land_biome_for_materials)
-            };
+            // Blend two nearest ocean sites (like land-site blending) to avoid ocean-site seam walls.
+            let (ocean_biome, h_ocean) = if let Some((b0, p0, r0, s_ocean0)) = best_ocean {
+                let (ocean_mat0, h_ocean0) = resolve_ocean_site_profile(
+                    biomes,
+                    b0,
+                    p0,
+                    r0,
+                    s_ocean0,
+                    p_chunks,
+                    cfg_seed,
+                    &seafloor_n,
+                    &seafloor_mat_n,
+                    &seafloor_mat_d,
+                    wxf,
+                    wzf,
+                );
+                if let Some((b1, p1, r1, s_ocean1)) =
+                    best_second_ocean_site(biomes, p_chunks, cfg_seed, p0)
+                {
+                    let (ocean_mat1, h_ocean1) = resolve_ocean_site_profile(
+                        biomes,
+                        b1,
+                        p1,
+                        r1,
+                        s_ocean1,
+                        p_chunks,
+                        cfg_seed,
+                        &seafloor_n,
+                        &seafloor_mat_n,
+                        &seafloor_mat_d,
+                        wxf,
+                        wzf,
+                    );
+                    let ow0 = land_weight_from_score(s_ocean0);
+                    let ow1 = land_weight_from_score(s_ocean1);
+                    let ow_sum = (ow0 + ow1).max(1e-6);
+                    let t01_o = (ow1 / ow_sum).clamp(0.0, 1.0);
+                    let t_soft_o = smoothstep(0.02, 0.98, t01_o);
+                    let h_blend_o = lerp(h_ocean0, h_ocean1, t_soft_o);
 
-            // Ocean height from ocean biome settings
-            let h_ocean = {
-                let amp = ocean_biome.settings.seafloor_amp.unwrap_or(OCEAN_AMP);
-                let off = ocean_biome.settings.height_offset;
-                let freq = ocean_biome.settings.seafloor_freq.unwrap_or(OCEAN_FREQ);
-                let freq_scale = (freq / OCEAN_FREQ).clamp(0.2, 4.0);
-                sample_ocean_height(&seafloor_n, wxf, wzf, SEA_LEVEL, off, amp, freq_scale)
+                    let h_diff_o = (h_ocean0 - h_ocean1).abs();
+                    let boundary_o = (1.0 - (t01_o - 0.5).abs() * 2.0).clamp(0.0, 1.0);
+                    let soften_o =
+                        (0.56 * smoothstep(4.0, 120.0, h_diff_o) * boundary_o * boundary_o)
+                            .clamp(0.0, 0.56);
+                    let h_mean_o = (h_ocean0 + h_ocean1) * 0.5;
+                    let h_ocean_final = lerp(h_blend_o, h_mean_o, soften_o);
+                    let ocean_mat = if ow0 >= ow1 { ocean_mat0 } else { ocean_mat1 };
+                    (ocean_mat, h_ocean_final)
+                } else {
+                    (ocean_mat0, h_ocean0)
+                }
+            } else {
+                let fallback_ocean = any_ocean_biome(biomes).unwrap_or(land_biome_for_materials);
+                let (_, h_fallback) = resolve_ocean_site_profile(
+                    biomes,
+                    fallback_ocean,
+                    Vec2::ZERO,
+                    1.0,
+                    f32::INFINITY,
+                    p_chunks,
+                    cfg_seed,
+                    &seafloor_n,
+                    &seafloor_mat_n,
+                    &seafloor_mat_d,
+                    wxf,
+                    wzf,
+                );
+                (fallback_ocean, h_fallback)
             };
 
             // Coast mask: only fade to ocean if outside *all* land regions
@@ -313,13 +380,22 @@ pub(crate) async fn generate_chunk_async_biome(
                 1.0 + COAST_BAND_SCORE + coast_offset,
                 s_for_coast,
             );
+            if t_ocean >= 0.58 {
+                ocean_like_columns += 1;
+            }
             let t_land = 1.0 - t_ocean;
 
             // Final height with optional sea floor clamp near open ocean
             let mut h_f =
                 lerp(h_land, h_ocean, t_ocean).clamp((Y_MIN + 1) as f32, (SEA_LEVEL + 170) as f32);
-            if t_ocean > 0.55 {
-                h_f = h_f.min((SEA_LEVEL - 1) as f32);
+            let open_ocean = smoothstep(
+                OPEN_OCEAN_SURFACE_CAP_START,
+                OPEN_OCEAN_SURFACE_CAP_END,
+                t_ocean,
+            );
+            let sea_cap = (SEA_LEVEL - 1) as f32;
+            if h_f > sea_cap && open_ocean > 0.0 {
+                h_f = lerp(h_f, sea_cap, open_ocean);
             }
             let mut river_tunnel_weight = 0.0f32;
             let mut river_tunnel_center_y = SEA_LEVEL - 6;
@@ -703,10 +779,111 @@ pub(crate) async fn generate_chunk_async_biome(
         }
     }
 
-    carve_caves_into_chunk(&mut chunk, coord, cfg_seed, id_air, id_water, id_border);
+    let ocean_ratio = ocean_like_columns as f32 / (CX * CZ) as f32;
+    carve_caves_into_chunk(
+        &mut chunk,
+        coord,
+        cfg_seed,
+        id_air,
+        id_border,
+        ocean_ratio,
+        reg,
+    );
+    apply_settled_water_worldgen(&mut chunk, reg);
     populate_trees_in_chunk(&mut chunk, coord, reg, biomes, trees, cfg_seed);
     populate_vegetation_props_in_chunk(&mut chunk, coord, reg, biomes, cfg_seed);
     chunk
+}
+
+#[inline]
+fn resolve_ocean_site_profile<'a>(
+    biomes: &'a BiomeRegistry,
+    host_biome: &'a Biome,
+    host_pos: Vec2,
+    host_r: f32,
+    host_score: f32,
+    p_chunks: Vec2,
+    world_seed: i32,
+    seafloor_n: &FastNoiseLite,
+    seafloor_mat_n: &FastNoiseLite,
+    seafloor_mat_d: &FastNoiseLite,
+    wxf: f32,
+    wzf: f32,
+) -> (&'a Biome, f32) {
+    let sample_ocean_profile = |biome: &Biome| -> f32 {
+        let amp = biome.settings.seafloor_amp.unwrap_or(OCEAN_AMP);
+        let off = biome.settings.height_offset;
+        let freq = biome.settings.seafloor_freq.unwrap_or(OCEAN_FREQ);
+        let freq_scale = (freq / OCEAN_FREQ).clamp(0.2, 4.0);
+        sample_ocean_height(seafloor_n, wxf, wzf, SEA_LEVEL, off, amp, freq_scale)
+    };
+
+    let mut sub_pick: Option<&Biome> = None;
+    let mut sub_core = 0.0f32;
+    if host_biome.stand_alone && host_score.is_finite() && host_score < SUB_COAST_LIMIT {
+        if let Some((sub_b, s_sub)) =
+            pick_sub_biome_in_host(biomes, host_biome, host_pos, host_r, p_chunks, world_seed)
+        {
+            let core = sub_core_factor(s_sub);
+            // Keep ocean-sub selection continuous: no hard switch threshold here.
+            sub_pick = Some(sub_b);
+            sub_core = core;
+        }
+    }
+
+    let ocean_sub_mix = smoothstep(OCEAN_SUB_BLEND_START, OCEAN_SUB_BLEND_END, sub_core);
+    let mat_biome = if let Some(sub_b) = sub_pick {
+        if ocean_sub_mix > 0.42 {
+            sub_b
+        } else {
+            host_biome
+        }
+    } else {
+        host_biome
+    };
+
+    let h_ocean_host = sample_ocean_profile(host_biome);
+    let h_site = if let Some(sub_b) = sub_pick {
+        let h_ocean_sub = sample_ocean_profile(sub_b);
+        let t_sub = smoothstep(0.04, 0.99, ocean_sub_mix);
+        let t_sub_height = (t_sub * OCEAN_SUB_HEIGHT_BLEND_STRENGTH).clamp(0.0, 1.0);
+        let t_sub_height_smooth = t_sub_height.powf(1.35);
+        let mut h_sub_blend = lerp(h_ocean_host, h_ocean_sub, t_sub_height_smooth);
+        let delta_limit = lerp(2.0, OCEAN_SUB_HEIGHT_MAX_DELTA, t_sub_height_smooth);
+        let delta = (h_sub_blend - h_ocean_host).clamp(-delta_limit, delta_limit);
+        h_sub_blend = h_ocean_host + delta;
+
+        let sub_is_deep_ocean = sub_b.localized_name.contains("deep_ocean")
+            || sub_b.name.eq_ignore_ascii_case("deep ocean")
+            || sub_b.name.eq_ignore_ascii_case("deep_ocean");
+        if sub_is_deep_ocean {
+            // Extra trench/ridge shaping for deep ocean. We fade this in with sub-core
+            // so ocean -> deep_ocean transitions stay smooth.
+            let core = t_sub_height_smooth * t_sub_height_smooth;
+            let ridge = (1.0
+                - seafloor_mat_n
+                    .get_noise_2d(wxf * 1.45 + 19.4, wzf * 1.45 - 13.7)
+                    .abs())
+            .clamp(0.0, 1.0);
+            let basin = map01(seafloor_mat_d.get_noise_2d(wxf * 0.78 - 83.2, wzf * 0.78 + 57.9));
+            let shard = map01(seafloor_mat_d.get_noise_2d(wxf * 1.35 + 41.3, wzf * 1.35 - 28.6));
+            let rugged = (0.58 * ridge + 0.30 * basin + 0.12 * shard).clamp(0.0, 1.0);
+            let extra_depth = (2.5 + rugged.powf(1.62) * 14.5) * core;
+            let jagged = ((shard - 0.5) * 2.0) * 1.4 * core;
+            h_sub_blend =
+                clamp_world_y(h_sub_blend - extra_depth + jagged).min((SEA_LEVEL - 3) as f32);
+        }
+
+        let h_diff = (h_ocean_host - h_ocean_sub).abs();
+        let boundary = (1.0 - (t_sub_height - 0.5).abs() * 2.0).clamp(0.0, 1.0);
+        let soften = (0.38 * smoothstep(6.0, 86.0, h_diff) * boundary * boundary).clamp(0.0, 0.38);
+        let h_mean = (h_ocean_host + h_ocean_sub) * 0.5;
+        lerp(h_sub_blend, h_mean, soften)
+    } else {
+        h_ocean_host
+    };
+
+    (mat_biome, h_site)
 }
 
 #[inline]
@@ -753,15 +930,71 @@ fn default_cave_params(seed: i32) -> CaveParams {
 }
 
 #[inline]
+fn ocean_tuned_cave_params(seed: i32, ocean_ratio: f32) -> CaveParams {
+    let mut params = default_cave_params(seed);
+    let t = smoothstep(0.52, 0.90, ocean_ratio.clamp(0.0, 1.0));
+    if t <= 0.0 {
+        return params;
+    }
+
+    let lerp_i = |a: i32, b: i32| -> i32 { (a as f32 + (b - a) as f32 * t).round() as i32 };
+
+    // Ocean chunks: drive caves deeper and drastically reduce near-surface entries.
+    params.y_top = lerp_i(params.y_top, 26);
+    params.cavern_y_top = lerp_i(params.cavern_y_top, -28);
+    params.mega_y_top = lerp_i(params.mega_y_top, -44);
+    params.entrance_chance = (params.entrance_chance * (1.0 - 0.82 * t)).clamp(0.02, 1.0);
+    params.worms_per_region *= 1.0 - 0.18 * t;
+    params
+}
+
+#[inline]
 fn carve_caves_into_chunk(
     chunk: &mut ChunkData,
     coord: IVec2,
     seed: i32,
     id_air: BlockId,
-    id_water: BlockId,
     id_border: BlockId,
+    ocean_ratio: f32,
+    reg: &BlockRegistry,
 ) {
-    let params = default_cave_params(seed);
+    let absolute_underwater_cap_ly =
+        (OCEAN_CAVE_MAX_WORLD_Y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+    let sea_ly = world_y_to_local(SEA_LEVEL).min(CY - 1);
+    let scan_top = (sea_ly + OCEAN_SURFACE_FLUID_SCAN_UP_BLOCKS).min(CY - 1);
+    let mut ocean_carve_caps = vec![None; CX * CZ];
+    for z in 0..CZ {
+        for x in 0..CX {
+            let mut has_surface_water = false;
+            for ly in sea_ly..=scan_top {
+                let id = chunk.get(x, ly, z);
+                if id != 0 && reg.is_fluid(id) {
+                    has_surface_water = true;
+                    break;
+                }
+            }
+            if !has_surface_water {
+                continue;
+            }
+
+            let mut seafloor_ly = None;
+            for ly in (0..=sea_ly).rev() {
+                let id = chunk.get(x, ly, z);
+                if id != 0 && !reg.is_fluid(id) {
+                    seafloor_ly = Some(ly);
+                    break;
+                }
+            }
+            let Some(seafloor_ly) = seafloor_ly else {
+                continue;
+            };
+
+            let seafloor_cap_ly = seafloor_ly.saturating_sub(OCEAN_CAVE_MIN_ROOF_THICKNESS_BLOCKS);
+            ocean_carve_caps[z * CX + x] = Some(seafloor_cap_ly.min(absolute_underwater_cap_ly));
+        }
+    }
+
+    let params = ocean_tuned_cave_params(seed, ocean_ratio);
     let edits = worm_edits_for_chunk(
         &params,
         coord,
@@ -773,8 +1006,16 @@ fn carve_caves_into_chunk(
         let x = lx as usize;
         let y = ly as usize;
         let z = lz as usize;
+        if x >= CX || y >= CY || z >= CZ {
+            continue;
+        }
+        if let Some(max_carve_ly) = ocean_carve_caps[z * CX + x]
+            && y > max_carve_ly
+        {
+            continue;
+        }
         let cur = chunk.get(x, y, z);
-        if cur != 0 && cur != id_water && cur != id_border {
+        if cur != 0 && cur != id_border && !reg.is_fluid(cur) {
             chunk.set(x, y, z, id_air);
         }
     }

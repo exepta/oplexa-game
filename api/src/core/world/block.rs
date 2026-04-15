@@ -57,6 +57,20 @@ pub struct ConnectedTextureDef {
     pub edge_clip_uv: f32,
 }
 
+/// Optional fluid-flow runtime settings for one source block.
+#[derive(Clone, Copy, Debug)]
+pub struct FluidFlowDef {
+    pub step_ms: f32,
+}
+
+/// Placement/runtime environment restrictions for one block.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlockEnvironment {
+    Water,
+    Overworld,
+    Cave,
+}
+
 /// Represents block def used by the `core::world::block` module.
 #[derive(Clone)]
 pub struct BlockDef {
@@ -75,6 +89,9 @@ pub struct BlockDef {
     pub uv_south: UvRect,
     pub uv_west: UvRect,
     pub connected_texture: Option<ConnectedTextureDef>,
+    pub fluid_flow: Option<FluidFlowDef>,
+    pub water_logged: bool,
+    pub allowed_environments: Vec<BlockEnvironment>,
     pub image: Handle<Image>,
     pub material: Handle<StandardMaterial>,
 }
@@ -93,6 +110,8 @@ pub struct BlockStats {
     pub opaque: bool,
     #[serde(default)]
     pub fluid: bool,
+    #[serde(default)]
+    pub fluid_level: u8,
     #[serde(default)]
     pub foliage: bool,
     #[serde(default = "d_true")]
@@ -319,6 +338,16 @@ impl BlockRegistry {
     pub fn is_fluid(&self, id: BlockId) -> bool {
         self.stats(id).fluid
     }
+    /// Returns fluid fill level (0..10). Non-fluid blocks always return 0.
+    #[inline]
+    pub fn fluid_level(&self, id: BlockId) -> u8 {
+        self.stats(id).fluid_level
+    }
+    /// Returns optional fluid-flow settings for one source block.
+    #[inline]
+    pub fn fluid_flow(&self, id: BlockId) -> Option<FluidFlowDef> {
+        self.def(id).fluid_flow
+    }
     /// Checks whether this block has a prop render definition.
     #[inline]
     pub fn is_prop(&self, id: BlockId) -> bool {
@@ -339,6 +368,16 @@ impl BlockRegistry {
             return false;
         };
         prop.allows_ground_name(ground_name)
+    }
+    /// Returns whether this block can coexist with water inside one voxel.
+    #[inline]
+    pub fn is_water_logged(&self, id: BlockId) -> bool {
+        self.def(id).water_logged
+    }
+    /// Returns configured allowed environments for this block.
+    #[inline]
+    pub fn allowed_environments(&self, id: BlockId) -> &[BlockEnvironment] {
+        self.def(id).allowed_environments.as_slice()
     }
     /// Returns true when this block should use the render mesh for collision.
     #[inline]
@@ -467,6 +506,9 @@ impl BlockRegistry {
             uv_south: Z,
             uv_west: Z,
             connected_texture: None,
+            fluid_flow: None,
+            water_logged: false,
+            allowed_environments: Vec::new(),
             image: Handle::default(),
             material: Handle::default(),
         });
@@ -478,6 +520,10 @@ impl BlockRegistry {
                 normalize_block_identity(&block_json.localized_name, &block_json.name);
             let collider = block_json.collider.sanitized();
             let mining_wobble = block_json.mining_wobble.sanitized();
+            let stats = normalize_block_stats(block_json.stats);
+            let fluid_flow = resolve_fluid_flow(block_json.fluid_flow.as_ref(), &stats);
+            let allowed_environments =
+                sanitize_allowed_environments(block_json.allowed_environments.as_slice());
             let tex_dir = block_json
                 .texture_dir
                 .clone()
@@ -521,7 +567,7 @@ impl BlockRegistry {
                 &localized_name,
             );
 
-            let (alpha_mode, base_color) = material_policy_from_stats(&block_json.stats);
+            let (alpha_mode, base_color) = material_policy_from_stats(&stats);
 
             let material = materials.add(StandardMaterial {
                 base_color_texture: Some(image.clone()),
@@ -541,7 +587,7 @@ impl BlockRegistry {
                 name: display_name,
                 mesh_visible: true,
                 overridable: block_json.overridable,
-                stats: block_json.stats,
+                stats,
                 mining_wobble,
                 prop: block_json.prop.map(PropDefinition::sanitized),
                 collider,
@@ -552,10 +598,14 @@ impl BlockRegistry {
                 uv_south,
                 uv_west,
                 connected_texture,
+                fluid_flow,
+                water_logged: block_json.water_logged,
+                allowed_environments,
                 image,
                 material,
             });
             append_auto_slab_variants(&mut defs, &mut name_to_id, id);
+            append_auto_fluid_flow_variants(&mut defs, &mut name_to_id, id);
         }
 
         Self { defs, name_to_id }
@@ -582,6 +632,9 @@ impl BlockRegistry {
             uv_south: Z,
             uv_west: Z,
             connected_texture: None,
+            fluid_flow: None,
+            water_logged: false,
+            allowed_environments: Vec::new(),
             image: Handle::default(),
             material: Handle::default(),
         });
@@ -593,6 +646,10 @@ impl BlockRegistry {
                 normalize_block_identity(&block_json.localized_name, &block_json.name);
             let collider = block_json.collider.sanitized();
             let mining_wobble = block_json.mining_wobble.sanitized();
+            let stats = normalize_block_stats(block_json.stats);
+            let fluid_flow = resolve_fluid_flow(block_json.fluid_flow.as_ref(), &stats);
+            let allowed_environments =
+                sanitize_allowed_environments(block_json.allowed_environments.as_slice());
             let id = defs.len() as BlockId;
             name_to_id.insert(localized_name.clone(), id);
             defs.push(BlockDef {
@@ -600,7 +657,7 @@ impl BlockRegistry {
                 name: display_name,
                 mesh_visible: true,
                 overridable: block_json.overridable,
-                stats: block_json.stats,
+                stats,
                 mining_wobble,
                 prop: block_json.prop.map(PropDefinition::sanitized),
                 collider,
@@ -611,10 +668,14 @@ impl BlockRegistry {
                 uv_south: Z,
                 uv_west: Z,
                 connected_texture: None,
+                fluid_flow,
+                water_logged: block_json.water_logged,
+                allowed_environments,
                 image: Handle::default(),
                 material: Handle::default(),
             });
             append_auto_slab_variants(&mut defs, &mut name_to_id, id);
+            append_auto_fluid_flow_variants(&mut defs, &mut name_to_id, id);
         }
 
         Self { defs, name_to_id }
@@ -629,6 +690,7 @@ impl BlockRegistry {
         name: &str,
         stats: BlockStats,
     ) -> BlockId {
+        let stats = normalize_block_stats(stats);
         let normalized_localized_name = normalize_runtime_block_localized_name(localized_name);
         if let Some(existing) = self.id_opt(normalized_localized_name.as_str()) {
             return existing;
@@ -683,6 +745,9 @@ impl BlockRegistry {
             uv_south: Z,
             uv_west: Z,
             connected_texture: None,
+            fluid_flow: None,
+            water_logged: false,
+            allowed_environments: Vec::new(),
             image,
             material,
         });
@@ -696,6 +761,7 @@ impl BlockRegistry {
         name: &str,
         stats: BlockStats,
     ) -> BlockId {
+        let stats = normalize_block_stats(stats);
         let normalized_localized_name = normalize_runtime_block_localized_name(localized_name);
         if let Some(existing) = self.id_opt(normalized_localized_name.as_str()) {
             return existing;
@@ -738,6 +804,9 @@ impl BlockRegistry {
             uv_south: Z,
             uv_west: Z,
             connected_texture: None,
+            fluid_flow: None,
+            water_logged: false,
+            allowed_environments: Vec::new(),
             image: Handle::default(),
             material: Handle::default(),
         });
@@ -796,6 +865,59 @@ fn append_auto_slab_variants(
         let id = defs.len() as BlockId;
         defs.push(def);
         name_to_id.insert(localized_name, id);
+    }
+}
+
+fn append_auto_fluid_flow_variants(
+    defs: &mut Vec<BlockDef>,
+    name_to_id: &mut HashMap<String, BlockId>,
+    source_id: BlockId,
+) {
+    let source = defs[source_id as usize].clone();
+    if !source.stats.fluid {
+        return;
+    }
+    if source.fluid_flow.is_none() {
+        return;
+    }
+
+    for level in 1..=10u8 {
+        let localized_name = format!("{}_flow_{level}", source.localized_name);
+        if name_to_id.contains_key(localized_name.as_str()) {
+            continue;
+        }
+
+        let mut def = source.clone();
+        def.localized_name = localized_name.clone();
+        def.name = format!("{} Flow {}", source.name, level);
+        def.overridable = true;
+        def.stats.fluid_level = level;
+        def.stats.fluid = true;
+        def.stats.solid = false;
+        def.stats.opaque = false;
+        def.collider = fluid_level_visual_box(level);
+        // Variants are render-only levels; the source keeps flow settings.
+        def.fluid_flow = None;
+
+        let id = defs.len() as BlockId;
+        defs.push(def);
+        name_to_id.insert(localized_name, id);
+        if let Some(alias_prefix) = source.localized_name.strip_suffix("_block") {
+            let legacy_alias = format!("{alias_prefix}_flow_{level}");
+            name_to_id.entry(legacy_alias).or_insert(id);
+        }
+    }
+}
+
+#[inline]
+fn fluid_level_visual_box(level: u8) -> BlockColliderDefinition {
+    let h = (level as f32 / 10.0).clamp(0.1, 1.0);
+    let offset_y = (h - 1.0) * 0.5;
+    BlockColliderDefinition {
+        kind: BlockColliderKind::Box,
+        block_entities: false,
+        size_m: [1.0, h, 1.0],
+        offset_m: [0.0, offset_y, 0.0],
     }
 }
 
@@ -998,6 +1120,9 @@ pub fn face_visible_against(reg: &BlockRegistry, self_id: BlockId, neigh_id: Blo
     }
     if reg.is_air(neigh_id) {
         return true;
+    }
+    if self_id == neigh_id && !reg.is_opaque(self_id) {
+        return false;
     }
     if reg.is_fluid(self_id) && reg.is_fluid(neigh_id) {
         return false;
@@ -1222,6 +1347,12 @@ struct BlockJson {
     pub collider: BlockColliderDefinition,
     #[serde(default)]
     pub connected_texture: Option<ConnectedTextureJson>,
+    #[serde(default)]
+    pub fluid_flow: Option<FluidFlowJson>,
+    #[serde(default)]
+    pub water_logged: bool,
+    #[serde(default)]
+    pub allowed_environments: Vec<String>,
 }
 
 /// Connected texture JSON schema for block defs.
@@ -1235,6 +1366,14 @@ struct ConnectedTextureJson {
     pub mask_tiles: HashMap<String, String>,
     #[serde(default)]
     pub edge_clip_px: f32,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug)]
+struct FluidFlowJson {
+    #[serde(default = "d_true")]
+    pub enabled: bool,
+    #[serde(default = "default_fluid_flow_step_ms")]
+    pub step_ms: f32,
 }
 
 /// Represents texture faces json used by the `core::world::block` module.
@@ -1392,6 +1531,33 @@ fn default_mining_wobble_vertical_scale() -> f32 {
 
 fn default_connected_texture_mode() -> String {
     "mask4".to_string()
+}
+
+fn default_fluid_flow_step_ms() -> f32 {
+    750.0
+}
+
+#[inline]
+fn parse_block_environment(raw: &str) -> Option<BlockEnvironment> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "water" => Some(BlockEnvironment::Water),
+        "overworld" => Some(BlockEnvironment::Overworld),
+        "cave" => Some(BlockEnvironment::Cave),
+        _ => None,
+    }
+}
+
+fn sanitize_allowed_environments(raw_values: &[String]) -> Vec<BlockEnvironment> {
+    let mut out = Vec::new();
+    for raw in raw_values {
+        let Some(env) = parse_block_environment(raw.as_str()) else {
+            continue;
+        };
+        if !out.contains(&env) {
+            out.push(env);
+        }
+    }
+    out
 }
 
 /// Normalizes block identity fields loaded from JSON.
@@ -1743,6 +1909,36 @@ pub fn build_block_cube_mesh(reg: &BlockRegistry, id: BlockId, size: f32) -> Mes
 #[inline]
 fn world_y_to_local(wy: i32) -> usize {
     (wy - Y_MIN) as usize
+}
+
+#[inline]
+fn normalize_block_stats(mut stats: BlockStats) -> BlockStats {
+    if stats.fluid {
+        if stats.fluid_level == 0 {
+            stats.fluid_level = 10;
+        } else {
+            stats.fluid_level = stats.fluid_level.clamp(1, 10);
+        }
+    } else {
+        stats.fluid_level = 0;
+    }
+    stats
+}
+
+#[inline]
+fn resolve_fluid_flow(cfg: Option<&FluidFlowJson>, stats: &BlockStats) -> Option<FluidFlowDef> {
+    if !stats.fluid {
+        return None;
+    }
+    let Some(cfg) = cfg else {
+        return None;
+    };
+    if !cfg.enabled {
+        return None;
+    }
+    Some(FluidFlowDef {
+        step_ms: cfg.step_ms.clamp(50.0, 60_000.0),
+    })
 }
 
 /// Runs the `material_policy_from_stats` routine for material policy from stats in the `core::world::block` module.

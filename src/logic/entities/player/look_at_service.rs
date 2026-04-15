@@ -12,6 +12,7 @@ use crate::core::states::states::{AppState, InGameStates};
 use crate::core::ui::{HOTBAR_SLOTS, HotbarSelectionState, UiInteractionState};
 use crate::core::world::block::{
     BlockId, BlockRegistry, Face, SelectedBlock, VOXEL_SIZE, get_block_world,
+    get_stacked_block_world,
 };
 use crate::core::world::chunk::{ChunkMap, VoxelStage};
 use crate::core::world::chunk_dimension::{CX, CY, CZ, Y_MIN, world_to_chunk_xz};
@@ -461,11 +462,30 @@ fn sync_placement_preview(
         &chunk_map,
         &registry,
     );
+    let mut preview_world_pos = placement.world_pos;
+    let mut preview_place_into_stacked = placement.place_into_stacked;
+    let hit_primary_id = get_block_world(&chunk_map, hit.block_pos);
+    if !hit.is_stacked && hit_primary_id != 0 && registry.is_overridable(hit_primary_id) {
+        preview_world_pos = hit.block_pos;
+        preview_place_into_stacked = false;
+    }
+    let existing_primary_id = get_block_world(&chunk_map, preview_world_pos);
+    let existing_stacked_id = get_stacked_block_world(&chunk_map, preview_world_pos);
+    if !preview_place_into_stacked
+        && registry.is_water_logged(placement.block_id)
+        && existing_primary_id != 0
+        && registry.is_fluid(existing_primary_id)
+        && existing_stacked_id == 0
+    {
+        preview_place_into_stacked = true;
+    }
 
     if !placement_target_can_place(
         &chunk_map,
-        placement.world_pos,
-        placement.place_into_stacked,
+        &registry,
+        preview_world_pos,
+        preview_place_into_stacked,
+        placement.block_id,
     ) {
         *vis = Visibility::Hidden;
         return;
@@ -490,9 +510,9 @@ fn sync_placement_preview(
     let s = VOXEL_SIZE;
     const PREVIEW_GROWTH: f32 = 0.02;
     tf.translation = Vec3::new(
-        (placement.world_pos.x as f32 + 0.5 + offset[0]) * s,
-        (placement.world_pos.y as f32 + 0.5 + offset[1]) * s,
-        (placement.world_pos.z as f32 + 0.5 + offset[2]) * s,
+        (preview_world_pos.x as f32 + 0.5 + offset[0]) * s,
+        (preview_world_pos.y as f32 + 0.5 + offset[1]) * s,
+        (preview_world_pos.z as f32 + 0.5 + offset[2]) * s,
     ) + preview_face_nudge(hit.face, 0.008, 0.004);
     tf.scale =
         (Vec3::new(size[0], size[1], size[2]) + Vec3::splat(PREVIEW_GROWTH)).max(Vec3::splat(0.02));
@@ -742,6 +762,67 @@ fn is_slab_block_name(name: &str) -> bool {
     SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SlabVariantPreview {
+    Bottom,
+    Top,
+    North,
+    South,
+    East,
+    West,
+}
+
+#[inline]
+fn slab_variant_from_name(name: &str) -> Option<SlabVariantPreview> {
+    if name.ends_with("_slab_block") {
+        return Some(SlabVariantPreview::Bottom);
+    }
+    if name.ends_with("_slab_top_block") {
+        return Some(SlabVariantPreview::Top);
+    }
+    if name.ends_with("_slab_north_block") {
+        return Some(SlabVariantPreview::North);
+    }
+    if name.ends_with("_slab_south_block") {
+        return Some(SlabVariantPreview::South);
+    }
+    if name.ends_with("_slab_east_block") {
+        return Some(SlabVariantPreview::East);
+    }
+    if name.ends_with("_slab_west_block") {
+        return Some(SlabVariantPreview::West);
+    }
+    None
+}
+
+#[inline]
+fn slab_variant_from_block_id(
+    block_id: BlockId,
+    registry: &BlockRegistry,
+) -> Option<SlabVariantPreview> {
+    let name = registry.name_opt(block_id)?;
+    slab_variant_from_name(name)
+}
+
+#[inline]
+fn slab_ids_are_complementary(a: BlockId, b: BlockId, registry: &BlockRegistry) -> bool {
+    let Some(a_variant) = slab_variant_from_block_id(a, registry) else {
+        return false;
+    };
+    let Some(b_variant) = slab_variant_from_block_id(b, registry) else {
+        return false;
+    };
+    matches!(
+        (a_variant, b_variant),
+        (SlabVariantPreview::Bottom, SlabVariantPreview::Top)
+            | (SlabVariantPreview::Top, SlabVariantPreview::Bottom)
+            | (SlabVariantPreview::North, SlabVariantPreview::South)
+            | (SlabVariantPreview::South, SlabVariantPreview::North)
+            | (SlabVariantPreview::East, SlabVariantPreview::West)
+            | (SlabVariantPreview::West, SlabVariantPreview::East)
+    )
+}
+
 fn is_hammer_selected(
     inventory: &PlayerInventory,
     hotbar_selection: &HotbarSelectionState,
@@ -765,7 +846,7 @@ fn resolve_structure_place_origin(
     registry: &BlockRegistry,
 ) -> IVec3 {
     let hit_primary_id = get_block_world(chunk_map, hit.block_pos);
-    if hit_primary_id != 0 && registry.is_overridable(hit_primary_id) {
+    if !hit.is_stacked && hit_primary_id != 0 && registry.is_overridable(hit_primary_id) {
         hit.block_pos
     } else {
         hit.place_pos
@@ -1024,8 +1105,10 @@ fn rotated_structure_offset(
 #[inline]
 fn placement_target_can_place(
     chunk_map: &ChunkMap,
+    registry: &BlockRegistry,
     world_pos: IVec3,
     place_into_stacked: bool,
+    place_id: BlockId,
 ) -> bool {
     let (chunk_coord, l) = world_to_chunk_xz(world_pos.x, world_pos.z);
     let lx = l.x.clamp(0, (CX as i32 - 1) as u32) as usize;
@@ -1037,10 +1120,18 @@ fn placement_target_can_place(
         .get(&chunk_coord)
         .map(|ch| {
             let current = ch.get(lx, ly, lz);
+            let stacked = ch.get_stacked(lx, ly, lz);
             if place_into_stacked {
-                current != 0 && ch.get_stacked(lx, ly, lz) == 0
+                if current == 0 {
+                    false
+                } else if stacked == 0 {
+                    true
+                } else {
+                    registry.is_fluid(current)
+                        && slab_ids_are_complementary(stacked, place_id, registry)
+                }
             } else {
-                current == 0
+                current == 0 || registry.is_overridable(current)
             }
         })
         .unwrap_or(false)

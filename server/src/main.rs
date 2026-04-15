@@ -27,7 +27,7 @@ use std::time::Duration;
 /// Runs the `main` routine for main in the `project` module.
 fn main() {
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(5))))
+    app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(2))))
         .add_plugins(LogPlugin {
             level: Level::DEBUG,
             filter: "info,oplexa_game_server=debug,api=debug,tokio_tungstenite=warn,tungstenite=warn,lightyear=warn,wgpu=error,naga=warn".to_string(),
@@ -35,6 +35,10 @@ fn main() {
         });
 
     let bootstrap = load_bootstrap();
+    let netcode_client_timeout_secs = bootstrap
+        .runtime_config
+        .client_timeout
+        .clamp(1, i32::MAX as u64) as i32;
 
     app.add_plugins(ServerPlugins {
         tick_duration: Duration::from_millis(50),
@@ -42,6 +46,7 @@ fn main() {
     .add_plugins(ProtocolPlugin)
     .insert_resource(ServerBootstrapConfig {
         bind_addr: bootstrap.bind_addr,
+        netcode_client_timeout_secs,
     })
     .insert_resource(ServerState::new(
         bootstrap.world_root,

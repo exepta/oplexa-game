@@ -5,6 +5,7 @@
   "texture": {
     "all": "oak_planks"
   },
+  "water_logged": true,
   "stats": {
     "hardness": 2.0,
     "blast_resistance": 3.0,

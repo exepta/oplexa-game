@@ -17,6 +17,92 @@ use std::time::Instant;
 
 const PLAYER_POSITION_SAVE_INTERVAL_SECS: f32 = 1.0;
 
+#[inline]
+fn chunk_stream_backlog_per_client(backlog: usize, connected_clients: usize) -> usize {
+    if connected_clients == 0 {
+        backlog
+    } else {
+        (backlog + (connected_clients - 1)) / connected_clients
+    }
+}
+
+#[inline]
+fn dynamic_chunk_stream_send_budget(
+    config: &ServerRuntimeConfig,
+    connected_clients: usize,
+    backlog_per_client: usize,
+) -> usize {
+    let connected = connected_clients.max(1);
+    let mut budget = config.chunk_stream_sends_per_tick_base.saturating_add(
+        config
+            .chunk_stream_sends_per_tick_per_client
+            .saturating_mul(connected),
+    );
+
+    if backlog_per_client >= 256 {
+        budget = budget.saturating_add(
+            config
+                .chunk_stream_sends_per_tick_per_client
+                .saturating_mul(connected)
+                .saturating_mul(5),
+        );
+    } else if backlog_per_client >= 128 {
+        budget = budget.saturating_add(
+            config
+                .chunk_stream_sends_per_tick_per_client
+                .saturating_mul(connected)
+                .saturating_mul(4),
+        );
+    } else if backlog_per_client >= 64 {
+        budget = budget.saturating_add(
+            config
+                .chunk_stream_sends_per_tick_per_client
+                .saturating_mul(connected)
+                .saturating_mul(3),
+        );
+    } else if backlog_per_client >= 24 {
+        budget = budget.saturating_add(
+            config
+                .chunk_stream_sends_per_tick_per_client
+                .saturating_mul(connected)
+                .saturating_mul(2),
+        );
+    }
+
+    budget.clamp(1, config.chunk_stream_sends_per_tick_max.max(1))
+}
+
+#[inline]
+fn dynamic_chunk_stream_inflight_limit(
+    config: &ServerRuntimeConfig,
+    backlog_per_client: usize,
+) -> usize {
+    let base = config.chunk_stream_inflight_per_client.max(1);
+    let mut inflight = base;
+    if backlog_per_client >= 256 {
+        inflight = base.saturating_mul(4);
+    } else if backlog_per_client >= 128 {
+        inflight = base.saturating_mul(3);
+    } else if backlog_per_client >= 64 {
+        inflight = base.saturating_mul(2);
+    }
+    inflight.clamp(base, base.saturating_mul(4).clamp(base, 128))
+}
+
+#[inline]
+fn dynamic_chunk_stream_timeout_ms(config: &ServerRuntimeConfig, backlog_per_client: usize) -> u64 {
+    let base = config.chunk_flight_timeout_ms.clamp(70, 140);
+    if backlog_per_client >= 256 {
+        (base / 3).max(70)
+    } else if backlog_per_client >= 128 {
+        (base / 2).max(80)
+    } else if backlog_per_client >= 64 {
+        (base.saturating_mul(2) / 3).max(90)
+    } else {
+        base
+    }
+}
+
 /// Handles player move messages for the `services::gameplay` module.
 pub fn handle_player_move_messages(
     mut q: Query<(Entity, &mut MessageReceiver<PlayerMove>), With<ClientOf>>,
@@ -173,36 +259,36 @@ pub fn flush_chunk_streaming(
     mut multi_sender: ServerMultiMessageSender,
     server: Single<&Server>,
 ) {
-    state.pump_stream_chunk_tasks(&config);
+    let connected: HashSet<Entity> = q_clients.iter().collect();
+    let connected_clients = connected.len();
+    let backlog_per_client =
+        chunk_stream_backlog_per_client(state.pending_chunk_sends.len(), connected_clients);
+    let inflight_per_client = dynamic_chunk_stream_inflight_limit(&config, backlog_per_client);
+    let flight_timeout_ms = dynamic_chunk_stream_timeout_ms(&config, backlog_per_client);
+
+    state.pump_stream_chunk_tasks(&config, connected_clients);
     state.collect_ready_stream_chunks();
-    state.pump_stream_chunk_tasks(&config);
+    state.pump_stream_chunk_tasks(&config, connected_clients);
 
     // Expire chunks that have been in-flight long enough to be considered delivered.
     let now = std::time::Instant::now();
 
-    let connected: HashSet<Entity> = q_clients.iter().collect();
     state
         .chunk_send_window
         .retain(|entity, _| connected.contains(entity));
     for window in state.chunk_send_window.values_mut() {
-        window.retain(|t| {
-            now.duration_since(*t).as_millis() < config.chunk_flight_timeout_ms as u128
-        });
+        window.retain(|t| now.duration_since(*t).as_millis() < flight_timeout_ms as u128);
     }
 
-    let connected_clients = connected.len();
-    let sends_per_tick = config
-        .chunk_stream_sends_per_tick_base
-        .saturating_add(
-            config
-                .chunk_stream_sends_per_tick_per_client
-                .saturating_mul(connected_clients),
-        )
-        .min(config.chunk_stream_sends_per_tick_max.max(1));
+    let sends_per_tick =
+        dynamic_chunk_stream_send_budget(&config, connected_clients, backlog_per_client);
 
     let mut sent = 0usize;
     let mut scanned = 0usize;
-    let scan_cap = state.pending_chunk_sends.len();
+    let scan_cap = state
+        .pending_chunk_sends
+        .len()
+        .min(sends_per_tick.saturating_mul(48).max(512));
 
     while sent < sends_per_tick && scanned < scan_cap {
         scanned += 1;
@@ -231,7 +317,7 @@ pub fn flush_chunk_streaming(
             .chunk_send_window
             .entry(entity)
             .or_insert_with(VecDeque::new);
-        if window.len() >= config.chunk_stream_inflight_per_client.max(1) {
+        if window.len() >= inflight_per_client {
             state.pending_chunk_sends.push_back((entity, coord));
             continue;
         }

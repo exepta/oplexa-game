@@ -44,6 +44,17 @@ pub struct GpuLoadInfo {
     pub scope: &'static str,
 }
 
+/// Information about a GPU clock reading.
+#[derive(Debug, Clone, Copy)]
+pub struct GpuClockInfo {
+    /// Effective GPU clock in Hz.
+    pub hz: u64,
+    /// Backend name, e.g. "amdgpu-sysfs".
+    pub source: &'static str,
+    /// Scope of the reading, e.g. "device-wide".
+    pub scope: &'static str,
+}
+
 /// Try platform/vendor-specific backends in a sensible order and return the first hit.
 ///
 /// Order of preference:
@@ -112,6 +123,24 @@ pub fn detect_v_ram_best_effort() -> Option<VideoRamInfo> {
     None
 }
 
+/// Try platform/vendor-specific backends and return total physical VRAM bytes.
+///
+/// Best effort order:
+/// 1. Linux AMDGPU sysfs total VRAM
+/// 2. Windows DXGI dedicated adapter memory
+pub fn detect_v_ram_total_best_effort() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    if let Some(bytes) = query_vram_total_bytes_linux_amdgpu() {
+        return Some(bytes);
+    }
+
+    if let Some(bytes) = query_vram_total_bytes_dxgi_dedicated() {
+        return Some(bytes);
+    }
+
+    None
+}
+
 /// Try platform/vendor-specific backends in a sensible order and return the first hit.
 ///
 /// Current best-effort order:
@@ -134,6 +163,25 @@ pub fn detect_gpu_load_best_effort() -> Option<GpuLoadInfo> {
             source: "amdgpu-debugfs",
             scope: "device-wide",
         });
+    }
+
+    None
+}
+
+/// Try platform/vendor-specific GPU clock backends and return the first hit.
+///
+/// Current best-effort order:
+/// 1. Linux AMDGPU sysfs (`gpu_freq`, `pp_dpm_sclk`)
+pub fn detect_gpu_clock_best_effort() -> Option<GpuClockInfo> {
+    #[cfg(target_os = "linux")]
+    if let Some(hz) = query_gpu_clock_hz_linux_amdgpu_sysfs() {
+        if hz > 0 {
+            return Some(GpuClockInfo {
+                hz,
+                source: "amdgpu-sysfs",
+                scope: "device-wide",
+            });
+        }
     }
 
     None
@@ -261,6 +309,62 @@ pub fn query_vram_bytes_linux_drm_amdgpu() -> Option<u64> {
     }
 
     best
+}
+
+/// Query total VRAM bytes on Linux for AMD GPUs via sysfs.
+#[cfg(target_os = "linux")]
+pub fn query_vram_total_bytes_linux_amdgpu() -> Option<u64> {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn read_u64_any(path: &Path) -> Option<u64> {
+        let s = fs::read_to_string(path).ok()?;
+        let t = s.trim();
+        if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+            u64::from_str_radix(hex, 16).ok()
+        } else {
+            t.parse::<u64>().ok()
+        }
+    }
+
+    fn is_amdgpu(dev_dir: &Path) -> bool {
+        if let Ok(link) = fs::read_link(dev_dir.join("driver"))
+            && link.file_name().map(|n| n == "amdgpu").unwrap_or(false)
+        {
+            return true;
+        }
+        read_u64_any(&dev_dir.join("vendor")) == Some(0x1002)
+    }
+
+    let drm_path = Path::new("/sys/class/drm");
+    let entries = fs::read_dir(drm_path).ok()?;
+    let mut best: Option<u64> = None;
+
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !name.starts_with("card") || !name[4..].chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+
+        let dev_dir: PathBuf = e.path().join("device");
+        if !is_amdgpu(&dev_dir) {
+            continue;
+        }
+
+        let total = read_u64_any(&dev_dir.join("mem_info_vram_total"))
+            .or_else(|| read_u64_any(&dev_dir.join("mem_info_vis_vram_total")));
+        if let Some(bytes) = total {
+            best = Some(best.map_or(bytes, |curr| curr.max(bytes)));
+        }
+    }
+
+    best
+}
+
+/// Stub when not on Linux.
+#[cfg(not(target_os = "linux"))]
+pub fn query_vram_total_bytes_linux_amdgpu() -> Option<u64> {
+    None
 }
 
 /// Runs the `query_vram_bytes_linux_amdgpu_per_process` routine for query vram bytes linux amdgpu per process in the `utils::v_ram_utils` module.
@@ -493,6 +597,189 @@ fn parse_percent_from_line(line: &str) -> Option<f32> {
     value.parse::<f32>().ok().map(|v| v.clamp(0.0, 100.0))
 }
 
+/// Query AMD GPU core clock from sysfs.
+///
+/// Tries `gpu_freq` first (raw numeric value), then `pp_dpm_sclk` (active `*` line).
+#[cfg(target_os = "linux")]
+pub fn query_gpu_clock_hz_linux_amdgpu_sysfs() -> Option<u64> {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn read_u64_any(path: &Path) -> Option<u64> {
+        let s = fs::read_to_string(path).ok()?;
+        let t = s.trim();
+        if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+            u64::from_str_radix(hex, 16).ok()
+        } else {
+            t.parse::<u64>().ok()
+        }
+    }
+
+    fn is_amdgpu(dev_dir: &Path) -> bool {
+        if let Ok(link) = fs::read_link(dev_dir.join("driver"))
+            && link.file_name().map(|n| n == "amdgpu").unwrap_or(false)
+        {
+            return true;
+        }
+        read_u64_any(&dev_dir.join("vendor")) == Some(0x1002)
+    }
+
+    fn normalize_raw_gpu_freq_to_hz(raw: u64) -> u64 {
+        if raw >= 50_000_000 {
+            // Already Hz.
+            raw
+        } else if raw >= 50_000 {
+            // Likely kHz.
+            raw.saturating_mul(1_000)
+        } else {
+            // Likely MHz.
+            raw.saturating_mul(1_000_000)
+        }
+    }
+
+    let drm_path = Path::new("/sys/class/drm");
+    let entries = fs::read_dir(drm_path).ok()?;
+    let mut best_hz: Option<u64> = None;
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("card") || !name[4..].chars().all(|ch| ch.is_ascii_digit()) {
+            continue;
+        }
+
+        let dev_dir: PathBuf = entry.path().join("device");
+        if !is_amdgpu(&dev_dir) {
+            continue;
+        }
+
+        let mut card_hz: Option<u64> = None;
+
+        if let Some(raw) = read_u64_any(&dev_dir.join("gpu_freq")) {
+            card_hz = Some(normalize_raw_gpu_freq_to_hz(raw));
+        }
+
+        if card_hz.is_none()
+            && let Ok(dpm) = fs::read_to_string(dev_dir.join("pp_dpm_sclk"))
+        {
+            let mut active_hz: Option<u64> = None;
+            let mut max_hz: Option<u64> = None;
+            for line in dpm.lines() {
+                let Some(hz) = parse_frequency_hz_from_line(line) else {
+                    continue;
+                };
+                max_hz = Some(max_hz.map_or(hz, |curr| curr.max(hz)));
+                if line.contains('*') {
+                    active_hz = Some(hz);
+                }
+            }
+            card_hz = active_hz.or(max_hz);
+        }
+
+        if let Some(hz) = card_hz {
+            best_hz = Some(best_hz.map_or(hz, |curr| curr.max(hz)));
+        }
+    }
+
+    best_hz
+}
+
+/// Query AMD GPU core clock from debugfs (`amdgpu_pm_info`).
+#[cfg(target_os = "linux")]
+pub fn query_gpu_clock_hz_linux_amdgpu_debugfs() -> Option<u64> {
+    use std::fs;
+    use std::path::Path;
+
+    let root = Path::new("/sys/kernel/debug/dri");
+    let entries = fs::read_dir(root).ok()?;
+    let mut best_hz: Option<u64> = None;
+
+    for entry in entries.flatten() {
+        let pm_info = entry.path().join("amdgpu_pm_info");
+        let Ok(content) = fs::read_to_string(pm_info) else {
+            continue;
+        };
+
+        for line in content.lines() {
+            let lower = line.to_ascii_lowercase();
+            if lower.contains("mclk") || lower.contains("memclk") || lower.contains("memory") {
+                continue;
+            }
+            if !(lower.contains("sclk")
+                || lower.contains("gfx")
+                || lower.contains("gpu clock")
+                || lower.contains("gpuclk"))
+            {
+                continue;
+            }
+            if let Some(hz) = parse_frequency_hz_from_line(line) {
+                best_hz = Some(best_hz.map_or(hz, |curr| curr.max(hz)));
+            }
+        }
+    }
+
+    best_hz
+}
+
+#[cfg(target_os = "linux")]
+fn parse_frequency_hz_from_line(line: &str) -> Option<u64> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0usize;
+
+    while i < chars.len() {
+        if !chars[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+
+        let start = i;
+        let mut seen_dot = false;
+        i += 1;
+        while i < chars.len() {
+            let ch = chars[i];
+            if ch.is_ascii_digit() {
+                i += 1;
+                continue;
+            }
+            if ch == '.' && !seen_dot {
+                seen_dot = true;
+                i += 1;
+                continue;
+            }
+            break;
+        }
+
+        let value: f64 = chars[start..i].iter().collect::<String>().parse().ok()?;
+
+        while i < chars.len() && (chars[i].is_whitespace() || chars[i] == ':' || chars[i] == '=') {
+            i += 1;
+        }
+
+        let unit_start = i;
+        while i < chars.len() && chars[i].is_ascii_alphabetic() {
+            i += 1;
+        }
+        let unit = chars[unit_start..i]
+            .iter()
+            .collect::<String>()
+            .to_ascii_lowercase();
+
+        let multiplier = if unit.starts_with("ghz") || unit == "g" {
+            1_000_000_000.0
+        } else if unit.starts_with("mhz") || unit == "m" {
+            1_000_000.0
+        } else if unit.starts_with("khz") || unit == "k" {
+            1_000.0
+        } else {
+            continue;
+        };
+
+        return Some((value * multiplier).round() as u64);
+    }
+
+    None
+}
+
 /// Parses amdgpu vm info for pid for the `utils::v_ram_utils` module.
 #[cfg(target_os = "linux")]
 fn parse_amdgpu_vm_info_for_pid(path: &std::path::Path, pid: u32) -> Option<u64> {
@@ -613,6 +900,16 @@ pub fn query_gpu_load_percent_linux_amdgpu_debugfs() -> Option<f32> {
 }
 
 #[cfg(not(target_os = "linux"))]
+pub fn query_gpu_clock_hz_linux_amdgpu_sysfs() -> Option<u64> {
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn query_gpu_clock_hz_linux_amdgpu_debugfs() -> Option<u64> {
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
 pub fn query_vram_bytes_linux_drm_fdinfo_this_process() -> Option<u64> {
     None
 }
@@ -678,6 +975,29 @@ pub fn query_vram_bytes_dxgi_adapter_current_usage() -> Option<u64> {
     None
 }
 
+/// Query dedicated adapter VRAM total bytes via DXGI (Windows).
+#[cfg(all(windows, feature = "vram_dxgi"))]
+pub fn query_vram_total_bytes_dxgi_dedicated() -> Option<u64> {
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, IDXGIFactory4,
+    };
+
+    unsafe {
+        let factory: IDXGIFactory4 =
+            CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(0)).ok()?;
+        let adapter = factory.EnumAdapters1(0).ok()?;
+        let desc = adapter.GetDesc1().ok()?;
+        let total = desc.DedicatedVideoMemory as u64;
+        (total > 0).then_some(total)
+    }
+}
+
+/// Stub when not on Windows or feature disabled.
+#[cfg(not(all(windows, feature = "vram_dxgi")))]
+pub fn query_vram_total_bytes_dxgi_dedicated() -> Option<u64> {
+    None
+}
+
 /* ============================ macOS: Metal (GPU) =========================== */
 
 /// Query device-wide allocated bytes from Metal (macOS).
@@ -707,5 +1027,17 @@ pub fn fmt_bytes(bytes: u64) -> String {
         format!("{:.1} GB", b / GIB)
     } else {
         format!("{:.0} MB", b / MIB)
+    }
+}
+
+/// Human-readable formatter for frequency (MHz/GHz).
+pub fn fmt_hz(hz: u64) -> String {
+    const MHZ: f64 = 1_000_000.0;
+    const GHZ: f64 = 1_000_000_000.0;
+    let h = hz as f64;
+    if h >= GHZ {
+        format!("{:.2} GHz", h / GHZ)
+    } else {
+        format!("{:.0} MHz", h / MHZ)
     }
 }

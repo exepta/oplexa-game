@@ -1,6 +1,8 @@
+KEY_BUCKET = Bucket
 KEY_FLOWER_ROSE = Rose
 KEY_FLOWER_TULIP_PINK = Pink Tulip
 KEY_HAMMER = Hammer
+KEY_SEA_GRASS = Sea Grass
 KEY_STICK = Stick
 KEY_STONE_PICKAXE = Stone Pickaxe
 KEY_STONE_SHOVEL = Stone Shovel

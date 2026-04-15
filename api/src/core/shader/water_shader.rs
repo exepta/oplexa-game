@@ -57,9 +57,12 @@ impl Material for WaterMaterial {
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
-            ds.depth_write_enabled = false;
+            // Write depth for the nearest water layer so back layers/sides do not
+            // shine through and produce noisy stacked transparency artifacts.
+            ds.depth_write_enabled = true;
         }
-        descriptor.primitive.cull_mode = None;
+        // Cull back-faces to avoid rendering both sides of the same water plane.
+        descriptor.primitive.cull_mode = Some(Face::Back);
         if let Some(fragment) = descriptor.fragment.as_mut() {
             if let Some(Some(tgt)) = fragment.targets.get_mut(0) {
                 tgt.blend = Some(BlendState::ALPHA_BLENDING);

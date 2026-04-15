@@ -4,11 +4,12 @@ use crate::core::commands::{
     default_chat_command_registry, parse_chat_command,
 };
 use crate::core::config::{GlobalConfig, WorldGenConfig};
-use crate::core::debug::{BuildInfo, WorldInspectorState};
+use crate::core::debug::{BuildInfo, ChunkDebugStats, WorldInspectorState};
 use crate::core::entities::player::inventory::{PLAYER_INVENTORY_SLOTS, PlayerInventory};
 use crate::core::entities::player::{FlightState, FpsController, GameMode, GameModeState, Player};
 use crate::core::events::block::block_player_events::{
-    BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent,
+    BlockBreakByPlayerEvent, BlockBreakObservedEvent, BlockPlaceByPlayerEvent,
+    BlockPlaceObservedEvent,
 };
 use crate::core::events::chunk_events::SubChunkNeedRemeshEvent;
 use crate::core::events::ui_events::{
@@ -20,13 +21,14 @@ use crate::core::states::states::{AppState, BeforeUiState, LoadingStates};
 use crate::core::world::biome::func::locate_biome_chunk_by_localized_name;
 use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, get_block_world};
-use crate::core::world::chunk::{ChunkMap, LoadCenter, SEA_LEVEL, VoxelStage};
+use crate::core::world::chunk::{ChunkData, ChunkMap, LoadCenter, SEA_LEVEL, VoxelStage};
 use crate::core::world::chunk_dimension::{
     CX, CZ, SEC_COUNT, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local,
 };
 use crate::core::world::fluid::{FluidChunk, FluidMap, WaterMeshIndex};
 use crate::core::world::save::RegionCache;
 use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
+use crate::generator::chunk::chunk_struct::{MeshBacklog, PendingMesh};
 use crate::generator::chunk::chunk_utils::safe_despawn_entity;
 use api::core::network::{
     config::NetworkSettings,
@@ -41,6 +43,7 @@ use api::core::network::{
     },
 };
 use bevy::ecs::event::EntityTrigger;
+use bevy::ecs::system::SystemParam;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
 use bevy::log::{BoxedLayer, Level, LogPlugin};
 use bevy::math::primitives::Capsule3d;
@@ -48,8 +51,9 @@ use bevy::mesh::Mesh3d;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::*;
 use bevy::render::RenderPlugin;
-use bevy::render::render_resource::WgpuFeatures;
 use bevy::render::settings::{Backends, RenderCreation, WgpuSettings};
+use bevy::tasks::futures_lite::future;
+use bevy::tasks::{AsyncComputeTaskPool, Task};
 use bevy::window::{PresentMode, WindowMode, WindowResolution};
 use bevy_inspector_egui::bevy_egui::EguiPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
@@ -205,13 +209,158 @@ impl RemoteChunkStreamState {
 /// Represents remote chunk decode queue used by the `client` module.
 #[derive(Resource, Default)]
 struct RemoteChunkDecodeQueue {
-    queued: VecDeque<ServerChunkData>,
+    queued_order: VecDeque<[i32; 2]>,
+    queued_by_coord: HashMap<[i32; 2], ServerChunkData>,
 }
 
 impl RemoteChunkDecodeQueue {
     /// Runs the `reset` routine for reset in the `client` module.
     fn reset(&mut self) {
+        self.queued_order.clear();
+        self.queued_by_coord.clear();
+    }
+
+    #[inline]
+    fn enqueue(&mut self, message: ServerChunkData) {
+        let coord = message.coord;
+        if !self.queued_by_coord.contains_key(&coord) {
+            self.queued_order.push_back(coord);
+        }
+        self.queued_by_coord.insert(coord, message);
+    }
+
+    #[inline]
+    fn pop_front(&mut self) -> Option<ServerChunkData> {
+        while let Some(coord) = self.queued_order.pop_front() {
+            if let Some(message) = self.queued_by_coord.remove(&coord) {
+                return Some(message);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.queued_by_coord.len()
+    }
+}
+
+/// Represents decoded chunk remesh queue used by the `client` module.
+#[derive(Resource, Default)]
+struct RemoteChunkRemeshQueue {
+    queued: VecDeque<IVec2>,
+    queued_set: HashSet<IVec2>,
+}
+
+impl RemoteChunkRemeshQueue {
+    /// Runs the `reset` routine for reset in the `client` module.
+    fn reset(&mut self) {
         self.queued.clear();
+        self.queued_set.clear();
+    }
+
+    #[inline]
+    fn enqueue(&mut self, coord: IVec2) {
+        if self.queued_set.insert(coord) {
+            self.queued.push_back(coord);
+        }
+    }
+
+    #[inline]
+    fn pop_front(&mut self) -> Option<IVec2> {
+        let coord = self.queued.pop_front()?;
+        self.queued_set.remove(&coord);
+        Some(coord)
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.queued.len()
+    }
+}
+
+type RemoteDecodedChunk = (IVec2, ChunkData);
+
+/// Represents remote chunk decode tasks used by the `client` module.
+#[derive(Resource, Default)]
+struct RemoteChunkDecodeTasks {
+    tasks: HashMap<[i32; 2], Task<Option<RemoteDecodedChunk>>>,
+}
+
+impl RemoteChunkDecodeTasks {
+    #[inline]
+    fn reset(&mut self) {
+        self.tasks.clear();
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.tasks.len()
+    }
+}
+
+/// Represents decoded chunk ready queue used by the `client` module.
+#[derive(Resource, Default)]
+struct RemoteChunkDecodedQueue {
+    queued_order: VecDeque<[i32; 2]>,
+    queued_by_coord: HashMap<[i32; 2], ChunkData>,
+}
+
+impl RemoteChunkDecodedQueue {
+    #[inline]
+    fn reset(&mut self) {
+        self.queued_order.clear();
+        self.queued_by_coord.clear();
+    }
+
+    #[inline]
+    fn enqueue(&mut self, coord: IVec2, chunk: ChunkData) {
+        let key = [coord.x, coord.y];
+        if !self.queued_by_coord.contains_key(&key) {
+            self.queued_order.push_back(key);
+        }
+        self.queued_by_coord.insert(key, chunk);
+    }
+
+    #[inline]
+    fn pop_front(&mut self) -> Option<RemoteDecodedChunk> {
+        while let Some(coord) = self.queued_order.pop_front() {
+            if let Some(chunk) = self.queued_by_coord.remove(&coord) {
+                return Some((IVec2::new(coord[0], coord[1]), chunk));
+            }
+        }
+        None
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.queued_by_coord.len()
+    }
+}
+
+#[derive(SystemParam)]
+struct RemoteChunkFlowState<'w> {
+    chunk_stream: ResMut<'w, RemoteChunkStreamState>,
+    chunk_decode_queue: ResMut<'w, RemoteChunkDecodeQueue>,
+    chunk_decode_tasks: ResMut<'w, RemoteChunkDecodeTasks>,
+    chunk_decoded_queue: ResMut<'w, RemoteChunkDecodedQueue>,
+    chunk_remesh_queue: ResMut<'w, RemoteChunkRemeshQueue>,
+}
+
+#[derive(SystemParam)]
+struct ObservedWaterFlowEventWriters<'w> {
+    break_events: MessageWriter<'w, BlockBreakObservedEvent>,
+    place_events: MessageWriter<'w, BlockPlaceObservedEvent>,
+}
+
+impl<'w> RemoteChunkFlowState<'w> {
+    #[inline]
+    fn reset(&mut self) {
+        self.chunk_stream.reset();
+        self.chunk_decode_queue.reset();
+        self.chunk_decode_tasks.reset();
+        self.chunk_decoded_queue.reset();
+        self.chunk_remesh_queue.reset();
     }
 }
 
@@ -327,9 +476,15 @@ const REMOTE_PLAYER_INTERP_BACK_TIME_SECS: f32 = 0.10;
 const REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS: f32 = 0.08;
 const REMOTE_PLAYER_MAX_SNAPSHOT_POINTS: usize = 24;
 const REMOTE_PLAYER_SMOOTHING_HZ: f32 = 18.0;
-const MULTIPLAYER_CHUNK_INTEREST_BOOTSTRAP_RADIUS: i32 = 3;
-const MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS: f32 = 0.12;
-const MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE: usize = 2;
+const MULTIPLAYER_CHUNK_INTEREST_BOOTSTRAP_RADIUS: i32 = 64;
+const MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS: f32 = 0.01;
+const MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE: usize = 8;
+const MULTIPLAYER_CHUNK_DECODES_PER_FRAME_MAX: usize = 36;
+const MULTIPLAYER_CHUNK_DECODE_TASKS_INFLIGHT_MAX: usize = 64;
+const MULTIPLAYER_CHUNK_APPLY_PER_FRAME_BASE: usize = 8;
+const MULTIPLAYER_CHUNK_APPLY_PER_FRAME_MAX: usize = 36;
+const MULTIPLAYER_CHUNK_REMESH_COORDS_PER_FRAME_BASE: usize = 4;
+const MULTIPLAYER_CHUNK_REMESH_COORDS_PER_FRAME_MAX: usize = 18;
 const LOCATE_MAX_RADIUS_BLOCKS_CAP: i32 = 1000;
 const NETWORK_CONFIG_PATH: &str = "config/network.toml";
 const SERVER_TIMEOUT_ERROR_TEXT: &str = "Server time out!";
@@ -344,53 +499,159 @@ fn locate_radius_chunks_from_blocks(radius_blocks: i32) -> i32 {
 }
 
 /// Dynamic decode budget for streamed multiplayer chunks.
-fn multiplayer_chunk_decode_budget(backlog_len: usize, frame_secs: f32) -> usize {
+fn multiplayer_chunk_decode_budget(
+    backlog_len: usize,
+    mesh_pressure: usize,
+    frame_secs: f32,
+) -> usize {
     let mut budget = MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE;
-    if backlog_len >= 64 {
-        budget = 4;
+    if backlog_len >= 32 {
+        budget = 13;
     }
-    if backlog_len >= 160 {
-        budget = 8;
+    if backlog_len >= 96 {
+        budget = 18;
     }
-    if backlog_len >= 320 {
-        budget = 12;
+    if backlog_len >= 192 {
+        budget = 26;
     }
-    if backlog_len >= 640 {
-        budget = 20;
+    if backlog_len >= 384 {
+        budget = MULTIPLAYER_CHUNK_DECODES_PER_FRAME_MAX;
     }
 
-    if frame_secs > 0.033 {
+    if frame_secs > 0.060 {
+        budget = budget.min(8);
+    } else if frame_secs > 0.045 {
+        budget = budget.min(13);
+    } else if frame_secs > 0.034 {
+        budget = budget.min(18);
+    }
+
+    if mesh_pressure >= 1024 {
+        budget = budget.min(8);
+    } else if mesh_pressure >= 768 {
+        budget = budget.min(10);
+    } else if mesh_pressure >= 512 {
+        budget = budget.min(13);
+    }
+
+    budget.clamp(
+        MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE,
+        MULTIPLAYER_CHUNK_DECODES_PER_FRAME_MAX,
+    )
+}
+
+/// Dynamic budget for how many decoded chunk coordinates are remeshed per frame.
+fn multiplayer_chunk_remesh_coord_budget(
+    backlog_len: usize,
+    mesh_pressure: usize,
+    frame_secs: f32,
+) -> usize {
+    let mut budget = MULTIPLAYER_CHUNK_REMESH_COORDS_PER_FRAME_BASE;
+    if backlog_len >= 16 {
+        budget = 5;
+    }
+    if backlog_len >= 48 {
+        budget = 8;
+    }
+    if backlog_len >= 96 {
+        budget = 12;
+    }
+    if backlog_len >= 192 {
+        budget = MULTIPLAYER_CHUNK_REMESH_COORDS_PER_FRAME_MAX;
+    }
+
+    if frame_secs > 0.060 {
         budget = budget.min(4);
-    } else if frame_secs > 0.024 {
+    } else if frame_secs > 0.045 {
+        budget = budget.min(5);
+    } else if frame_secs > 0.034 {
         budget = budget.min(8);
     }
 
-    budget.max(MULTIPLAYER_CHUNK_DECODES_PER_FRAME_BASE)
-}
-
-fn dedupe_remote_chunk_decode_queue(queue: &mut VecDeque<ServerChunkData>) {
-    if queue.len() <= 1 {
-        return;
+    if mesh_pressure >= 1024 {
+        budget = budget.min(4);
+    } else if mesh_pressure >= 768 {
+        budget = budget.min(5);
+    } else if mesh_pressure >= 512 {
+        budget = budget.min(8);
     }
 
-    let mut newest_per_coord = HashSet::with_capacity(queue.len());
-    let mut deduped = VecDeque::with_capacity(queue.len());
-    for message in queue.drain(..).rev() {
-        if newest_per_coord.insert(message.coord) {
-            deduped.push_front(message);
-        }
-    }
-    *queue = deduped;
+    budget.clamp(
+        MULTIPLAYER_CHUNK_REMESH_COORDS_PER_FRAME_BASE,
+        MULTIPLAYER_CHUNK_REMESH_COORDS_PER_FRAME_MAX,
+    )
 }
 
-fn remap_server_chunk_payload_in_place(
+/// Dynamic budget for how many already-decoded chunks are applied per frame.
+fn multiplayer_chunk_apply_budget(
+    backlog_len: usize,
+    mesh_pressure: usize,
+    frame_secs: f32,
+) -> usize {
+    let mut budget = MULTIPLAYER_CHUNK_APPLY_PER_FRAME_BASE;
+    if backlog_len >= 16 {
+        budget = 13;
+    }
+    if backlog_len >= 48 {
+        budget = 18;
+    }
+    if backlog_len >= 96 {
+        budget = 26;
+    }
+    if backlog_len >= 192 {
+        budget = MULTIPLAYER_CHUNK_APPLY_PER_FRAME_MAX;
+    }
+
+    if frame_secs > 0.060 {
+        budget = budget.min(8);
+    } else if frame_secs > 0.045 {
+        budget = budget.min(13);
+    } else if frame_secs > 0.034 {
+        budget = budget.min(18);
+    }
+
+    if mesh_pressure >= 1024 {
+        budget = budget.min(8);
+    } else if mesh_pressure >= 768 {
+        budget = budget.min(10);
+    } else if mesh_pressure >= 512 {
+        budget = budget.min(13);
+    }
+
+    budget.clamp(
+        MULTIPLAYER_CHUNK_APPLY_PER_FRAME_BASE,
+        MULTIPLAYER_CHUNK_APPLY_PER_FRAME_MAX,
+    )
+}
+
+/// Dynamic cap for concurrently running chunk decode tasks.
+fn multiplayer_chunk_decode_task_inflight_cap(mesh_pressure: usize, frame_secs: f32) -> usize {
+    let mut cap = MULTIPLAYER_CHUNK_DECODE_TASKS_INFLIGHT_MAX;
+
+    if frame_secs > 0.060 {
+        cap = cap.min(20);
+    } else if frame_secs > 0.045 {
+        cap = cap.min(30);
+    } else if frame_secs > 0.034 {
+        cap = cap.min(42);
+    }
+
+    if mesh_pressure >= 1024 {
+        cap = cap.min(20);
+    } else if mesh_pressure >= 768 {
+        cap = cap.min(26);
+    } else if mesh_pressure >= 512 {
+        cap = cap.min(36);
+    }
+
+    cap.clamp(12, MULTIPLAYER_CHUNK_DECODE_TASKS_INFLIGHT_MAX)
+}
+
+fn remap_server_chunk_payload_raw(
     chunk: &mut crate::core::world::chunk::ChunkData,
-    fluid_chunk: &mut FluidChunk,
-    block_remap: &BlockIdRemap,
+    server_to_local: &[u16],
     local_block_registry_len: usize,
-    water_local_id: u16,
 ) {
-    let server_to_local = &block_remap.server_to_local;
     let remap = |server_id: u16| -> u16 {
         let local_id = if server_to_local.is_empty() {
             server_id
@@ -407,15 +668,9 @@ fn remap_server_chunk_payload_in_place(
         }
     };
 
-    for (index, server_id) in chunk.blocks.iter_mut().enumerate() {
+    for server_id in &mut chunk.blocks {
         let local_id = remap(*server_id);
-        if water_local_id != 0 && local_id == water_local_id {
-            *server_id = 0;
-            let word = index >> 6;
-            fluid_chunk.bits[word] |= 1u64 << (index & 63);
-        } else {
-            *server_id = local_id;
-        }
+        *server_id = local_id;
     }
 
     for server_id in &mut chunk.stacked_blocks {
@@ -461,6 +716,9 @@ impl Plugin for MultiplayerClientPlugin {
         app.init_resource::<MultiplayerDropIndex>()
             .init_resource::<RemoteChunkStreamState>()
             .init_resource::<RemoteChunkDecodeQueue>()
+            .init_resource::<RemoteChunkDecodeTasks>()
+            .init_resource::<RemoteChunkDecodedQueue>()
+            .init_resource::<RemoteChunkRemeshQueue>()
             .init_resource::<BlockIdRemap>()
             .init_resource::<TerminalInterruptExitState>()
             .add_systems(Startup, setup_remote_player_visuals)
@@ -493,7 +751,12 @@ impl Plugin for MultiplayerClientPlugin {
                     send_local_player_pose,
                 ),
             )
-            .add_systems(Update, receive_world_messages.in_set(VoxelStage::WorldEdit))
+            .add_systems(
+                Update,
+                (receive_world_messages, flush_remote_chunk_remesh_queue)
+                    .chain()
+                    .in_set(VoxelStage::WorldEdit),
+            )
             .add_systems(Update, send_local_inventory_sync)
             .add_systems(Update, smooth_remote_players);
     }
@@ -507,6 +770,9 @@ fn handle_terminal_interrupt_exit(
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
     mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
+    mut chunk_decode_tasks: ResMut<RemoteChunkDecodeTasks>,
+    mut chunk_decoded_queue: ResMut<RemoteChunkDecodedQueue>,
+    mut chunk_remesh_queue: ResMut<RemoteChunkRemeshQueue>,
     mut commands: Commands,
     mut app_exit: MessageWriter<AppExit>,
 ) {
@@ -527,6 +793,9 @@ fn handle_terminal_interrupt_exit(
         block_remap.reset();
         chunk_stream.reset();
         chunk_decode_queue.reset();
+        chunk_decode_tasks.reset();
+        chunk_decoded_queue.reset();
+        chunk_remesh_queue.reset();
         multiplayer_connection.clear_session();
         interrupt_state.handled = true;
         app_exit.write(AppExit::Success);
@@ -585,6 +854,9 @@ fn on_server_disconnected(
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
     mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
+    mut chunk_decode_tasks: ResMut<RemoteChunkDecodeTasks>,
+    mut chunk_decoded_queue: ResMut<RemoteChunkDecodedQueue>,
+    mut chunk_remesh_queue: ResMut<RemoteChunkRemeshQueue>,
     mut chat_log: ResMut<ChatLog>,
     mut drops: ResMut<MultiplayerDropIndex>,
     mut next_state: ResMut<NextState<AppState>>,
@@ -598,10 +870,17 @@ fn on_server_disconnected(
     // NetcodeClient has #[require(Disconnected)], so Disconnected is added on spawn
     // with reason: None. Real disconnects always have reason: Some(...). Skip the
     // initial spawn-time Disconnected so we don't immediately despawn the entity.
-    if let Ok(disconnected) = q_disconnected.get(trigger.entity) {
-        if disconnected.reason.is_none() {
-            return;
-        }
+    let disconnect_reason = q_disconnected
+        .get(trigger.entity)
+        .ok()
+        .and_then(|disconnected| {
+            if disconnected.reason.is_none() {
+                return None;
+            }
+            disconnected.reason.clone()
+        });
+    if disconnect_reason.is_none() {
+        return;
     }
 
     for entity in runtime.remote_players.drain().map(|(_, e)| e) {
@@ -616,6 +895,9 @@ fn on_server_disconnected(
     block_remap.reset();
     chunk_stream.reset();
     chunk_decode_queue.reset();
+    chunk_decode_tasks.reset();
+    chunk_decoded_queue.reset();
+    chunk_remesh_queue.reset();
 
     // If we disconnect while the world is loading or in-game, reset to the menu.
     // Without this, check_base_gen_world_ready would see uses_local_save_data()=true
@@ -636,7 +918,9 @@ fn on_server_disconnected(
     multiplayer_connection.last_error = if disconnected_by_request {
         existing_error
     } else {
-        existing_error.or_else(|| Some(SERVER_TIMEOUT_ERROR_TEXT.to_string()))
+        existing_error
+            .or(disconnect_reason)
+            .or_else(|| Some(SERVER_TIMEOUT_ERROR_TEXT.to_string()))
     };
 
     runtime.connection_entity = None;
@@ -691,6 +975,9 @@ fn connect_to_server_requested(
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
     mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
+    mut chunk_decode_tasks: ResMut<RemoteChunkDecodeTasks>,
+    mut chunk_decoded_queue: ResMut<RemoteChunkDecodedQueue>,
+    mut chunk_remesh_queue: ResMut<RemoteChunkRemeshQueue>,
     mut block_remap: ResMut<BlockIdRemap>,
     q_active: Query<
         (),
@@ -748,6 +1035,9 @@ fn connect_to_server_requested(
     multiplayer_connection.last_error = None;
     chunk_stream.reset();
     chunk_decode_queue.reset();
+    chunk_decode_tasks.reset();
+    chunk_decoded_queue.reset();
+    chunk_remesh_queue.reset();
 }
 
 /// Runs the `disconnect_from_server_requested` routine for disconnect from server requested in the `client` module.
@@ -756,6 +1046,9 @@ fn disconnect_from_server_requested(
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut chunk_stream: ResMut<RemoteChunkStreamState>,
     mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
+    mut chunk_decode_tasks: ResMut<RemoteChunkDecodeTasks>,
+    mut chunk_decoded_queue: ResMut<RemoteChunkDecodedQueue>,
+    mut chunk_remesh_queue: ResMut<RemoteChunkRemeshQueue>,
     mut block_remap: ResMut<BlockIdRemap>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut commands: Commands,
@@ -769,6 +1062,9 @@ fn disconnect_from_server_requested(
     multiplayer_connection.clear_session();
     chunk_stream.reset();
     chunk_decode_queue.reset();
+    chunk_decode_tasks.reset();
+    chunk_decoded_queue.reset();
+    chunk_remesh_queue.reset();
 }
 
 /// Polls connection state and updates `MultiplayerConnectionState`.
@@ -806,8 +1102,7 @@ fn receive_player_messages(
     mut next_state: ResMut<NextState<AppState>>,
     mut multiplayer_connection: ResMut<MultiplayerConnectionState>,
     mut inventory: ResMut<PlayerInventory>,
-    mut chunk_stream: ResMut<RemoteChunkStreamState>,
-    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
+    mut chunk_flow: RemoteChunkFlowState,
     mut block_remap: ResMut<BlockIdRemap>,
     mut runtime: ResMut<MultiplayerClientRuntime>,
     mut q: Query<(
@@ -847,8 +1142,7 @@ fn receive_player_messages(
         runtime.player_names.clear();
         runtime.disconnected_remote_players.clear();
         block_remap.reset();
-        chunk_stream.reset();
-        chunk_decode_queue.reset();
+        chunk_flow.reset();
 
         chunk_map.chunks.clear();
         next_state.set(AppState::Screen(BeforeUiState::MultiPlayer));
@@ -904,8 +1198,7 @@ fn receive_player_messages(
             &mut next_state,
         );
         multiplayer_connection.spawn_translation = Some(spawn_translation);
-        chunk_stream.reset();
-        chunk_decode_queue.reset();
+        chunk_flow.reset();
     }
 
     for message in recv_joined.receive() {
@@ -1348,10 +1641,17 @@ fn receive_world_messages(
     time: Res<Time>,
     registry: Option<Res<BlockRegistry>>,
     block_remap: Res<BlockIdRemap>,
+    pending_mesh: Option<Res<PendingMesh>>,
+    mesh_backlog: Option<Res<MeshBacklog>>,
     mut chunk_map: ResMut<ChunkMap>,
     mut fluids: ResMut<FluidMap>,
     mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
     mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
+    mut chunk_decode_tasks: ResMut<RemoteChunkDecodeTasks>,
+    mut chunk_decoded_queue: ResMut<RemoteChunkDecodedQueue>,
+    mut chunk_remesh_queue: ResMut<RemoteChunkRemeshQueue>,
+    mut chunk_debug: Option<ResMut<ChunkDebugStats>>,
+    mut observed_flow_events: ObservedWaterFlowEventWriters,
     runtime: Res<MultiplayerClientRuntime>,
     mut q: Query<(
         &mut MessageReceiver<ServerChunkData>,
@@ -1361,56 +1661,132 @@ fn receive_world_messages(
 ) {
     let Some(entity) = runtime.connection_entity else {
         chunk_decode_queue.reset();
+        chunk_decode_tasks.reset();
+        chunk_decoded_queue.reset();
+        chunk_remesh_queue.reset();
+        if let Some(stats) = chunk_debug.as_deref_mut() {
+            stats.remote_decode_queue = 0;
+            stats.remote_remesh_queue = 0;
+            stats.remote_decode_queue_peak = 0;
+            stats.remote_remesh_queue_peak = 0;
+        }
         return;
     };
     if !block_remap.is_ready() {
         chunk_decode_queue.reset();
+        chunk_decode_tasks.reset();
+        chunk_decoded_queue.reset();
+        chunk_remesh_queue.reset();
+        if let Some(stats) = chunk_debug.as_deref_mut() {
+            stats.remote_decode_queue = 0;
+            stats.remote_remesh_queue = 0;
+            stats.remote_decode_queue_peak = 0;
+            stats.remote_remesh_queue_peak = 0;
+        }
         return;
     }
 
     let Ok((mut recv_chunk, mut recv_block_break, mut recv_block_place)) = q.get_mut(entity) else {
         chunk_decode_queue.reset();
+        chunk_decode_tasks.reset();
+        chunk_decoded_queue.reset();
+        chunk_remesh_queue.reset();
+        if let Some(stats) = chunk_debug.as_deref_mut() {
+            stats.remote_decode_queue = 0;
+            stats.remote_remesh_queue = 0;
+            stats.remote_decode_queue_peak = 0;
+            stats.remote_remesh_queue_peak = 0;
+        }
         return;
     };
 
     for message in recv_chunk.receive() {
-        chunk_decode_queue.queued.push_back(message);
+        chunk_decode_queue.enqueue(message);
     }
-    dedupe_remote_chunk_decode_queue(&mut chunk_decode_queue.queued);
 
-    let decode_budget =
-        multiplayer_chunk_decode_budget(chunk_decode_queue.queued.len(), time.delta_secs());
+    let mesh_pressure = pending_mesh.as_ref().map_or(0, |pending| pending.0.len())
+        + mesh_backlog.as_ref().map_or(0, |backlog| backlog.0.len());
+    let decode_spawn_budget =
+        multiplayer_chunk_decode_budget(chunk_decode_queue.len(), mesh_pressure, time.delta_secs());
+    let decode_apply_budget =
+        multiplayer_chunk_apply_budget(chunk_decoded_queue.len(), mesh_pressure, time.delta_secs());
+    let decode_task_inflight_cap =
+        multiplayer_chunk_decode_task_inflight_cap(mesh_pressure, time.delta_secs());
+
+    if let Some(registry) = registry.as_ref() {
+        let local_block_registry_len = registry.defs.len();
+        if local_block_registry_len > 0 {
+            let pool = AsyncComputeTaskPool::get();
+            let remap = std::sync::Arc::new(block_remap.server_to_local.clone());
+            let mut scanned = 0usize;
+            let scan_cap = chunk_decode_queue.len().max(decode_spawn_budget);
+            let mut started = 0usize;
+
+            while started < decode_spawn_budget
+                && chunk_decode_tasks.len() < decode_task_inflight_cap
+                && scanned < scan_cap
+            {
+                scanned += 1;
+                let Some(message) = chunk_decode_queue.pop_front() else {
+                    break;
+                };
+                if chunk_decode_tasks.tasks.contains_key(&message.coord) {
+                    // A task for this coord is already running; keep only the latest payload queued.
+                    chunk_decode_queue.enqueue(message);
+                    continue;
+                }
+
+                let coord_arr = message.coord;
+                let blocks = message.blocks;
+                let remap_for_task = std::sync::Arc::clone(&remap);
+                let task = pool.spawn(async move {
+                    let coord = IVec2::new(coord_arr[0], coord_arr[1]);
+                    let Ok(mut chunk) = crate::generator::chunk::chunk_utils::decode_chunk(&blocks)
+                    else {
+                        return None;
+                    };
+                    remap_server_chunk_payload_raw(
+                        &mut chunk,
+                        remap_for_task.as_slice(),
+                        local_block_registry_len,
+                    );
+                    Some((coord, chunk))
+                });
+
+                chunk_decode_tasks.tasks.insert(coord_arr, task);
+                started += 1;
+            }
+        }
+    }
+
+    let mut finished_tasks: Vec<[i32; 2]> = Vec::new();
+    let poll_scan_limit = decode_task_inflight_cap.saturating_mul(2).clamp(8, 48);
+    let mut scanned_tasks = 0usize;
+    for (coord, task) in chunk_decode_tasks.tasks.iter_mut() {
+        if scanned_tasks >= poll_scan_limit {
+            break;
+        }
+        scanned_tasks += 1;
+        if let Some(result) = future::block_on(future::poll_once(task)) {
+            finished_tasks.push(*coord);
+            if let Some((decoded_coord, decoded_chunk)) = result {
+                chunk_decoded_queue.enqueue(decoded_coord, decoded_chunk);
+            }
+        }
+    }
+    for coord in finished_tasks {
+        chunk_decode_tasks.tasks.remove(&coord);
+    }
 
     let mut dirty_coords = HashSet::new();
-    if let Some(registry) = registry.as_ref() {
-        let water_local_id = registry
-            .id_opt("water_block")
-            .or_else(|| registry.id_opt("water"))
-            .unwrap_or(0);
-        for _ in 0..decode_budget {
-            let Some(message) = chunk_decode_queue.queued.pop_front() else {
-                break;
-            };
-
-            let coord = IVec2::new(message.coord[0], message.coord[1]);
-            let Ok(mut chunk) = crate::generator::chunk::chunk_utils::decode_chunk(&message.blocks)
-            else {
-                warn!("Failed to decode streamed chunk {},{}", coord.x, coord.y);
-                continue;
-            };
-
-            let mut fluid_chunk = FluidChunk::new(SEA_LEVEL);
-            remap_server_chunk_payload_in_place(
-                &mut chunk,
-                &mut fluid_chunk,
-                &block_remap,
-                registry.defs.len(),
-                water_local_id,
-            );
-
+    for _ in 0..decode_apply_budget {
+        let Some((coord, mut chunk)) = chunk_decoded_queue.pop_front() else {
+            break;
+        };
+        if registry.is_some() {
             chunk.mark_all_dirty();
             chunk_map.chunks.insert(coord, chunk);
-            fluids.0.insert(coord, fluid_chunk);
+            fluids.0.remove(&coord);
 
             dirty_coords.insert(coord);
 
@@ -1428,15 +1804,30 @@ fn receive_world_messages(
     }
 
     for coord in dirty_coords {
-        for sub in 0..SEC_COUNT {
-            ev_dirty.write(SubChunkNeedRemeshEvent { coord, sub });
-        }
+        chunk_remesh_queue.enqueue(coord);
+    }
+
+    if let Some(stats) = chunk_debug.as_deref_mut() {
+        stats.remote_decode_queue =
+            chunk_decode_queue.len() + chunk_decode_tasks.len() + chunk_decoded_queue.len();
+        stats.remote_remesh_queue = chunk_remesh_queue.len();
+        stats.remote_decode_queue_peak = stats
+            .remote_decode_queue_peak
+            .max(stats.remote_decode_queue);
+        stats.remote_remesh_queue_peak = stats
+            .remote_remesh_queue_peak
+            .max(stats.remote_remesh_queue);
     }
 
     for message in recv_block_break.receive() {
         if Some(message.player_id) == runtime.local_player_id {
             continue;
         }
+        let location = IVec3::new(
+            message.location[0],
+            message.location[1],
+            message.location[2],
+        );
         apply_remote_block_break(
             message.location,
             registry.as_deref(),
@@ -1444,6 +1835,9 @@ fn receive_world_messages(
             &mut fluids,
             &mut ev_dirty,
         );
+        observed_flow_events
+            .break_events
+            .write(BlockBreakObservedEvent { location });
     }
 
     for message in recv_block_place.receive() {
@@ -1453,15 +1847,66 @@ fn receive_world_messages(
         let Some(registry) = registry.as_ref() else {
             continue;
         };
+        let local_block_id = remap_server_block_id(&block_remap, registry, message.block_id);
+        let local_stacked_block_id =
+            remap_server_block_id(&block_remap, registry, message.stacked_block_id);
         apply_remote_block_place(
             message.location,
-            remap_server_block_id(&block_remap, registry, message.block_id),
-            remap_server_block_id(&block_remap, registry, message.stacked_block_id),
+            local_block_id,
+            local_stacked_block_id,
             registry,
             &mut chunk_map,
             &mut fluids,
             &mut ev_dirty,
         );
+        observed_flow_events
+            .place_events
+            .write(BlockPlaceObservedEvent {
+                location: IVec3::new(
+                    message.location[0],
+                    message.location[1],
+                    message.location[2],
+                ),
+                block_id: local_block_id,
+            });
+    }
+}
+
+/// Spreads streamed chunk remesh triggers over multiple frames to avoid burst spikes.
+fn flush_remote_chunk_remesh_queue(
+    time: Res<Time>,
+    pending_mesh: Option<Res<PendingMesh>>,
+    mesh_backlog: Option<Res<MeshBacklog>>,
+    chunk_map: Res<ChunkMap>,
+    mut chunk_remesh_queue: ResMut<RemoteChunkRemeshQueue>,
+    mut chunk_debug: Option<ResMut<ChunkDebugStats>>,
+    mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
+) {
+    let mesh_pressure = pending_mesh.as_ref().map_or(0, |pending| pending.0.len())
+        + mesh_backlog.as_ref().map_or(0, |backlog| backlog.0.len());
+    let budget = multiplayer_chunk_remesh_coord_budget(
+        chunk_remesh_queue.len(),
+        mesh_pressure,
+        time.delta_secs(),
+    );
+
+    for _ in 0..budget {
+        let Some(coord) = chunk_remesh_queue.pop_front() else {
+            break;
+        };
+        if !chunk_map.chunks.contains_key(&coord) {
+            continue;
+        }
+        for sub in 0..SEC_COUNT {
+            ev_dirty.write(SubChunkNeedRemeshEvent { coord, sub });
+        }
+    }
+
+    if let Some(stats) = chunk_debug.as_deref_mut() {
+        stats.remote_remesh_queue = chunk_remesh_queue.len();
+        stats.remote_remesh_queue_peak = stats
+            .remote_remesh_queue_peak
+            .max(stats.remote_remesh_queue);
     }
 }
 
@@ -1549,925 +1994,5 @@ fn receive_drop_messages(
     }
 }
 
-/// Runs the `send_chunk_interest_updates` routine for send chunk interest updates in the `client` module.
-fn send_chunk_interest_updates(
-    time: Res<Time>,
-    game_config: Res<GlobalConfig>,
-    q_player: Query<&Transform, With<Player>>,
-    multiplayer_connection: Res<MultiplayerConnectionState>,
-    q_connected: Query<Has<Connected>>,
-    mut chunk_stream: ResMut<RemoteChunkStreamState>,
-    mut chunk_decode_queue: ResMut<RemoteChunkDecodeQueue>,
-    runtime: Res<MultiplayerClientRuntime>,
-    mut q_sender: Query<&mut MessageSender<ClientChunkInterest>>,
-) {
-    let Some(entity) = runtime.connection_entity else {
-        chunk_stream.reset();
-        chunk_decode_queue.reset();
-        return;
-    };
-
-    if !q_connected.get(entity).unwrap_or(false)
-        || multiplayer_connection.active_session_url.is_none()
-    {
-        chunk_stream.reset();
-        chunk_decode_queue.reset();
-        return;
-    }
-
-    let target_radius = game_config.graphics.chunk_range.max(1);
-    let center = if let Ok(transform) = q_player.single() {
-        world_to_chunk_xz(
-            (transform.translation.x / VOXEL_SIZE).floor() as i32,
-            (transform.translation.z / VOXEL_SIZE).floor() as i32,
-        )
-        .0
-    } else if let Some(spawn_translation) = multiplayer_connection.spawn_translation {
-        world_to_chunk_xz(
-            spawn_translation[0].floor() as i32,
-            spawn_translation[2].floor() as i32,
-        )
-        .0
-    } else {
-        return;
-    };
-    let now = time.elapsed_secs();
-
-    let should_reset_progressive = match chunk_stream.last_requested_center {
-        None => true,
-        Some(last_center) => {
-            let dx = (center.x - last_center.x).abs();
-            let dz = (center.y - last_center.y).abs();
-            dx.max(dz) > 2
-        }
-    };
-
-    if should_reset_progressive {
-        let bootstrap_radius = target_radius
-            .min(MULTIPLAYER_CHUNK_INTEREST_BOOTSTRAP_RADIUS)
-            .max(1);
-        chunk_stream.progressive_radius = Some(bootstrap_radius);
-        chunk_stream.next_radius_step_at = now + MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS;
-    } else if chunk_stream.progressive_radius.is_none() {
-        let carry_radius = chunk_stream.last_requested_radius.unwrap_or(target_radius);
-        chunk_stream.progressive_radius = Some(carry_radius.clamp(1, target_radius));
-    }
-
-    let mut radius = chunk_stream
-        .progressive_radius
-        .unwrap_or(target_radius)
-        .clamp(1, target_radius);
-
-    if radius < target_radius && now >= chunk_stream.next_radius_step_at {
-        radius += 1;
-        chunk_stream.progressive_radius = Some(radius);
-        chunk_stream.next_radius_step_at = now + MULTIPLAYER_CHUNK_INTEREST_STEP_INTERVAL_SECS;
-    } else {
-        chunk_stream.progressive_radius = Some(radius);
-    }
-
-    if chunk_stream.last_requested_center == Some(center)
-        && chunk_stream.last_requested_radius == Some(radius)
-    {
-        return;
-    }
-
-    if let Ok(mut sender) = q_sender.get_mut(entity) {
-        sender.send::<UnorderedReliable>(ClientChunkInterest::new([center.x, center.y], radius));
-        chunk_stream.last_requested_center = Some(center);
-        chunk_stream.last_requested_radius = Some(radius);
-    }
-}
-
-/// Runs the `smooth_remote_players` routine for smooth remote players in the `client` module.
-fn smooth_remote_players(
-    time: Res<Time>,
-    mut remote_players: Query<(&RemotePlayerAvatar, &mut Transform)>,
-    mut runtime: ResMut<MultiplayerClientRuntime>,
-) {
-    let now = time.elapsed_secs();
-    let render_at = (now - REMOTE_PLAYER_INTERP_BACK_TIME_SECS).max(0.0);
-    let alpha = (1.0 - (-REMOTE_PLAYER_SMOOTHING_HZ * time.delta_secs()).exp()).clamp(0.0, 1.0);
-
-    for (avatar, mut transform) in &mut remote_players {
-        let Some(smoothing) = runtime.remote_player_smoothing.get_mut(&avatar.player_id) else {
-            continue;
-        };
-        let Some(front) = smoothing.snapshots.front().copied() else {
-            continue;
-        };
-
-        while smoothing.snapshots.len() >= 2 {
-            let next = smoothing.snapshots.get(1).copied();
-            if match next {
-                Some(snapshot) => snapshot.at_secs > render_at,
-                None => true,
-            } {
-                break;
-            }
-            smoothing.snapshots.pop_front();
-        }
-
-        let (target_translation, target_yaw) = if let Some(next) = smoothing.snapshots.get(1) {
-            let from = smoothing.snapshots[0];
-            let to = *next;
-            let span = (to.at_secs - from.at_secs).max(0.0001);
-            let t = ((render_at - from.at_secs) / span).clamp(0.0, 1.0);
-            (
-                from.translation.lerp(to.translation, t),
-                lerp_angle_radians(from.yaw, to.yaw, t),
-            )
-        } else {
-            let latest = smoothing.snapshots.back().copied().unwrap_or(front);
-            let extrapolated =
-                if let Some(previous) = smoothing.snapshots.iter().rev().nth(1).copied() {
-                    let dt = (latest.at_secs - previous.at_secs).max(0.0001);
-                    let velocity = (latest.translation - previous.translation) / dt;
-                    let ahead = (render_at - latest.at_secs)
-                        .clamp(0.0, REMOTE_PLAYER_MAX_EXTRAPOLATION_SECS);
-                    latest.translation + velocity * ahead
-                } else {
-                    latest.translation
-                };
-            (extrapolated, latest.yaw)
-        };
-
-        transform.translation = transform.translation.lerp(target_translation, alpha);
-        let current_yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
-        let smoothed_yaw = lerp_angle_radians(current_yaw, target_yaw, alpha);
-        transform.rotation = Quat::from_rotation_y(smoothed_yaw);
-    }
-}
-
-/// Runs the `send_local_block_break_events` routine for send local block break events in the `client` module.
-fn send_local_block_break_events(
-    mut break_events: MessageReader<BlockBreakByPlayerEvent>,
-    item_registry: Option<Res<ItemRegistry>>,
-    block_remap: Res<BlockIdRemap>,
-    runtime: Res<MultiplayerClientRuntime>,
-    q_connected: Query<Has<Connected>>,
-    mut q_sender: Query<&mut MessageSender<ClientBlockBreak>>,
-) {
-    let Some(entity) = runtime.connection_entity else {
-        for _ in break_events.read() {}
-        return;
-    };
-
-    if !q_connected.get(entity).unwrap_or(false) {
-        for _ in break_events.read() {}
-        return;
-    }
-
-    let Ok(mut sender) = q_sender.get_mut(entity) else {
-        for _ in break_events.read() {}
-        return;
-    };
-
-    for event in break_events.read() {
-        let drop_block_id = if event.drops_item {
-            item_registry
-                .as_ref()
-                .and_then(|items| items.block_for_item(event.drop_item_id))
-                .map(|local_block_id| block_remap.to_server(local_block_id))
-                .unwrap_or(0)
-        } else {
-            0
-        };
-        sender.send::<OrderedReliable>(ClientBlockBreak::new(
-            event.location.to_array(),
-            drop_block_id,
-            0,
-        ));
-    }
-}
-
-/// Runs the `send_local_block_place_events` routine for send local block place events in the `client` module.
-fn send_local_block_place_events(
-    mut place_events: MessageReader<BlockPlaceByPlayerEvent>,
-    block_remap: Res<BlockIdRemap>,
-    runtime: Res<MultiplayerClientRuntime>,
-    q_connected: Query<Has<Connected>>,
-    mut q_sender: Query<&mut MessageSender<ClientBlockPlace>>,
-) {
-    let Some(entity) = runtime.connection_entity else {
-        for _ in place_events.read() {}
-        return;
-    };
-
-    if !q_connected.get(entity).unwrap_or(false) {
-        for _ in place_events.read() {}
-        return;
-    }
-
-    let Ok(mut sender) = q_sender.get_mut(entity) else {
-        for _ in place_events.read() {}
-        return;
-    };
-
-    for event in place_events.read() {
-        sender.send::<OrderedReliable>(ClientBlockPlace::new(
-            event.location.to_array(),
-            block_remap.to_server(event.block_id),
-            block_remap.to_server(event.stacked_block_id),
-        ));
-    }
-}
-
-/// Runs the `send_local_item_drop_requests` routine for send local item drop requests in the `client` module.
-fn send_local_item_drop_requests(
-    mut drop_requests: MessageReader<DropItemRequest>,
-    item_registry: Option<Res<ItemRegistry>>,
-    block_remap: Res<BlockIdRemap>,
-    runtime: Res<MultiplayerClientRuntime>,
-    q_connected: Query<Has<Connected>>,
-    mut q_sender: Query<&mut MessageSender<ClientDropItem>>,
-) {
-    let Some(entity) = runtime.connection_entity else {
-        for _ in drop_requests.read() {}
-        return;
-    };
-
-    if !q_connected.get(entity).unwrap_or(false) {
-        for _ in drop_requests.read() {}
-        return;
-    }
-
-    let Ok(mut sender) = q_sender.get_mut(entity) else {
-        for _ in drop_requests.read() {}
-        return;
-    };
-
-    for request in drop_requests.read() {
-        if request.item_id == 0 || request.amount == 0 {
-            continue;
-        }
-        let local_block_id = item_registry
-            .as_ref()
-            .and_then(|items| items.block_for_item(request.item_id))
-            .unwrap_or(0);
-
-        sender.send::<OrderedReliable>(ClientDropItem::new(
-            request.location,
-            request.item_id,
-            block_remap.to_server(local_block_id),
-            request.amount,
-            request.spawn_translation,
-            request.initial_velocity,
-        ));
-    }
-}
-
-/// Runs the `simulate_multiplayer_drop_items` routine for simulate multiplayer drop items in the `client` module.
-fn simulate_multiplayer_drop_items(
-    time: Res<Time>,
-    chunk_map: Res<ChunkMap>,
-    player: Query<&Transform, (With<Player>, Without<MultiplayerDroppedItem>)>,
-    mut drops: Query<(&mut MultiplayerDroppedItem, &mut Transform), With<MultiplayerDroppedItem>>,
-) {
-    let delta = time.delta_secs();
-    let now = time.elapsed_secs();
-    let player_pos = player.single().ok().map(|t| t.translation);
-
-    for (mut drop, mut transform) in &mut drops {
-        drop.velocity.y -= MULTIPLAYER_DROP_GRAVITY * delta;
-        let vx = drop.velocity.x;
-        let vz = drop.velocity.z;
-        drop.angular_velocity += Vec3::new(vz, 0.0, -vx) * (1.25 * delta);
-        let max_spin = 36.0;
-        let spin_len = drop.angular_velocity.length();
-        if spin_len > max_spin {
-            drop.angular_velocity = drop.angular_velocity / spin_len * max_spin;
-        }
-        let mut spin = Quat::IDENTITY;
-        if drop.angular_velocity.length_squared() > 0.000_001 {
-            spin = Quat::from_scaled_axis(drop.angular_velocity * delta) * spin;
-        }
-        if !drop.resting
-            && drop.spin_axis.length_squared() > 0.000_001
-            && drop.spin_speed.abs() > 0.001
-        {
-            spin = Quat::from_axis_angle(drop.spin_axis, drop.spin_speed * delta) * spin;
-        }
-        if spin != Quat::IDENTITY {
-            transform.rotation = (spin * transform.rotation).normalize();
-        }
-
-        let half = MULTIPLAYER_DROP_ITEM_SIZE * 0.5;
-        let support_probe = transform.translation - Vec3::Y * (half + 0.06);
-        let support_x = support_probe.x.floor() as i32;
-        let support_y = support_probe.y.floor() as i32;
-        let support_z = support_probe.z.floor() as i32;
-        let has_support =
-            get_block_world(&chunk_map, IVec3::new(support_x, support_y, support_z)) != 0;
-
-        if now >= drop.pickup_ready_at {
-            if let Some(player_pos) = player_pos {
-                let to_player = player_pos - transform.translation;
-                let dist_sq = to_player.length_squared();
-                if dist_sq <= MULTIPLAYER_DROP_ATTRACT_RADIUS * MULTIPLAYER_DROP_ATTRACT_RADIUS
-                    && dist_sq > 0.000_001
-                {
-                    let dist = dist_sq.sqrt();
-                    let dir = to_player / dist;
-                    let t = 1.0 - (dist / MULTIPLAYER_DROP_ATTRACT_RADIUS).clamp(0.0, 1.0);
-                    let accel = MULTIPLAYER_DROP_ATTRACT_ACCEL * (0.35 + t * 1.65);
-                    drop.velocity += dir * (accel * delta);
-                    let speed = drop.velocity.length();
-                    if speed > MULTIPLAYER_DROP_ATTRACT_MAX_SPEED {
-                        drop.velocity = drop.velocity / speed * MULTIPLAYER_DROP_ATTRACT_MAX_SPEED;
-                    }
-                    drop.resting = false;
-                }
-            }
-        }
-
-        if drop.resting {
-            if has_support {
-                drop.velocity = Vec3::ZERO;
-                if drop.block_visual {
-                    drop.angular_velocity = Vec3::ZERO;
-                    drop.spin_speed = 0.0;
-                } else {
-                    drop.angular_velocity = Vec3::ZERO;
-                    drop.spin_speed = 0.0;
-                    transform.rotation = flat_item_rotation(transform.rotation);
-                }
-                continue;
-            }
-
-            drop.resting = false;
-            drop.velocity = Vec3::new(0.0, drop.velocity.y.min(-0.1), 0.0);
-        }
-
-        transform.translation += drop.velocity * delta;
-
-        let foot = transform.translation - Vec3::Y * (half + 0.03);
-        let wx = foot.x.floor() as i32;
-        let wy = foot.y.floor() as i32;
-        let wz = foot.z.floor() as i32;
-
-        let below_is_solid = get_block_world(&chunk_map, IVec3::new(wx, wy, wz)) != 0;
-        if !below_is_solid || drop.velocity.y > 0.0 {
-            continue;
-        }
-
-        let ground_top = wy as f32 + 1.0;
-        if transform.translation.y - half > ground_top {
-            continue;
-        }
-
-        transform.translation.y = ground_top + half;
-        let impact_velocity = drop.velocity;
-        drop.velocity = Vec3::ZERO;
-        drop.resting = true;
-        if drop.block_visual {
-            drop.angular_velocity = Vec3::ZERO;
-            drop.spin_speed = 0.0;
-            transform.rotation = settled_block_drop_rotation(
-                transform.rotation,
-                transform.translation,
-                impact_velocity,
-            );
-        } else {
-            drop.angular_velocity = Vec3::ZERO;
-            drop.spin_speed = 0.0;
-            transform.rotation = flat_item_rotation(transform.rotation);
-        }
-    }
-}
-
-#[inline]
-fn flat_item_rotation(current_rotation: Quat) -> Quat {
-    let forward = current_rotation * Vec3::Z;
-    let yaw = forward.x.atan2(forward.z);
-    Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)
-}
-
-#[inline]
-fn settled_block_drop_rotation(
-    current_rotation: Quat,
-    translation: Vec3,
-    impact_velocity: Vec3,
-) -> Quat {
-    let forward = current_rotation * Vec3::Z;
-    let yaw = forward.x.atan2(forward.z);
-    let base = Quat::from_rotation_y(yaw);
-
-    let frac_x = translation.x - translation.x.floor();
-    let frac_z = translation.z - translation.z.floor();
-    let edge_bias_x = (frac_x - 0.5).abs();
-    let edge_bias_z = (frac_z - 0.5).abs();
-    let horizontal_speed = Vec2::new(impact_velocity.x, impact_velocity.z).length();
-
-    let (axis, angle_deg): (Vec3, f32) = if horizontal_speed > 0.45 {
-        let dir = Vec2::new(impact_velocity.x, impact_velocity.z).normalize_or_zero();
-        let axis = Vec3::new(-dir.y, 0.0, dir.x).normalize_or_zero();
-        (
-            if axis.length_squared() > 0.000_001 {
-                axis
-            } else {
-                Vec3::X
-            },
-            72.0,
-        )
-    } else if edge_bias_x.max(edge_bias_z) > 0.34 {
-        if edge_bias_x >= edge_bias_z {
-            (Vec3::Z * if frac_x >= 0.5 { 1.0 } else { -1.0 }, 58.0)
-        } else {
-            (Vec3::X * if frac_z >= 0.5 { -1.0 } else { 1.0 }, 58.0)
-        }
-    } else {
-        let cell_x = translation.x.floor() as i32;
-        let cell_z = translation.z.floor() as i32;
-        if ((cell_x ^ cell_z) & 1) == 0 {
-            (Vec3::X, 90.0)
-        } else {
-            (Vec3::Z, 90.0)
-        }
-    };
-
-    (Quat::from_axis_angle(axis.normalize_or_zero(), angle_deg.to_radians()) * base).normalize()
-}
-
-/// Runs the `send_local_inventory_sync` routine for send local inventory sync in the `client` module.
-fn send_local_inventory_sync(
-    multiplayer_connection: Res<MultiplayerConnectionState>,
-    inventory: Res<PlayerInventory>,
-    runtime: Res<MultiplayerClientRuntime>,
-    q_connected: Query<Has<Connected>>,
-    mut q_sender: Query<&mut MessageSender<ClientInventorySync>>,
-) {
-    if !multiplayer_connection.connected || !inventory.is_changed() {
-        return;
-    }
-
-    let Some(entity) = runtime.connection_entity else {
-        return;
-    };
-
-    if !q_connected.get(entity).unwrap_or(false) {
-        return;
-    }
-
-    let Ok(mut sender) = q_sender.get_mut(entity) else {
-        return;
-    };
-
-    sender.send::<UnorderedReliable>(ClientInventorySync::from_slots(&inventory.slots));
-}
-
-/// Runs the `send_local_drop_pickup_requests` routine for send local drop pickup requests in the `client` module.
-fn send_local_drop_pickup_requests(
-    time: Res<Time>,
-    multiplayer_connection: Res<MultiplayerConnectionState>,
-    inventory: Res<PlayerInventory>,
-    item_registry: Option<Res<ItemRegistry>>,
-    player: Query<&Transform, With<Player>>,
-    mut drops: Query<(&Transform, &mut MultiplayerDroppedItem), With<MultiplayerDroppedItem>>,
-    runtime: Res<MultiplayerClientRuntime>,
-    q_connected: Query<Has<Connected>>,
-    mut q_sender: Query<&mut MessageSender<ClientDropPickup>>,
-) {
-    if !multiplayer_connection.connected {
-        return;
-    }
-
-    let Some(entity) = runtime.connection_entity else {
-        return;
-    };
-
-    if !q_connected.get(entity).unwrap_or(false) {
-        return;
-    }
-
-    let Ok(mut sender) = q_sender.get_mut(entity) else {
-        return;
-    };
-
-    let Ok(player_transform) = player.single() else {
-        return;
-    };
-
-    let radius_sq = MULTIPLAYER_DROP_PICKUP_RADIUS * MULTIPLAYER_DROP_PICKUP_RADIUS;
-    let player_pos = player_transform.translation;
-    let now = time.elapsed_secs();
-    let Some(item_registry) = item_registry.as_ref() else {
-        return;
-    };
-
-    for (transform, mut drop) in &mut drops {
-        if now < drop.pickup_ready_at {
-            continue;
-        }
-
-        if now < drop.next_pickup_request_at {
-            continue;
-        }
-
-        if !inventory_can_add_item(&inventory, drop.item_id, item_registry) {
-            continue;
-        }
-
-        if player_pos.distance_squared(transform.translation) > radius_sq {
-            continue;
-        }
-
-        sender.send::<OrderedReliable>(ClientDropPickup::new(drop.drop_id));
-        drop.next_pickup_request_at = now + 0.25;
-    }
-}
-
-/// Runs the `send_local_player_pose` routine for send local player pose in the `client` module.
-fn send_local_player_pose(
-    time: Res<Time>,
-    q_player: Query<(&Transform, &FpsController), With<Player>>,
-    mut runtime: ResMut<MultiplayerClientRuntime>,
-    q_connected: Query<Has<Connected>>,
-    mut q_sender: Query<&mut MessageSender<PlayerMove>>,
-) {
-    runtime.send_timer.tick(time.delta());
-    if !runtime.send_timer.just_finished() {
-        return;
-    }
-
-    let Some(entity) = runtime.connection_entity else {
-        return;
-    };
-
-    if !q_connected.get(entity).unwrap_or(false) {
-        return;
-    }
-
-    let Ok(mut sender) = q_sender.get_mut(entity) else {
-        return;
-    };
-
-    let Ok((transform, controller)) = q_player.single() else {
-        return;
-    };
-
-    sender.send::<UnorderedUnreliable>(PlayerMove::new(
-        transform.translation.to_array(),
-        controller.yaw,
-        controller.pitch,
-    ));
-}
-
-/// Runs the `send_client_keepalive` routine for send client keepalive in the `client` module.
-fn send_client_keepalive(
-    time: Res<Time>,
-    mut runtime: ResMut<MultiplayerClientRuntime>,
-    q_connected: Query<Has<Connected>>,
-    mut q_sender: Query<&mut MessageSender<ClientKeepAlive>>,
-) {
-    runtime.keepalive_timer.tick(time.delta());
-    if !runtime.keepalive_timer.just_finished() {
-        return;
-    }
-
-    let Some(entity) = runtime.connection_entity else {
-        return;
-    };
-
-    if !q_connected.get(entity).unwrap_or(false) {
-        return;
-    }
-
-    let Ok(mut sender) = q_sender.get_mut(entity) else {
-        return;
-    };
-
-    let stamp_ms = (time.elapsed_secs_f64() * 1000.0) as u32;
-    sender.send::<UnorderedReliable>(ClientKeepAlive::new(stamp_ms));
-}
-
-/// Applies remote block break for the `client` module.
-fn apply_remote_block_break(
-    location: [i32; 3],
-    registry: Option<&BlockRegistry>,
-    chunk_map: &mut ChunkMap,
-    fluids: &mut FluidMap,
-    ev_dirty: &mut MessageWriter<SubChunkNeedRemeshEvent>,
-) {
-    let world_pos = IVec3::from_array(location);
-    if world_pos.y < Y_MIN || world_pos.y > Y_MAX {
-        return;
-    }
-
-    let mut changed = false;
-    if let Some(mut access) = world_access_mut(chunk_map, world_pos) {
-        let primary = access.get();
-        let stacked = access.get_stacked();
-        if primary != 0 || stacked != 0 {
-            let clear_both = primary != 0
-                && stacked != 0
-                && registry.is_some_and(|registry| {
-                    registry
-                        .def_opt(primary)
-                        .is_some_and(|definition| !definition.mesh_visible)
-                });
-            if stacked != 0 && !clear_both {
-                access.set(stacked);
-                access.set_stacked(0);
-            } else {
-                access.set(0);
-                access.set_stacked(0);
-            }
-            changed = true;
-        }
-    }
-
-    let (chunk_coord, local) = world_to_chunk_xz(world_pos.x, world_pos.z);
-    let lx = local.x as usize;
-    let lz = local.y as usize;
-    let ly = world_y_to_local(world_pos.y);
-    if let Some(fluid_chunk) = fluids.0.get_mut(&chunk_coord) {
-        if fluid_chunk.get(lx, ly, lz) {
-            fluid_chunk.set(lx, ly, lz, false);
-            changed = true;
-        }
-    }
-
-    if changed {
-        mark_dirty_block_and_neighbors(chunk_map, world_pos, ev_dirty);
-    }
-}
-
-/// Applies remote block place for the `client` module.
-fn apply_remote_block_place(
-    location: [i32; 3],
-    block_id: u16,
-    stacked_block_id: u16,
-    registry: &BlockRegistry,
-    chunk_map: &mut ChunkMap,
-    fluids: &mut FluidMap,
-    ev_dirty: &mut MessageWriter<SubChunkNeedRemeshEvent>,
-) {
-    if block_id == 0 && stacked_block_id == 0 {
-        return;
-    }
-
-    let world_pos = IVec3::from_array(location);
-    if world_pos.y < Y_MIN || world_pos.y > Y_MAX {
-        return;
-    }
-
-    let (chunk_coord, local) = world_to_chunk_xz(world_pos.x, world_pos.z);
-    let lx = local.x as usize;
-    let lz = local.y as usize;
-    let ly = world_y_to_local(world_pos.y);
-    let is_fluid = registry.is_fluid(block_id);
-
-    if let Some(mut access) = world_access_mut(chunk_map, world_pos) {
-        if is_fluid {
-            access.set(0);
-            access.set_stacked(0);
-        } else {
-            access.set(block_id);
-            access.set_stacked(stacked_block_id);
-        }
-        mark_dirty_block_and_neighbors(chunk_map, world_pos, ev_dirty);
-    }
-
-    let fluid_chunk = fluids
-        .0
-        .entry(chunk_coord)
-        .or_insert_with(|| FluidChunk::new(SEA_LEVEL));
-    if is_fluid {
-        fluid_chunk.set(lx, ly, lz, true);
-    } else {
-        fluid_chunk.set(lx, ly, lz, false);
-    }
-}
-
-/// Spawns multiplayer drop for the `client` module.
-#[allow(clippy::too_many_arguments)]
-fn spawn_multiplayer_drop(
-    commands: &mut Commands,
-    registry: &BlockRegistry,
-    item_registry: &ItemRegistry,
-    meshes: &mut Assets<Mesh>,
-    drops: &mut MultiplayerDropIndex,
-    drop_id: u64,
-    location: [i32; 3],
-    item_id: u16,
-    has_motion: bool,
-    spawn_translation: [f32; 3],
-    initial_velocity: [f32; 3],
-    spawn_now: f32,
-) {
-    if item_id == 0 {
-        return;
-    }
-
-    if drops.entities.contains_key(&drop_id) {
-        return;
-    }
-
-    let Some((mesh, material, visual_scale, block_visual)) =
-        build_world_item_drop_visual(registry, item_registry, item_id, MULTIPLAYER_DROP_ITEM_SIZE)
-    else {
-        return;
-    };
-
-    let world_loc = IVec3::from_array(location);
-    let pop_velocity = if has_motion {
-        Vec3::from_array(initial_velocity)
-    } else {
-        compute_multiplayer_drop_pop_velocity(world_loc, drop_id)
-    };
-    let angular_velocity = compute_multiplayer_drop_angular_velocity(world_loc, drop_id);
-    let spin_axis = compute_multiplayer_drop_spin_axis(world_loc, drop_id);
-    let spin_speed = compute_multiplayer_drop_spin_speed(world_loc, drop_id);
-    let initial_rotation = Quat::from_euler(
-        EulerRot::XYZ,
-        hash01_u64(seed_from_world_loc(world_loc) ^ drop_id ^ 0xA11CE) * std::f32::consts::TAU,
-        hash01_u64(seed_from_world_loc(world_loc) ^ drop_id ^ 0xB00B5) * std::f32::consts::TAU,
-        hash01_u64(seed_from_world_loc(world_loc) ^ drop_id ^ 0xC0FFEE) * std::f32::consts::TAU,
-    );
-    let center = if has_motion {
-        Vec3::from_array(spawn_translation)
-    } else {
-        Vec3::new(
-            (world_loc.x as f32 + 0.5) * VOXEL_SIZE,
-            (world_loc.y as f32 + 0.5) * VOXEL_SIZE + 0.28,
-            (world_loc.z as f32 + 0.5) * VOXEL_SIZE,
-        )
-    };
-
-    let entity = commands
-        .spawn((
-            MultiplayerDroppedItem {
-                drop_id,
-                item_id,
-                block_visual,
-                pickup_ready_at: spawn_now + MULTIPLAYER_DROP_PICKUP_DELAY_SECS,
-                next_pickup_request_at: 0.0,
-                resting: false,
-                velocity: pop_velocity,
-                angular_velocity,
-                spin_axis,
-                spin_speed,
-            },
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(material),
-            Transform {
-                translation: center,
-                rotation: initial_rotation,
-                scale: visual_scale,
-            },
-            Visibility::default(),
-            Name::new(format!("MultiplayerDrop#{drop_id}")),
-        ))
-        .id();
-
-    drops.entities.insert(drop_id, entity);
-}
-
-/// Clears multiplayer drops for the `client` module.
-fn clear_multiplayer_drops(commands: &mut Commands, drops: &mut MultiplayerDropIndex) {
-    for entity in drops.entities.drain().map(|(_, entity)| entity) {
-        safe_despawn_entity(commands, entity);
-    }
-}
-
-/// Runs the `inventory_can_add_item` routine for inventory can add item in the `client` module.
-fn inventory_can_add_item(
-    inventory: &PlayerInventory,
-    item_id: u16,
-    item_registry: &ItemRegistry,
-) -> bool {
-    if item_id == 0 {
-        return false;
-    }
-
-    let stack_limit = item_registry.stack_limit(item_id);
-    inventory
-        .slots
-        .iter()
-        .any(|slot| slot.is_empty() || (slot.item_id == item_id && slot.count < stack_limit))
-}
-
-/// Computes multiplayer drop pop velocity for the `client` module.
-fn compute_multiplayer_drop_pop_velocity(world_loc: IVec3, drop_id: u64) -> Vec3 {
-    let seed_base = seed_from_world_loc(world_loc) ^ drop_id;
-    let angle = hash01_u64(seed_base ^ 0x10) * std::f32::consts::TAU;
-    let distance = MULTIPLAYER_DROP_POP_MIN_DIST
-        + (MULTIPLAYER_DROP_POP_MAX_DIST - MULTIPLAYER_DROP_POP_MIN_DIST)
-            * hash01_u64(seed_base ^ 0x20);
-    let flight_time = 0.35 + hash01_u64(seed_base ^ 0x30) * 0.25;
-    let horizontal_speed = (distance / flight_time).max(0.2);
-
-    Vec3::new(
-        angle.cos() * horizontal_speed,
-        2.8 + hash01_u64(seed_base ^ 0x40) * 1.2,
-        angle.sin() * horizontal_speed,
-    )
-}
-
-/// Computes multiplayer drop angular velocity for the `client` module.
-fn compute_multiplayer_drop_angular_velocity(world_loc: IVec3, drop_id: u64) -> Vec3 {
-    let seed_base = seed_from_world_loc(world_loc) ^ drop_id ^ 0x5EED;
-
-    Vec3::new(
-        -8.0 + hash01_u64(seed_base ^ 0x51) * 16.0,
-        -10.0 + hash01_u64(seed_base ^ 0x52) * 20.0,
-        -8.0 + hash01_u64(seed_base ^ 0x53) * 16.0,
-    )
-}
-
-/// Computes multiplayer drop spin axis for the `client` module.
-fn compute_multiplayer_drop_spin_axis(world_loc: IVec3, drop_id: u64) -> Vec3 {
-    let seed_base = seed_from_world_loc(world_loc) ^ drop_id ^ 0x7A51_5EED;
-    let axis = Vec3::new(
-        -1.0 + hash01_u64(seed_base ^ 0x71) * 2.0,
-        0.35 + hash01_u64(seed_base ^ 0x72) * 1.3,
-        -1.0 + hash01_u64(seed_base ^ 0x73) * 2.0,
-    );
-    let axis = axis.normalize_or_zero();
-    if axis.length_squared() > 0.000_001 {
-        axis
-    } else {
-        Vec3::new(0.78, 0.44, 0.44).normalize()
-    }
-}
-
-/// Computes multiplayer drop spin speed for the `client` module.
-fn compute_multiplayer_drop_spin_speed(world_loc: IVec3, drop_id: u64) -> f32 {
-    let seed_base = seed_from_world_loc(world_loc) ^ drop_id ^ 0x8BAD_F00D;
-    let magnitude = 18.0 + hash01_u64(seed_base ^ 0x81) * 14.0;
-    let sign = if hash01_u64(seed_base ^ 0x82) < 0.5 {
-        -1.0
-    } else {
-        1.0
-    };
-    sign * magnitude
-}
-
-/// Runs the `angle_abs_diff` routine for angle abs diff in the `client` module.
-#[inline]
-fn angle_abs_diff(from: f32, to: f32) -> f32 {
-    let wrapped =
-        (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-    wrapped.abs()
-}
-
-/// Runs the `lerp_angle_radians` routine for lerp angle radians in the `client` module.
-#[inline]
-fn lerp_angle_radians(from: f32, to: f32, t: f32) -> f32 {
-    let wrapped =
-        (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-    from + wrapped * t.clamp(0.0, 1.0)
-}
-
-/// Runs the `seed_from_world_loc` routine for seed from world loc in the `client` module.
-fn seed_from_world_loc(world_loc: IVec3) -> u64 {
-    (world_loc.x as i64 as u64).wrapping_mul(0x9E37_79B1_85EB_CA87)
-        ^ (world_loc.y as i64 as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
-        ^ (world_loc.z as i64 as u64).wrapping_mul(0x1656_67B1_9E37_79F9)
-}
-
-/// Runs the `hash01_u64` routine for hash01 u64 in the `client` module.
-fn hash01_u64(mut x: u64) -> f32 {
-    x ^= x >> 30;
-    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    x ^= x >> 27;
-    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
-    x ^= x >> 31;
-
-    (x as f64 / u64::MAX as f64) as f32
-}
-
-/// Runs the `ensure_remote_player` routine for ensure remote player in the `client` module.
-fn ensure_remote_player(
-    commands: &mut Commands,
-    visuals: &RemotePlayerVisuals,
-    remote_players: &mut HashMap<u64, Entity>,
-    player_id: u64,
-    translation: Vec3,
-    yaw: f32,
-) -> Entity {
-    if let Some(entity) = remote_players.get(&player_id) {
-        return *entity;
-    }
-
-    let entity = commands
-        .spawn((
-            RemotePlayerAvatar { player_id },
-            Name::new(format!("RemotePlayer#{player_id}")),
-            Mesh3d(visuals.mesh.clone()),
-            MeshMaterial3d(visuals.material.clone()),
-            Transform {
-                translation,
-                rotation: Quat::from_rotation_y(yaw),
-                scale: Vec3::ONE,
-            },
-            Visibility::default(),
-            InheritedVisibility::default(),
-            ViewVisibility::default(),
-        ))
-        .id();
-
-    remote_players.insert(player_id, entity);
-    entity
-}
+// Extracted multiplayer runtime tail to keep this file below 2000 lines.
+include!("mod_multiplayer_tail.rs");

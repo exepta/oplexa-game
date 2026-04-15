@@ -64,12 +64,18 @@ pub fn load_bootstrap() -> BootstrapResult {
     );
 
     info!(
-        "Server will listen on {} (session URL: {}, world: {:?}, seed: {}, dead-entity-check={}s)",
+        "Server will listen on {} (session URL: {}, world: {:?}, seed: {}, dead-entity-check={}s, chunk-stream: base={}, per-client={}, max={}, inflight/client={}, timeout={}ms, gen-max-inflight={})",
         bind_addr,
         public_url,
         world_root,
         world_seed,
-        server_settings.dead_entity_check_interval_secs
+        server_settings.dead_entity_check_interval_secs,
+        server_settings.chunk_stream_sends_per_tick_base,
+        server_settings.chunk_stream_sends_per_tick_per_client,
+        server_settings.chunk_stream_sends_per_tick_max,
+        server_settings.chunk_stream_inflight_per_client,
+        server_settings.chunk_flight_timeout_ms,
+        server_settings.chunk_stream_gen_max_inflight
     );
 
     BootstrapResult {
@@ -115,7 +121,10 @@ pub fn spawn_server(mut commands: Commands, config: Res<ServerBootstrapConfig>) 
     let server_entity = commands
         .spawn((
             Name::new("NetworkServer"),
-            NetcodeServer::new(NetcodeConfig::default()),
+            NetcodeServer::new(
+                NetcodeConfig::default()
+                    .with_client_timeout_secs(config.netcode_client_timeout_secs),
+            ),
             LocalAddr(config.bind_addr),
             WebSocketServerIo {
                 config: ServerConfig::builder()
@@ -131,13 +140,17 @@ pub fn spawn_server(mut commands: Commands, config: Res<ServerBootstrapConfig>) 
         },
         EntityTrigger,
     );
-    info!("Lightyear server started on {}", config.bind_addr);
+    info!(
+        "Lightyear server started on {} (netcode_timeout={}s)",
+        config.bind_addr, config.netcode_client_timeout_secs
+    );
 }
 
 /// Resource injected before App::run() so `spawn_server` can read the bind address.
 #[derive(Resource)]
 pub struct ServerBootstrapConfig {
     pub bind_addr: SocketAddr,
+    pub netcode_client_timeout_secs: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

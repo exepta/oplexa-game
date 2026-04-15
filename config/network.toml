@@ -9,4 +9,5 @@ player_name = "?"
 prod = false
 lan_discovery = true
 lan_discovery_port = 14192
+netcode_timeout_secs = 30
 transform_send_interval_ms = 10

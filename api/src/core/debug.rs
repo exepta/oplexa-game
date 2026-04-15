@@ -101,8 +101,12 @@ pub struct SysStats {
 /// Runtime frame/tick performance values for the debug overlay.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct RuntimePerfStats {
-    /// Smoothed frames per second.
+    /// Frames per second averaged over the last ~1 second window.
     pub fps: f32,
+    /// Instantaneous FPS for the current frame.
+    pub fps_direct: f32,
+    /// 1% low FPS sampled over a short rolling window.
+    pub fps_low_1p: f32,
     /// Smoothed update ticks per second.
     pub tick_speed: f32,
 }
@@ -114,6 +118,10 @@ pub struct ChunkDebugStats {
     pub queue_chunks: usize,
     pub dirty_chunks: usize,
     pub dirty_subchunks: usize,
+    pub remote_decode_queue: usize,
+    pub remote_remesh_queue: usize,
+    pub remote_decode_queue_peak: usize,
+    pub remote_remesh_queue_peak: usize,
     pub base_gen_inflight: usize,
     pub base_mesh_inflight: usize,
     pub base_mesh_queue: usize,

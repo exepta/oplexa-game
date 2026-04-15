@@ -10,6 +10,10 @@ use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use futures_lite::future;
 
+const OCEAN_CAVE_MIN_ROOF_THICKNESS_BLOCKS: usize = 9;
+const OCEAN_SURFACE_FLUID_SCAN_UP_BLOCKS: usize = 2;
+const OCEAN_CAVE_MAX_WORLD_Y: i32 = 20;
+
 /// How many chunks get processed per frame (to avoid spikes).
 #[derive(Resource, Debug, Clone)]
 pub struct CaveBudget {
@@ -79,6 +83,48 @@ fn uses_local_world_data(multiplayer_connection: Res<MultiplayerConnectionState>
     multiplayer_connection.uses_local_save_data()
 }
 
+#[inline]
+fn compute_ocean_column_carve_caps(chunk: &ChunkData, reg: &BlockRegistry) -> Vec<Option<usize>> {
+    let mut caps = vec![None; CX * CZ];
+    let sea_ly = world_y_to_local(SEA_LEVEL).min(CY - 1);
+    let scan_top = (sea_ly + OCEAN_SURFACE_FLUID_SCAN_UP_BLOCKS).min(CY - 1);
+    let absolute_underwater_cap_ly =
+        (OCEAN_CAVE_MAX_WORLD_Y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+
+    for z in 0..CZ {
+        for x in 0..CX {
+            let mut has_surface_water = false;
+            for ly in sea_ly..=scan_top {
+                let id = chunk.get(x, ly, z);
+                if id != 0 && reg.is_fluid(id) {
+                    has_surface_water = true;
+                    break;
+                }
+            }
+            if !has_surface_water {
+                continue;
+            }
+
+            let mut seafloor_ly = None;
+            for ly in (0..=sea_ly).rev() {
+                let id = chunk.get(x, ly, z);
+                if id != 0 && !reg.is_fluid(id) {
+                    seafloor_ly = Some(ly);
+                    break;
+                }
+            }
+            let Some(seafloor_ly) = seafloor_ly else {
+                continue;
+            };
+
+            let seafloor_cap_ly = seafloor_ly.saturating_sub(OCEAN_CAVE_MIN_ROOF_THICKNESS_BLOCKS);
+            caps[z * CX + x] = Some(seafloor_cap_ly.min(absolute_underwater_cap_ly));
+        }
+    }
+
+    caps
+}
+
 /* =========================
 Queue Management
 ========================= */
@@ -140,18 +186,17 @@ fn carve_caves_step(
     // If nothing to do, exit CaveGen (or no-op in InGame).
     if tracker.pending.is_empty() && jobs.running.is_empty() {
         if matches!(app_state.get(), AppState::Loading(LoadingStates::CaveGen)) {
-            next_state.set(AppState::Loading(LoadingStates::WaterGen));
+            next_state.set(AppState::InGame(InGameStates::Game));
         }
         return;
     }
 
     let air_id: u32 = reg.id_opt("air_block").unwrap_or(0) as u32;
-    let water_id: u32 = reg.id_opt("water_block").unwrap_or(1) as u32;
     let border_id: u32 = reg.id_opt("border_block").unwrap_or(0) as u32;
 
     let _ids = CaveBlockIds {
         air: air_id,
-        water: water_id,
+        water: reg.id_opt("water_block").unwrap_or(1) as u32,
         protected_1: None,
     };
 
@@ -240,15 +285,29 @@ fn carve_caves_step(
                 let mut touched = [false; SEC_COUNT];
 
                 if let Some(chunk) = chunk_map.get_chunk_mut(*coord) {
+                    let ocean_carve_caps = compute_ocean_column_carve_caps(chunk, &reg);
                     for (lx, ly, lz) in edits {
-                        let sub = (ly as usize) / SEC_H;
+                        let lx = lx as usize;
+                        let ly = ly as usize;
+                        let lz = lz as usize;
+                        if lx >= CX || ly >= CY || lz >= CZ {
+                            continue;
+                        }
+
+                        let sub = ly / SEC_H;
                         if sub < SEC_COUNT {
                             touched[sub] = true;
                         }
 
-                        let cur = chunk.get(lx as usize, ly as usize, lz as usize);
-                        if cur != 0 && cur != water_id as BlockId && cur != border_id as BlockId {
-                            chunk.set(lx as usize, ly as usize, lz as usize, air_id as BlockId);
+                        if let Some(max_carve_ly) = ocean_carve_caps[lz * CX + lx]
+                            && ly > max_carve_ly
+                        {
+                            continue;
+                        }
+
+                        let cur = chunk.get(lx, ly, lz);
+                        if cur != 0 && cur != border_id as BlockId && !reg.is_fluid(cur) {
+                            chunk.set(lx, ly, lz, air_id as BlockId);
                         }
                     }
                 }
@@ -288,7 +347,7 @@ fn carve_caves_step(
     // If nothing is left, we can leave CaveGen.
     if tracker.pending.is_empty() && jobs.running.is_empty() {
         if matches!(app_state.get(), AppState::Loading(LoadingStates::CaveGen)) {
-            next_state.set(AppState::Loading(LoadingStates::WaterGen));
+            next_state.set(AppState::InGame(InGameStates::Game));
         }
     }
 }

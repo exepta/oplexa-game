@@ -411,6 +411,10 @@ pub struct InputConfig {
 
     /// Toggle world inspector.
     pub world_inspector: String,
+
+    /// Toggle runtime benchmark mode.
+    #[serde(default = "default_benchmark_key")]
+    pub benchmark: String,
 }
 
 impl Default for InputConfig {
@@ -445,6 +449,7 @@ impl Default for InputConfig {
             collider_debug: default_collider_debug_key(),
             chunk_grid: String::from("F9"),
             world_inspector: String::from("F1"),
+            benchmark: default_benchmark_key(),
         }
     }
 }
@@ -504,6 +509,11 @@ fn default_collider_debug_key() -> String {
     String::from("F8")
 }
 
+/// Runs the `default_benchmark_key` routine for default benchmark key in the `core::config` module.
+fn default_benchmark_key() -> String {
+    String::from("B")
+}
+
 /// Runs the `default_window_width` routine for default window width in the `core::config` module.
 fn default_window_width() -> u32 {
     1270
@@ -536,32 +546,32 @@ fn default_chunk_range() -> i32 {
 
 /// Runs the `default_chunk_gen_submit_per_frame` routine for default chunk gen submit per frame in the `core::config` module.
 fn default_chunk_gen_submit_per_frame() -> usize {
-    14
+    8
 }
 
 /// Runs the `default_chunk_gen_max_inflight` routine for default chunk gen max inflight in the `core::config` module.
 fn default_chunk_gen_max_inflight() -> usize {
-    64
+    32
 }
 
 /// Runs the `default_chunk_mesh_max_inflight` routine for default chunk mesh max inflight in the `core::config` module.
 fn default_chunk_mesh_max_inflight() -> usize {
-    64
+    24
 }
 
 /// Runs the `default_chunk_mesh_apply_per_frame` routine for default chunk mesh apply per frame in the `core::config` module.
 fn default_chunk_mesh_apply_per_frame() -> usize {
-    28
+    10
 }
 
 /// Runs the `default_chunk_collider_max_inflight` routine for default chunk collider max inflight in the `core::config` module.
 fn default_chunk_collider_max_inflight() -> usize {
-    24
+    8
 }
 
 /// Runs the `default_chunk_collider_apply_per_frame` routine for default chunk collider apply per frame in the `core::config` module.
 fn default_chunk_collider_apply_per_frame() -> usize {
-    12
+    4
 }
 
 /// Runs the `default_chunk_collider_activation_radius_blocks` routine for default chunk collider activation radius blocks in the `core::config` module.

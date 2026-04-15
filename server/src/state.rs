@@ -14,8 +14,10 @@ use api::{
         },
     },
     generator::chunk::{
-        cave_utils::{CaveParams, worm_edits_for_chunk},
-        chunk_utils::{encode_chunk, load_or_gen_chunk_async_with_origin, save_chunk_at_root_sync},
+        chunk_utils::{
+            decode_chunk, encode_chunk, load_chunk_at_root_sync,
+            load_or_gen_chunk_async_with_origin, save_chunk_at_root_sync,
+        },
         trees::registry::TreeRegistry,
     },
 };
@@ -31,6 +33,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 const STREAM_CHUNK_CACHE_LIMIT: usize = 512;
+const STREAM_GEN_SPAWN_BUDGET_BASE_PER_TICK: usize = 11;
+const STREAM_GEN_SPAWN_BUDGET_PER_CLIENT: usize = 5;
+const STREAM_GEN_MAX_BURST_PER_TICK: usize = 44;
+const STREAM_GEN_MIN_INFLIGHT_WHEN_CONNECTED: usize = 22;
 const PLAYER_SAVE_FILE_NAME: &str = "save.data";
 const LEGACY_PLAYER_SAVE_PREFIX: &str = "save-";
 const LEGACY_PLAYER_SAVE_SUFFIX: &str = ".data";
@@ -209,29 +215,30 @@ impl ServerState {
         edits: &[(usize, usize, usize, u16, u16)],
         refill_ocean_water: bool,
     ) -> std::io::Result<()> {
-        let border_id = self.block_registry.id_opt("border_block").unwrap_or(0);
         let water_id = self.block_registry.id_opt("water_block").unwrap_or(0);
-
-        let (mut chunk, generated) = future::block_on(load_or_gen_chunk_async_with_origin(
-            self.world_root.clone(),
-            coord,
-            &self.block_registry,
-            &self.biome_registry,
-            &self.tree_registry,
-            self.world_gen_config.clone(),
-        ));
-        if generated {
-            apply_server_caves(
-                &mut chunk,
-                coord,
-                self.world_gen_config.seed,
-                border_id,
-                water_id,
-            );
-            if water_id != 0 {
-                flood_ocean_connected_water(&mut chunk, SEA_LEVEL, water_id);
-            }
-        }
+        let mut chunk = if let Some(encoded) = self.streamed_chunk_cache.get(&coord) {
+            decode_chunk(encoded).map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to decode streamed chunk {coord:?}: {error}"),
+                )
+            })?
+        } else if let Some(chunk) = load_chunk_at_root_sync(self.world_root.as_path(), coord) {
+            chunk
+        } else {
+            // Fallback for chunks not yet cached on server: preserve legacy behavior
+            // so player actions are accepted instead of dropped.
+            let (generated_chunk, _generated) =
+                future::block_on(load_or_gen_chunk_async_with_origin(
+                    self.world_root.clone(),
+                    coord,
+                    &self.block_registry,
+                    &self.biome_registry,
+                    &self.tree_registry,
+                    self.world_gen_config.clone(),
+                ));
+            generated_chunk
+        };
 
         for (lx, ly, lz, block_id, stacked_block_id) in edits {
             chunk.set(*lx, *ly, *lz, *block_id);
@@ -399,19 +406,52 @@ impl ServerState {
     }
 
     /// Spawns new stream chunk generation tasks up to the configured in-flight limit.
-    pub fn pump_stream_chunk_tasks(&mut self, config: &ServerRuntimeConfig) {
-        let max_inflight = config.chunk_stream_gen_max_inflight.max(1);
+    pub fn pump_stream_chunk_tasks(
+        &mut self,
+        config: &ServerRuntimeConfig,
+        connected_clients: usize,
+    ) {
+        if connected_clients == 0 {
+            return;
+        }
+
+        let configured_max_inflight = config.chunk_stream_gen_max_inflight.max(1);
+        let dynamic_inflight_target = config
+            .chunk_stream_inflight_per_client
+            .max(1)
+            .saturating_mul(connected_clients)
+            .saturating_add(STREAM_GEN_MIN_INFLIGHT_WHEN_CONNECTED)
+            .clamp(
+                STREAM_GEN_MIN_INFLIGHT_WHEN_CONNECTED,
+                configured_max_inflight,
+            );
+        let max_inflight = configured_max_inflight.min(dynamic_inflight_target).max(1);
         if self.pending_stream_chunk_tasks.len() >= max_inflight {
             return;
         }
 
-        let border_id = self.block_registry.id_opt("border_block").unwrap_or(0);
-        let water_id = self.block_registry.id_opt("water_block").unwrap_or(0);
-        let cave_seed = self.world_gen_config.seed;
+        let mut spawn_budget = STREAM_GEN_SPAWN_BUDGET_BASE_PER_TICK
+            .saturating_add(
+                STREAM_GEN_SPAWN_BUDGET_PER_CLIENT.saturating_mul(connected_clients.max(1)),
+            )
+            .min(STREAM_GEN_MAX_BURST_PER_TICK);
+        spawn_budget =
+            spawn_budget.min(max_inflight.saturating_sub(self.pending_stream_chunk_tasks.len()));
+        if spawn_budget == 0 {
+            return;
+        }
+
         let world_gen_config = self.world_gen_config.clone();
         let pool = AsyncComputeTaskPool::get();
+        let mut spawned = 0usize;
+        let mut scanned = 0usize;
+        let scan_cap = self.pending_stream_chunk_queue.len().max(spawn_budget);
 
-        while self.pending_stream_chunk_tasks.len() < max_inflight {
+        while self.pending_stream_chunk_tasks.len() < max_inflight
+            && spawned < spawn_budget
+            && scanned < scan_cap
+        {
+            scanned += 1;
             let Some(coord) = self.pending_stream_chunk_queue.pop_front() else {
                 break;
             };
@@ -446,7 +486,7 @@ impl ServerState {
             let cfg = world_gen_config.clone();
 
             let task = pool.spawn(async move {
-                let (mut chunk, generated) = load_or_gen_chunk_async_with_origin(
+                let (chunk, _generated) = load_or_gen_chunk_async_with_origin(
                     world_root.clone(),
                     coord,
                     &block_registry,
@@ -456,32 +496,11 @@ impl ServerState {
                 )
                 .await;
 
-                let mut should_persist = false;
-                if generated {
-                    apply_server_caves(&mut chunk, coord, cave_seed, border_id, water_id);
-                    if water_id != 0 {
-                        let _ = flood_ocean_connected_water(&mut chunk, SEA_LEVEL, water_id);
-                    }
-                    chunk.mark_all_dirty();
-                    should_persist = true;
-                } else if water_id != 0 && !chunk_contains_block_id(&chunk, water_id) {
-                    // Repair path for legacy chunks persisted before ocean flood was applied.
-                    if flood_ocean_connected_water(&mut chunk, SEA_LEVEL, water_id) {
-                        chunk.mark_all_dirty();
-                        should_persist = true;
-                    }
-                }
-
-                if should_persist
-                    && let Err(error) = save_chunk_at_root_sync(world_root.clone(), coord, &chunk)
-                {
-                    log::warn!("Failed to persist streamed chunk {:?}: {}", coord, error);
-                }
-
                 (coord, encode_chunk(&chunk))
             });
 
             self.pending_stream_chunk_tasks.insert(coord, task);
+            spawned += 1;
         }
     }
 
@@ -537,35 +556,6 @@ impl ServerState {
             };
 
             self.streamed_chunk_cache.remove(&oldest);
-        }
-    }
-}
-
-/// Applies server caves for the `state` module.
-fn apply_server_caves(
-    chunk: &mut ChunkData,
-    coord: IVec2,
-    seed: i32,
-    border_id: BlockId,
-    water_id: BlockId,
-) {
-    let params = server_cave_params(seed);
-    let edits = worm_edits_for_chunk(
-        &params,
-        coord,
-        IVec2::new(CX as i32, CZ as i32),
-        Y_MIN,
-        Y_MAX,
-    );
-
-    for (lx, ly, lz) in edits {
-        let lx = lx as usize;
-        let ly = ly as usize;
-        let lz = lz as usize;
-        let current = chunk.get(lx, ly, lz);
-
-        if current != 0 && current != border_id && current != water_id {
-            chunk.set(lx, ly, lz, 0);
         }
     }
 }
@@ -721,53 +711,6 @@ fn try_push_ocean_seed(
         *changed = true;
     }
     queue.push_back((x, y, z));
-}
-
-fn chunk_contains_block_id(chunk: &ChunkData, block_id: BlockId) -> bool {
-    chunk.blocks.iter().any(|id| *id == block_id)
-}
-
-/// Runs the `server_cave_params` routine for server cave params in the `state` module.
-fn server_cave_params(seed: i32) -> CaveParams {
-    CaveParams {
-        seed,
-        y_top: 52,
-        y_bottom: -110,
-        worms_per_region: 1.35,
-        region_chunks: 3,
-        base_radius: 4.2,
-        radius_var: 3.0,
-        step_len: 1.5,
-        worm_len_steps: 360,
-        room_event_chance: 0.1,
-        room_radius_min: 6.0,
-        room_radius_max: 10.5,
-        caverns_per_region: 0.5,
-        cavern_room_count_min: 6,
-        cavern_room_count_max: 11,
-        cavern_room_radius_xz_min: 16.0,
-        cavern_room_radius_xz_max: 34.0,
-        cavern_room_radius_y_min: 9.0,
-        cavern_room_radius_y_max: 21.0,
-        cavern_connector_radius: 12.5,
-        cavern_y_top: -10,
-        cavern_y_bottom: -100,
-        mega_caverns_per_region: 0.075,
-        mega_room_count_min: 1,
-        mega_room_count_max: 3,
-        mega_room_radius_xz_min: 45.0,
-        mega_room_radius_xz_max: 144.0,
-        mega_room_radius_y_min: 20.0,
-        mega_room_radius_y_max: 46.0,
-        mega_connector_radius: 8.0,
-        mega_y_top: -30,
-        mega_y_bottom: -105,
-        entrance_chance: 0.55,
-        entrance_len_steps: 40,
-        entrance_radius_scale: 0.55,
-        entrance_min_radius: 2.8,
-        entrance_trigger_band: 12.0,
-    }
 }
 
 fn read_block_overrides_binary(path: &Path) -> Option<HashMap<[i32; 3], u16>> {

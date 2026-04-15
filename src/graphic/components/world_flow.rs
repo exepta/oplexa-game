@@ -7,11 +7,6 @@ struct LoadingProgressData<'w, 's> {
     mesh_backlog: Option<Res<'w, MeshBacklog>>,
     cave_tracker: Option<Res<'w, CaveTracker>>,
     cave_jobs: Option<Res<'w, CaveJobs>>,
-    water_ready_set: Option<Res<'w, WaterReadySet>>,
-    water_todo: Option<Res<'w, WaterMeshingTodo>>,
-    pending_water_load: Option<Res<'w, PendingWaterLoad>>,
-    pending_water_mesh: Option<Res<'w, PendingWaterMesh>>,
-    water_backlog: Option<Res<'w, WaterMeshBacklog>>,
     _marker: std::marker::PhantomData<&'s ()>,
 }
 
@@ -52,11 +47,6 @@ fn sync_world_gen_progress(
         loading_data.mesh_backlog.as_deref(),
         loading_data.cave_tracker.as_deref(),
         loading_data.cave_jobs.as_deref(),
-        loading_data.water_ready_set.as_deref(),
-        loading_data.water_todo.as_deref(),
-        loading_data.pending_water_load.as_deref(),
-        loading_data.pending_water_mesh.as_deref(),
-        loading_data.water_backlog.as_deref(),
     );
 
     let phase_floor = phase_floor_percent(metrics.phase);
@@ -151,16 +141,10 @@ fn compute_loading_progress_metrics(
     mesh_backlog: Option<&MeshBacklog>,
     cave_tracker: Option<&CaveTracker>,
     cave_jobs: Option<&CaveJobs>,
-    water_ready_set: Option<&WaterReadySet>,
-    water_todo: Option<&WaterMeshingTodo>,
-    pending_water_load: Option<&PendingWaterLoad>,
-    pending_water_mesh: Option<&PendingWaterMesh>,
-    water_backlog: Option<&WaterMeshBacklog>,
 ) -> LoadingProgressMetrics {
     let phase = match app_state {
         AppState::Loading(LoadingStates::BaseGen) => LoadingPhase::BaseGen,
         AppState::Loading(LoadingStates::CaveGen) => LoadingPhase::CaveGen,
-        AppState::Loading(LoadingStates::WaterGen) => LoadingPhase::WaterGen,
         _ => LoadingPhase::Done,
     };
 
@@ -232,40 +216,6 @@ fn compute_loading_progress_metrics(
                 total_chunks: total,
             }
         }
-        LoadingPhase::WaterGen => {
-            let total = chunk_map.chunks.len().max(1);
-            let ready = water_ready_set.map_or(0usize, |ready_set| {
-                chunk_map
-                    .chunks
-                    .keys()
-                    .filter(|coord| ready_set.0.contains(coord))
-                    .count()
-            });
-
-            let mut busy = 0usize;
-            if let Some(todo) = water_todo {
-                busy = busy.saturating_add(todo.0.len());
-            }
-            if let Some(pending_load) = pending_water_load {
-                busy = busy.saturating_add(pending_load.0.len());
-            }
-            if let Some(pending_mesh) = pending_water_mesh {
-                busy = busy.saturating_add(pending_mesh.0.len().div_ceil(SEC_COUNT.max(1)));
-            }
-            if let Some(backlog) = water_backlog {
-                busy = busy.saturating_add(backlog.0.len().div_ceil(SEC_COUNT.max(1)));
-            }
-
-            let ready_clamped = ready.min(total);
-            let ratio = (ready_clamped as f32 / total as f32).clamp(0.0, 1.0);
-            let effective_done = total.saturating_sub(busy.min(total.saturating_sub(ready_clamped)));
-            LoadingProgressMetrics {
-                phase,
-                overall_pct: 72.0 + ratio * (97.0 - 72.0),
-                progress_chunks: effective_done.min(total),
-                total_chunks: total,
-            }
-        }
         LoadingPhase::Done => LoadingProgressMetrics {
             phase,
             overall_pct: 100.0,
@@ -285,7 +235,6 @@ fn is_loading_state(app_state: Res<State<AppState>>) -> bool {
     matches!(
         app_state.get(),
         AppState::Loading(LoadingStates::BaseGen)
-            | AppState::Loading(LoadingStates::WaterGen)
             | AppState::Loading(LoadingStates::CaveGen)
     )
 }
@@ -309,7 +258,6 @@ fn phase_floor_percent(phase: LoadingPhase) -> f32 {
     match phase {
         LoadingPhase::BaseGen => 0.0,
         LoadingPhase::CaveGen => 72.0,
-        LoadingPhase::WaterGen => 72.0,
         LoadingPhase::Done => 100.0,
     }
 }
@@ -319,7 +267,6 @@ fn phase_cap_percent(phase: LoadingPhase) -> f32 {
     match phase {
         LoadingPhase::BaseGen => 72.0,
         LoadingPhase::CaveGen => 84.0,
-        LoadingPhase::WaterGen => 97.0,
         LoadingPhase::Done => 100.0,
     }
 }
@@ -373,7 +320,6 @@ fn tick_world_unload_ui(
     if matches!(
         app_state.get(),
         AppState::Loading(LoadingStates::BaseGen)
-            | AppState::Loading(LoadingStates::WaterGen)
             | AppState::Loading(LoadingStates::CaveGen)
     ) {
         if let Ok(mut visible) = root.single_mut() {

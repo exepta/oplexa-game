@@ -204,6 +204,7 @@ pub fn ray_cast_voxels(
 
         let id = get_block_world(chunk_map, block_pos);
         if id != 0
+            && !registry.is_fluid(id)
             && let Some((t_hit, face)) =
                 ray_hits_block_collider_face(origin, dir, max_dist, block_pos, id, registry)
         {
@@ -212,6 +213,7 @@ pub fn ray_cast_voxels(
 
         let stacked_id = get_stacked_block_world(chunk_map, block_pos);
         if stacked_id != 0
+            && !registry.is_fluid(stacked_id)
             && let Some((t_hit, face)) =
                 ray_hits_block_collider_face(origin, dir, max_dist, block_pos, stacked_id, registry)
         {
