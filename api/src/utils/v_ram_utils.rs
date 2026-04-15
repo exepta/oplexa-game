@@ -986,8 +986,7 @@ pub fn query_vram_total_bytes_dxgi_dedicated() -> Option<u64> {
         let factory: IDXGIFactory4 =
             CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(0)).ok()?;
         let adapter = factory.EnumAdapters1(0).ok()?;
-        let mut desc = Default::default();
-        adapter.GetDesc1(&mut desc).ok()?;
+        let desc = adapter.GetDesc1().ok()?;
         let total = desc.DedicatedVideoMemory as u64;
         (total > 0).then_some(total)
     }
