@@ -139,6 +139,13 @@ fn hovered_item_id(
             return Some(slot.item_id);
         }
 
+        if let Some((side, slot_index)) = parse_workbench_storage_slot_index(css_id.0.as_str())
+            && let Some(slot) = chest_inventory.workbench_slots_ref(side).get(slot_index)
+            && !slot.is_empty()
+        {
+            return Some(slot.item_id);
+        }
+
         if let Some(slot_number) = css_id.0.strip_prefix(HAND_CRAFTED_FRAME_PREFIX)
             && let Ok(slot_index) = slot_number.parse::<usize>()
             && let Some(slot) = hand_crafted.input_slots.get(slot_index.saturating_sub(1))

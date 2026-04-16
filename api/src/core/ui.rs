@@ -1,6 +1,6 @@
 use bevy::prelude::Resource;
 
-pub const HOTBAR_SLOTS: usize = 6;
+pub const HOTBAR_SLOTS: usize = 8;
 
 /// Represents ui interaction state used by the `core::ui` module.
 #[derive(Resource, Debug, Clone, Copy, Default)]

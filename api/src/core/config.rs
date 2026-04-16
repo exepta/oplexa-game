@@ -339,6 +339,10 @@ pub struct InputConfig {
     /// Key or button mapping for making the player character sprint.
     pub sprint: String,
 
+    /// Key or button mapping for sneak/precision movement input.
+    #[serde(default = "default_movement_sneak_key")]
+    pub movement_sneak: String,
+
     /// Key or button mapping for interacting with objects or NPCs.
     pub interact: String,
 
@@ -398,6 +402,14 @@ pub struct InputConfig {
     #[serde(default = "default_hotbar_slot_6_key")]
     pub hotbar_slot_6: String,
 
+    /// Key or button mapping to select hotbar slot 7.
+    #[serde(default = "default_hotbar_slot_7_key")]
+    pub hotbar_slot_7: String,
+
+    /// Key or button mapping to select hotbar slot 8.
+    #[serde(default = "default_hotbar_slot_8_key")]
+    pub hotbar_slot_8: String,
+
     // Debug
     /// Shows system stats
     pub debug_overlay: String,
@@ -427,6 +439,7 @@ impl Default for InputConfig {
             move_right: String::from("D"),
             jump: String::from("Space"),
             sprint: String::from("ShiftLeft"),
+            movement_sneak: default_movement_sneak_key(),
             interact: String::from("E"),
             attack: String::from("MouseLeft"),
             drop_item: default_drop_item_key(),
@@ -444,6 +457,8 @@ impl Default for InputConfig {
             hotbar_slot_4: default_hotbar_slot_4_key(),
             hotbar_slot_5: default_hotbar_slot_5_key(),
             hotbar_slot_6: default_hotbar_slot_6_key(),
+            hotbar_slot_7: default_hotbar_slot_7_key(),
+            hotbar_slot_8: default_hotbar_slot_8_key(),
 
             debug_overlay: String::from("F3"),
             collider_debug: default_collider_debug_key(),
@@ -457,6 +472,11 @@ impl Default for InputConfig {
 /// Runs the `default_drop_item_key` routine for default drop item key in the `core::config` module.
 fn default_drop_item_key() -> String {
     String::from("Q")
+}
+
+/// Runs the `default_movement_sneak_key` routine for default movement sneak key in the `core::config` module.
+fn default_movement_sneak_key() -> String {
+    String::from("ShiftLeft")
 }
 
 /// Runs the `default_open_chat_key` routine for default open chat key in the `core::config` module.
@@ -502,6 +522,16 @@ fn default_hotbar_slot_5_key() -> String {
 /// Runs the `default_hotbar_slot_6_key` routine for default hotbar slot 6 key in the `core::config` module.
 fn default_hotbar_slot_6_key() -> String {
     String::from("6")
+}
+
+/// Runs the `default_hotbar_slot_7_key` routine for default hotbar slot 7 key in the `core::config` module.
+fn default_hotbar_slot_7_key() -> String {
+    String::from("7")
+}
+
+/// Runs the `default_hotbar_slot_8_key` routine for default hotbar slot 8 key in the `core::config` module.
+fn default_hotbar_slot_8_key() -> String {
+    String::from("8")
 }
 
 /// Runs the `default_collider_debug_key` routine for default collider debug key in the `core::config` module.

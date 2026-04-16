@@ -1,4 +1,6 @@
-{
+use super::*;
+
+pub(super) fn spawn_hardcoded_ui_panels(commands: &mut Commands, language: &ClientLanguageState) {
     let _world_gen_root = commands
         .spawn((
             Name::new("UI WorldGen Root"),
@@ -27,7 +29,9 @@
             .with_children(|panel| {
                 panel.spawn((
                     Paragraph {
-                        text: language.localize_name_key("KEY_UI_GENERATING_WORLD").to_string(),
+                        text: language
+                            .localize_name_key("KEY_UI_GENERATING_WORLD")
+                            .to_string(),
                         ..default()
                     },
                     UiTextTone::Heading,
@@ -76,7 +80,9 @@
         .with_children(|root| {
             root.spawn((
                 Paragraph {
-                    text: language.localize_name_key("KEY_UI_LEAVING_WORLD").to_string(),
+                    text: language
+                        .localize_name_key("KEY_UI_LEAVING_WORLD")
+                        .to_string(),
                     ..default()
                 },
                 UiTextTone::Heading,
@@ -121,7 +127,7 @@
                         HudLookedBlockCard,
                         Visibility::Hidden,
                         Node {
-                            width: Val::Px(360.0),
+                            width: Val::Px(520.0),
                             flex_direction: FlexDirection::Column,
                             row_gap: Val::Px(8.0),
                             padding: UiRect::all(Val::Px(10.0)),
@@ -220,15 +226,16 @@
                                         Pickable::IGNORE,
                                     ))
                                     .with_children(|row| {
-                                        for index in 0..5usize {
+                                        for index in 0..CHEST_INVENTORY_SLOTS {
                                             row.spawn((
                                                 Node {
-                                                    width: Val::Px(32.0),
-                                                    height: Val::Px(32.0),
-                                                    min_width: Val::Px(32.0),
-                                                    min_height: Val::Px(32.0),
-                                                    max_width: Val::Px(32.0),
-                                                    max_height: Val::Px(32.0),
+                                                    width: Val::Px(40.0),
+                                                    height: Val::Px(40.0),
+                                                    min_width: Val::Px(40.0),
+                                                    min_height: Val::Px(40.0),
+                                                    max_width: Val::Px(40.0),
+                                                    max_height: Val::Px(40.0),
+                                                    display: Display::None,
                                                     justify_content: JustifyContent::Center,
                                                     align_items: AlignItems::Center,
                                                     border: UiRect::all(Val::Px(1.0)),
@@ -244,12 +251,13 @@
                                                 slot.spawn((
                                                     ImageNode::default(),
                                                     Node {
-                                                        width: Val::Px(22.0),
-                                                        height: Val::Px(22.0),
-                                                        min_width: Val::Px(22.0),
-                                                        min_height: Val::Px(22.0),
-                                                        max_width: Val::Px(22.0),
-                                                        max_height: Val::Px(22.0),
+                                                        width: Val::Px(26.0),
+                                                        height: Val::Px(26.0),
+                                                        min_width: Val::Px(26.0),
+                                                        min_height: Val::Px(26.0),
+                                                        max_width: Val::Px(26.0),
+                                                        max_height: Val::Px(26.0),
+                                                        display: Display::None,
                                                         ..default()
                                                     },
                                                     HudLookedBlockChestPreviewIcon { index },
@@ -266,12 +274,17 @@
                                                         top: Val::Px(1.0),
                                                         min_width: Val::Px(12.0),
                                                         height: Val::Px(12.0),
-                                                        padding: UiRect::axes(Val::Px(2.0), Val::Px(0.0)),
+                                                        padding: UiRect::axes(
+                                                            Val::Px(2.0),
+                                                            Val::Px(0.0),
+                                                        ),
                                                         justify_content: JustifyContent::Center,
                                                         align_items: AlignItems::Center,
                                                         ..default()
                                                     },
-                                                    BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                                    BackgroundColor(Color::srgba(
+                                                        0.06, 0.06, 0.08, 0.9,
+                                                    )),
                                                     HudLookedBlockChestPreviewBadge { index },
                                                     Visibility::Hidden,
                                                     Pickable::IGNORE,
@@ -280,12 +293,13 @@
                                         }
                                         row.spawn((
                                             Node {
-                                                width: Val::Px(32.0),
-                                                height: Val::Px(32.0),
-                                                min_width: Val::Px(32.0),
-                                                min_height: Val::Px(32.0),
-                                                max_width: Val::Px(32.0),
-                                                max_height: Val::Px(32.0),
+                                                width: Val::Px(40.0),
+                                                height: Val::Px(40.0),
+                                                min_width: Val::Px(40.0),
+                                                min_height: Val::Px(40.0),
+                                                max_width: Val::Px(40.0),
+                                                max_height: Val::Px(40.0),
+                                                display: Display::None,
                                                 justify_content: JustifyContent::Center,
                                                 align_items: AlignItems::Center,
                                                 border: UiRect::all(Val::Px(1.0)),
@@ -297,16 +311,18 @@
                                             Visibility::Hidden,
                                             Pickable::IGNORE,
                                         ))
-                                        .with_children(|slot| {
-                                            slot.spawn((
-                                                Paragraph {
-                                                    text: "+".to_string(),
-                                                    ..default()
-                                                },
-                                                UiTextTone::Heading,
-                                                Pickable::IGNORE,
-                                            ));
-                                        });
+                                        .with_children(
+                                            |slot| {
+                                                slot.spawn((
+                                                    Paragraph {
+                                                        text: "+".to_string(),
+                                                        ..default()
+                                                    },
+                                                    UiTextTone::Heading,
+                                                    Pickable::IGNORE,
+                                                ));
+                                            },
+                                        );
                                     });
                                 });
                         });
@@ -419,7 +435,9 @@
                 ));
                 panel.spawn((
                     Button {
-                        text: language.localize_name_key("KEY_UI_BACK_TO_GAME").to_string(),
+                        text: language
+                            .localize_name_key("KEY_UI_BACK_TO_GAME")
+                            .to_string(),
                         ..default()
                     },
                     CssID(PAUSE_PLAY_ID.to_string()),
@@ -474,7 +492,9 @@
             .with_children(|panel| {
                 panel.spawn((
                     Paragraph {
-                        text: language.localize_name_key("KEY_UI_BUILD_STRUCTURES").to_string(),
+                        text: language
+                            .localize_name_key("KEY_UI_BUILD_STRUCTURES")
+                            .to_string(),
                         ..default()
                     },
                     UiTextTone::Heading,
@@ -545,6 +565,146 @@
                     CssID(WORKBENCH_RECIPE_TITLE_ID.to_string()),
                     UiTextTone::Heading,
                 ));
+                panel.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        right: Val::Percent(100.0),
+                        top: Val::Px(-2.0),
+                        width: Val::Px(522.0),
+                        min_width: Val::Px(522.0),
+                        max_width: Val::Px(522.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(0.0),
+                        padding: UiRect::all(Val::Px(0.0)),
+                        border: UiRect {
+                            left: Val::Px(2.0),
+                            right: Val::Px(0.0),
+                            top: Val::Px(2.0),
+                            bottom: Val::Px(2.0),
+                        },
+                        ..default()
+                    },
+                    Name::new("Workbench Linked Storage Root"),
+                    WorkbenchRecipeStorageRoot,
+                    Visibility::Hidden,
+                    BackgroundColor(color_single_player_list_background().into()),
+                    BorderColor::all(color_accent()),
+                ))
+                .with_children(|storage_panel| {
+                    storage_panel
+                        .spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(8.0),
+                                ..default()
+                            },
+                            BackgroundColor::DEFAULT,
+                        ))
+                        .with_children(|panels| {
+                            for (side, title_id, frame_prefix, badge_prefix, title_text) in [
+                                (
+                                    WorkbenchStorageSide::Left,
+                                    WORKBENCH_STORAGE_LEFT_TITLE_ID,
+                                    WORKBENCH_STORAGE_LEFT_FRAME_PREFIX,
+                                    WORKBENCH_STORAGE_LEFT_BADGE_PREFIX,
+                                    "Chest",
+                                ),
+                                (
+                                    WorkbenchStorageSide::Right,
+                                    WORKBENCH_STORAGE_RIGHT_TITLE_ID,
+                                    WORKBENCH_STORAGE_RIGHT_FRAME_PREFIX,
+                                    WORKBENCH_STORAGE_RIGHT_BADGE_PREFIX,
+                                    "Chest",
+                                ),
+                            ] {
+                                panels
+                                    .spawn((
+                                        Node {
+                                            width: Val::Percent(100.0),
+                                            flex_direction: FlexDirection::Column,
+                                            row_gap: Val::Px(0.0),
+                                            ..default()
+                                        },
+                                        WorkbenchRecipeStoragePanel { side },
+                                        Visibility::Hidden,
+                                        BackgroundColor(color_single_player_list_background().into()),
+                                    ))
+                                    .with_children(|single_storage| {
+                                        single_storage.spawn((
+                                            Node {
+                                                width: Val::Percent(100.0),
+                                                min_height: Val::Px(38.0),
+                                                padding: UiRect::axes(Val::Px(10.0), Val::Px(0.0)),
+                                                border: UiRect {
+                                                    left: Val::Px(1.0),
+                                                    right: Val::Px(1.0),
+                                                    top: Val::Px(0.0),
+                                                    bottom: Val::Px(1.0),
+                                                },
+                                                align_items: AlignItems::Center,
+                                                ..default()
+                                            },
+                                            BackgroundColor(color_background().into()),
+                                            BorderColor::all(color_background_hover()),
+                                        ))
+                                        .with_children(|title_bar| {
+                                            title_bar.spawn((
+                                                Paragraph {
+                                                    text: title_text.to_string(),
+                                                    ..default()
+                                                },
+                                                CssID(title_id.to_string()),
+                                                UiTextTone::Heading,
+                                            ));
+                                        });
+                                        single_storage
+                                            .spawn((
+                                                Node {
+                                                    width: Val::Percent(100.0),
+                                                    display: Display::Grid,
+                                                    grid_template_columns: RepeatedGridTrack::fr(8, 1.0),
+                                                    grid_auto_rows: vec![GridTrack::px(56.0)],
+                                                    row_gap: Val::Px(8.0),
+                                                    column_gap: Val::Px(8.0),
+                                                    padding: UiRect::all(Val::Px(8.0)),
+                                                    ..default()
+                                                },
+                                                BackgroundColor::DEFAULT,
+                                            ))
+                                            .with_children(|grid| {
+                                                for i in 1..=CHEST_INVENTORY_SLOTS {
+                                                    let idx = format!("{i:02}");
+                                                    grid.spawn((
+                                                        Button {
+                                                            text: String::new(),
+                                                            ..default()
+                                                        },
+                                                        Visibility::Inherited,
+                                                        CssID(format!("{frame_prefix}{idx}")),
+                                                        UiButtonKind::InventorySlot,
+                                                        UiButtonTone::Normal,
+                                                    ))
+                                                    .with_children(|slot| {
+                                                        slot.spawn((
+                                                            Paragraph {
+                                                                text: String::new(),
+                                                                ..default()
+                                                            },
+                                                            CssID(format!("{badge_prefix}{idx}")),
+                                                            BackgroundColor(Color::srgba(
+                                                                0.06, 0.06, 0.08, 0.9,
+                                                            )),
+                                                            Visibility::Hidden,
+                                                            Pickable::IGNORE,
+                                                        ));
+                                                    });
+                                                }
+                                            });
+                                    });
+                            }
+                        });
+                });
                 panel.spawn((
                     Node {
                         width: Val::Percent(100.0),
@@ -790,56 +950,83 @@
                                 }
                             });
                             left.spawn((
-                                Paragraph {
-                                    text: language
-                                        .localize_name_key("KEY_UI_WORKBENCH_PLAYER_INVENTORY")
-                                        .to_string(),
-                                    ..default()
-                                },
-                                UiTextTone::CardName,
-                            ));
-                            left.spawn((
                                 Node {
                                     width: Val::Percent(100.0),
-                                    display: Display::Grid,
-                                    grid_template_columns: RepeatedGridTrack::fr(6, 1.0),
-                                    grid_auto_rows: vec![GridTrack::px(56.0)],
+                                    flex_direction: FlexDirection::Column,
+                                    align_items: AlignItems::Start,
+                                    column_gap: Val::Px(10.0),
                                     row_gap: Val::Px(8.0),
-                                    column_gap: Val::Px(8.0),
                                     ..default()
                                 },
                                 BackgroundColor::DEFAULT,
                             ))
-                            .with_children(|grid| {
-                                for i in 1..=PLAYER_INVENTORY_SLOTS {
-                                    let idx = format!("{i:02}");
-                                    grid.spawn((
-                                        Button {
-                                            text: String::new(),
+                            .with_children(|inventory_row| {
+                                inventory_row
+                                    .spawn((
+                                        Node {
+                                            width: Val::Percent(100.0),
+                                            flex_direction: FlexDirection::Column,
+                                            row_gap: Val::Px(8.0),
                                             ..default()
                                         },
-                                        Visibility::Inherited,
-                                        CssID(format!(
-                                            "{WORKBENCH_PLAYER_INVENTORY_FRAME_PREFIX}{idx}"
-                                        )),
-                                        UiButtonKind::InventorySlot,
-                                        UiButtonTone::Normal,
+                                        BackgroundColor::DEFAULT,
                                     ))
-                                    .with_children(|slot| {
-                                        slot.spawn((
+                                    .with_children(|player_inventory_panel| {
+                                        player_inventory_panel.spawn((
                                             Paragraph {
-                                                text: String::new(),
+                                                text: language
+                                                    .localize_name_key("KEY_UI_WORKBENCH_PLAYER_INVENTORY")
+                                                    .to_string(),
                                                 ..default()
                                             },
-                                            CssID(format!(
-                                                "{WORKBENCH_PLAYER_INVENTORY_BADGE_PREFIX}{idx}"
-                                            )),
-                                            BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
-                                            Visibility::Hidden,
-                                            Pickable::IGNORE,
+                                            UiTextTone::CardName,
                                         ));
+                                        player_inventory_panel.spawn((
+                                            Node {
+                                                width: Val::Percent(100.0),
+                                                display: Display::Grid,
+                                                grid_template_columns: RepeatedGridTrack::fr(8, 1.0),
+                                                grid_auto_rows: vec![GridTrack::px(56.0)],
+                                                row_gap: Val::Px(8.0),
+                                                column_gap: Val::Px(8.0),
+                                                ..default()
+                                            },
+                                            BackgroundColor::DEFAULT,
+                                        ))
+                                        .with_children(|grid| {
+                                            for i in 1..=PLAYER_INVENTORY_SLOTS {
+                                                let idx = format!("{i:02}");
+                                                grid.spawn((
+                                                    Button {
+                                                        text: String::new(),
+                                                        ..default()
+                                                    },
+                                                    Visibility::Inherited,
+                                                    CssID(format!(
+                                                        "{WORKBENCH_PLAYER_INVENTORY_FRAME_PREFIX}{idx}"
+                                                    )),
+                                                    UiButtonKind::InventorySlot,
+                                                    UiButtonTone::Normal,
+                                                ))
+                                                .with_children(|slot| {
+                                                    slot.spawn((
+                                                        Paragraph {
+                                                            text: String::new(),
+                                                            ..default()
+                                                        },
+                                                        CssID(format!(
+                                                            "{WORKBENCH_PLAYER_INVENTORY_BADGE_PREFIX}{idx}"
+                                                        )),
+                                                        BackgroundColor(Color::srgba(
+                                                            0.06, 0.06, 0.08, 0.9,
+                                                        )),
+                                                        Visibility::Hidden,
+                                                        Pickable::IGNORE,
+                                                    ));
+                                                });
+                                            }
+                                        });
                                     });
-                                }
                             });
                         });
                     content
@@ -1018,147 +1205,168 @@
                 BorderColor::all(color_accent()),
             ))
             .with_children(|panel| {
-                panel.spawn((
-                    Node {
-                        width: Val::Percent(58.0),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(10.0),
-                        ..default()
-                    },
-                    BackgroundColor::DEFAULT,
-                ))
-                .with_children(|left| {
-                    left.spawn((
-                        Paragraph {
-                            text: language.localize_name_key("KEY_UI_CHEST_INVENTORY").to_string(),
-                            ..default()
-                        },
-                        CssID(CHEST_INVENTORY_TITLE_ID.to_string()),
-                        UiTextTone::Heading,
-                    ));
-                    left.spawn((
+                panel
+                    .spawn((
                         Node {
-                            width: Val::Percent(100.0),
+                            width: Val::Percent(58.0),
                             flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(8.0),
-                            padding: UiRect::all(Val::Px(8.0)),
-                            border: UiRect::all(Val::Px(1.0)),
+                            row_gap: Val::Px(10.0),
                             ..default()
                         },
-                        BackgroundColor(color_single_player_list_background().into()),
-                        BorderColor::all(color_background_hover()),
+                        BackgroundColor::DEFAULT,
                     ))
-                    .with_children(|chest_panel| {
-                        chest_panel.spawn((
-                            Paragraph {
-                                text: language.localize_name_key("KEY_UI_CHEST_INVENTORY").to_string(),
-                                ..default()
-                            },
-                            UiTextTone::CardName,
-                        ));
-                        chest_panel.spawn((
-                            Node {
-                                width: Val::Percent(100.0),
-                                display: Display::Grid,
-                                grid_template_columns: RepeatedGridTrack::fr(6, 1.0),
-                                grid_auto_rows: vec![GridTrack::px(56.0)],
-                                row_gap: Val::Px(8.0),
-                                column_gap: Val::Px(8.0),
-                                ..default()
-                            },
-                            BackgroundColor::DEFAULT,
-                        ))
-                        .with_children(|grid| {
-                            for i in 1..=CHEST_INVENTORY_SLOTS {
-                                let idx = format!("{i:02}");
-                                grid.spawn((
-                                    Button {
-                                        text: String::new(),
-                                        ..default()
-                                    },
-                                    Visibility::Inherited,
-                                    CssID(format!("{CHEST_SLOT_FRAME_PREFIX}{idx}")),
-                                    UiButtonKind::InventorySlot,
-                                    UiButtonTone::Normal,
-                                ))
-                                .with_children(|slot| {
-                                    slot.spawn((
-                                        Paragraph {
-                                            text: String::new(),
-                                            ..default()
-                                        },
-                                        CssID(format!("{CHEST_SLOT_BADGE_PREFIX}{idx}")),
-                                        BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
-                                        Visibility::Hidden,
-                                        Pickable::IGNORE,
-                                    ));
-                                });
-                            }
-                        });
-                    });
-                    left.spawn((
-                        Node {
-                            width: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(8.0),
-                            padding: UiRect::all(Val::Px(8.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            ..default()
-                        },
-                        BackgroundColor(color_single_player_list_background().into()),
-                        BorderColor::all(color_background_hover()),
-                    ))
-                    .with_children(|inventory_panel| {
-                        inventory_panel.spawn((
+                    .with_children(|left| {
+                        left.spawn((
                             Paragraph {
                                 text: language
-                                    .localize_name_key("KEY_UI_WORKBENCH_PLAYER_INVENTORY")
+                                    .localize_name_key("KEY_UI_CHEST_INVENTORY")
                                     .to_string(),
                                 ..default()
                             },
-                            UiTextTone::CardName,
+                            CssID(CHEST_INVENTORY_TITLE_ID.to_string()),
+                            UiTextTone::Heading,
                         ));
-                        inventory_panel.spawn((
+                        left.spawn((
                             Node {
                                 width: Val::Percent(100.0),
-                                display: Display::Grid,
-                                grid_template_columns: RepeatedGridTrack::fr(6, 1.0),
-                                grid_auto_rows: vec![GridTrack::px(56.0)],
+                                flex_direction: FlexDirection::Column,
                                 row_gap: Val::Px(8.0),
-                                column_gap: Val::Px(8.0),
+                                padding: UiRect::all(Val::Px(8.0)),
+                                border: UiRect::all(Val::Px(1.0)),
                                 ..default()
                             },
-                            BackgroundColor::DEFAULT,
+                            BackgroundColor(color_single_player_list_background().into()),
+                            BorderColor::all(color_background_hover()),
                         ))
-                        .with_children(|grid| {
-                            for i in 1..=PLAYER_INVENTORY_SLOTS {
-                                let idx = format!("{i:02}");
-                                grid.spawn((
-                                    Button {
-                                        text: String::new(),
+                        .with_children(|chest_panel| {
+                            chest_panel.spawn((
+                                Paragraph {
+                                    text: language
+                                        .localize_name_key("KEY_UI_CHEST_INVENTORY")
+                                        .to_string(),
+                                    ..default()
+                                },
+                                UiTextTone::CardName,
+                            ));
+                            chest_panel
+                                .spawn((
+                                    Node {
+                                        width: Val::Percent(100.0),
+                                        display: Display::Grid,
+                                        grid_template_columns: RepeatedGridTrack::fr(8, 1.0),
+                                        grid_auto_rows: vec![GridTrack::px(56.0)],
+                                        row_gap: Val::Px(8.0),
+                                        column_gap: Val::Px(8.0),
                                         ..default()
                                     },
-                                    Visibility::Inherited,
-                                    CssID(format!("{CHEST_PLAYER_INVENTORY_FRAME_PREFIX}{idx}")),
-                                    UiButtonKind::InventorySlot,
-                                    UiButtonTone::Normal,
+                                    BackgroundColor::DEFAULT,
                                 ))
-                                .with_children(|slot| {
-                                    slot.spawn((
-                                        Paragraph {
-                                            text: String::new(),
-                                            ..default()
-                                        },
-                                        CssID(format!("{CHEST_PLAYER_INVENTORY_BADGE_PREFIX}{idx}")),
-                                        BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
-                                        Visibility::Hidden,
-                                        Pickable::IGNORE,
-                                    ));
+                                .with_children(|grid| {
+                                    for i in 1..=CHEST_INVENTORY_SLOTS {
+                                        let idx = format!("{i:02}");
+                                        grid.spawn((
+                                            Button {
+                                                text: String::new(),
+                                                ..default()
+                                            },
+                                            Visibility::Inherited,
+                                            CssID(format!("{CHEST_SLOT_FRAME_PREFIX}{idx}")),
+                                            UiButtonKind::InventorySlot,
+                                            UiButtonTone::Normal,
+                                        ))
+                                        .with_children(
+                                            |slot| {
+                                                slot.spawn((
+                                                    Paragraph {
+                                                        text: String::new(),
+                                                        ..default()
+                                                    },
+                                                    CssID(format!(
+                                                        "{CHEST_SLOT_BADGE_PREFIX}{idx}"
+                                                    )),
+                                                    BackgroundColor(Color::srgba(
+                                                        0.06, 0.06, 0.08, 0.9,
+                                                    )),
+                                                    Visibility::Hidden,
+                                                    Pickable::IGNORE,
+                                                ));
+                                            },
+                                        );
+                                    }
                                 });
-                            }
+                        });
+                        left.spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(8.0),
+                                padding: UiRect::all(Val::Px(8.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            BackgroundColor(color_single_player_list_background().into()),
+                            BorderColor::all(color_background_hover()),
+                        ))
+                        .with_children(|inventory_panel| {
+                            inventory_panel.spawn((
+                                Paragraph {
+                                    text: language
+                                        .localize_name_key("KEY_UI_WORKBENCH_PLAYER_INVENTORY")
+                                        .to_string(),
+                                    ..default()
+                                },
+                                UiTextTone::CardName,
+                            ));
+                            inventory_panel
+                                .spawn((
+                                    Node {
+                                        width: Val::Percent(100.0),
+                                        display: Display::Grid,
+                                        grid_template_columns: RepeatedGridTrack::fr(8, 1.0),
+                                        grid_auto_rows: vec![GridTrack::px(56.0)],
+                                        row_gap: Val::Px(8.0),
+                                        column_gap: Val::Px(8.0),
+                                        ..default()
+                                    },
+                                    BackgroundColor::DEFAULT,
+                                ))
+                                .with_children(|grid| {
+                                    for i in 1..=PLAYER_INVENTORY_SLOTS {
+                                        let idx = format!("{i:02}");
+                                        grid.spawn((
+                                            Button {
+                                                text: String::new(),
+                                                ..default()
+                                            },
+                                            Visibility::Inherited,
+                                            CssID(format!(
+                                                "{CHEST_PLAYER_INVENTORY_FRAME_PREFIX}{idx}"
+                                            )),
+                                            UiButtonKind::InventorySlot,
+                                            UiButtonTone::Normal,
+                                        ))
+                                        .with_children(
+                                            |slot| {
+                                                slot.spawn((
+                                                    Paragraph {
+                                                        text: String::new(),
+                                                        ..default()
+                                                    },
+                                                    CssID(format!(
+                                                        "{CHEST_PLAYER_INVENTORY_BADGE_PREFIX}{idx}"
+                                                    )),
+                                                    BackgroundColor(Color::srgba(
+                                                        0.06, 0.06, 0.08, 0.9,
+                                                    )),
+                                                    Visibility::Hidden,
+                                                    Pickable::IGNORE,
+                                                ));
+                                            },
+                                        );
+                                    }
+                                });
                         });
                     });
-                });
                 panel
                     .spawn((
                         Node {
@@ -1194,74 +1402,76 @@
                             CssID(CHEST_ITEMS_TOTAL_ID.to_string()),
                             UiTextTone::Darker,
                         ));
-                        right.spawn((
-                            Node {
-                                width: Val::Percent(100.0),
-                                align_items: AlignItems::Center,
-                                column_gap: Val::Px(8.0),
-                                ..default()
-                            },
-                            BackgroundColor::DEFAULT,
-                        ))
-                        .with_children(|pager| {
-                            pager.spawn((
-                                Button {
-                                    text: "<".to_string(),
+                        right
+                            .spawn((
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    align_items: AlignItems::Center,
+                                    column_gap: Val::Px(8.0),
                                     ..default()
                                 },
-                                CssID(CHEST_ITEMS_PREV_ID.to_string()),
-                                UiButtonKind::ActionRow,
-                                UiButtonTone::Normal,
-                            ));
-                            pager.spawn((
-                                Paragraph {
-                                    text: "1/1".to_string(),
-                                    ..default()
-                                },
-                                CssID(CHEST_ITEMS_PAGE_ID.to_string()),
-                                UiTextTone::Darker,
-                            ));
-                            pager.spawn((
-                                Button {
-                                    text: ">".to_string(),
-                                    ..default()
-                                },
-                                CssID(CHEST_ITEMS_NEXT_ID.to_string()),
-                                UiButtonKind::ActionRow,
-                                UiButtonTone::Normal,
-                            ));
-                        });
-                        right.spawn((
-                            ChestInventoryItemGridRoot,
-                            Node {
-                                width: Val::Percent(100.0),
-                                display: Display::Grid,
-                                grid_template_columns: RepeatedGridTrack::fr(
-                                    CREATIVE_PANEL_COLUMNS as u16,
-                                    1.0,
-                                ),
-                                grid_auto_rows: vec![GridTrack::px(56.0)],
-                                row_gap: Val::Px(6.0),
-                                column_gap: Val::Px(6.0),
-                                ..default()
-                            },
-                            BackgroundColor::DEFAULT,
-                        ))
-                        .with_children(|grid| {
-                            for i in 1..=CREATIVE_PANEL_PAGE_SIZE {
-                                let idx = format!("{i:02}");
-                                grid.spawn((
+                                BackgroundColor::DEFAULT,
+                            ))
+                            .with_children(|pager| {
+                                pager.spawn((
                                     Button {
-                                        text: String::new(),
+                                        text: "<".to_string(),
                                         ..default()
                                     },
-                                    Visibility::Inherited,
-                                    CssID(format!("{CHEST_ITEMS_SLOT_PREFIX}{idx}")),
-                                    UiButtonKind::InventorySlot,
+                                    CssID(CHEST_ITEMS_PREV_ID.to_string()),
+                                    UiButtonKind::ActionRow,
                                     UiButtonTone::Normal,
                                 ));
-                            }
-                        });
+                                pager.spawn((
+                                    Paragraph {
+                                        text: "1/1".to_string(),
+                                        ..default()
+                                    },
+                                    CssID(CHEST_ITEMS_PAGE_ID.to_string()),
+                                    UiTextTone::Darker,
+                                ));
+                                pager.spawn((
+                                    Button {
+                                        text: ">".to_string(),
+                                        ..default()
+                                    },
+                                    CssID(CHEST_ITEMS_NEXT_ID.to_string()),
+                                    UiButtonKind::ActionRow,
+                                    UiButtonTone::Normal,
+                                ));
+                            });
+                        right
+                            .spawn((
+                                ChestInventoryItemGridRoot,
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    display: Display::Grid,
+                                    grid_template_columns: RepeatedGridTrack::fr(
+                                        CREATIVE_PANEL_COLUMNS as u16,
+                                        1.0,
+                                    ),
+                                    grid_auto_rows: vec![GridTrack::px(56.0)],
+                                    row_gap: Val::Px(6.0),
+                                    column_gap: Val::Px(6.0),
+                                    ..default()
+                                },
+                                BackgroundColor::DEFAULT,
+                            ))
+                            .with_children(|grid| {
+                                for i in 1..=CREATIVE_PANEL_PAGE_SIZE {
+                                    let idx = format!("{i:02}");
+                                    grid.spawn((
+                                        Button {
+                                            text: String::new(),
+                                            ..default()
+                                        },
+                                        Visibility::Inherited,
+                                        CssID(format!("{CHEST_ITEMS_SLOT_PREFIX}{idx}")),
+                                        UiButtonKind::InventorySlot,
+                                        UiButtonTone::Normal,
+                                    ));
+                                }
+                            });
                         right.spawn((
                             Button {
                                 text: language.localize_name_key("KEY_UI_TRASH").to_string(),
@@ -1311,62 +1521,149 @@
                 BorderColor::all(color_accent()),
             ))
             .with_children(|panel| {
-                panel.spawn((
-                    Node {
-                        width: Val::Percent(56.0),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(10.0),
-                        ..default()
-                    },
-                    BackgroundColor::DEFAULT,
-                ))
-                .with_children(|left| {
-                    left.spawn((
-                        Paragraph {
-                            text: language.localize_name_key("KEY_UI_INVENTORY").to_string(),
-                            ..default()
-                        },
-                        UiTextTone::Heading,
-                    ));
-                    left.spawn((
+                panel
+                    .spawn((
                         Node {
-                            width: Val::Percent(100.0),
+                            width: Val::Percent(56.0),
                             flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(8.0),
-                            padding: UiRect::all(Val::Px(8.0)),
-                            border: UiRect::all(Val::Px(1.0)),
+                            row_gap: Val::Px(10.0),
                             ..default()
                         },
-                        BackgroundColor(color_single_player_list_background().into()),
-                        BorderColor::all(color_background_hover()),
+                        BackgroundColor::DEFAULT,
                     ))
-                    .with_children(|craft_panel| {
-                        craft_panel.spawn((
+                    .with_children(|left| {
+                        left.spawn((
                             Paragraph {
-                                text: language.localize_name_key("KEY_UI_HAND_CRAFTED").to_string(),
+                                text: language.localize_name_key("KEY_UI_INVENTORY").to_string(),
                                 ..default()
                             },
-                            UiTextTone::CardName,
+                            UiTextTone::Heading,
                         ));
-                        craft_panel.spawn((
+                        left.spawn((
                             Node {
                                 width: Val::Percent(100.0),
-                                align_items: AlignItems::Center,
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(8.0),
+                                padding: UiRect::all(Val::Px(8.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            BackgroundColor(color_single_player_list_background().into()),
+                            BorderColor::all(color_background_hover()),
+                        ))
+                        .with_children(|craft_panel| {
+                            craft_panel.spawn((
+                                Paragraph {
+                                    text: language
+                                        .localize_name_key("KEY_UI_HAND_CRAFTED")
+                                        .to_string(),
+                                    ..default()
+                                },
+                                UiTextTone::CardName,
+                            ));
+                            craft_panel
+                                .spawn((
+                                    Node {
+                                        width: Val::Percent(100.0),
+                                        align_items: AlignItems::Center,
+                                        column_gap: Val::Px(8.0),
+                                        ..default()
+                                    },
+                                    BackgroundColor::DEFAULT,
+                                ))
+                                .with_children(|row| {
+                                    for i in 1..=HAND_CRAFTED_INPUT_SLOTS {
+                                        let idx = format!("{i:02}");
+                                        row.spawn((
+                                            Button {
+                                                text: String::new(),
+                                                ..default()
+                                            },
+                                            Visibility::Inherited,
+                                            CssID(format!("{HAND_CRAFTED_FRAME_PREFIX}{idx}")),
+                                            UiButtonKind::InventorySlot,
+                                            UiButtonTone::Normal,
+                                        ))
+                                        .with_children(
+                                            |slot| {
+                                                slot.spawn((
+                                                    Paragraph {
+                                                        text: String::new(),
+                                                        ..default()
+                                                    },
+                                                    CssID(format!(
+                                                        "{HAND_CRAFTED_BADGE_PREFIX}{idx}"
+                                                    )),
+                                                    BackgroundColor(Color::srgba(
+                                                        0.06, 0.06, 0.08, 0.9,
+                                                    )),
+                                                    Visibility::Hidden,
+                                                    Pickable::IGNORE,
+                                                ));
+                                            },
+                                        );
+                                    }
+
+                                    row.spawn((
+                                        Paragraph {
+                                            text: "->".to_string(),
+                                            ..default()
+                                        },
+                                        UiTextTone::Darker,
+                                    ));
+                                    row.spawn((
+                                        Button {
+                                            text: String::new(),
+                                            ..default()
+                                        },
+                                        Visibility::Inherited,
+                                        CssID(HAND_CRAFTED_RESULT_FRAME_ID.to_string()),
+                                        UiButtonKind::InventoryResultSlot,
+                                        UiButtonTone::Normal,
+                                    ))
+                                    .with_children(|slot| {
+                                        slot.spawn((
+                                            Paragraph {
+                                                text: String::new(),
+                                                ..default()
+                                            },
+                                            CssID(HAND_CRAFTED_RESULT_BADGE_ID.to_string()),
+                                            BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
+                                            Visibility::Hidden,
+                                            Pickable::IGNORE,
+                                        ));
+                                    });
+                                });
+                        });
+                        left.spawn((
+                            Paragraph {
+                                text: format!("{} 0", language.localize_name_key("KEY_UI_ITEMS")),
+                                ..default()
+                            },
+                            CssID(PLAYER_INVENTORY_TOTAL_ID.to_string()),
+                        ));
+                        left.spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                display: Display::Grid,
+                                grid_template_columns: RepeatedGridTrack::fr(8, 1.0),
+                                grid_auto_rows: vec![GridTrack::px(56.0)],
+                                row_gap: Val::Px(8.0),
                                 column_gap: Val::Px(8.0),
                                 ..default()
                             },
                             BackgroundColor::DEFAULT,
                         ))
-                        .with_children(|row| {
-                            for i in 1..=HAND_CRAFTED_INPUT_SLOTS {
+                        .with_children(|grid| {
+                            for i in 1..=PLAYER_INVENTORY_SLOTS {
                                 let idx = format!("{i:02}");
-                                row.spawn((
+                                grid.spawn((
                                     Button {
                                         text: String::new(),
                                         ..default()
                                     },
                                     Visibility::Inherited,
-                                    CssID(format!("{HAND_CRAFTED_FRAME_PREFIX}{idx}")),
+                                    CssID(format!("{PLAYER_INVENTORY_FRAME_PREFIX}{idx}")),
                                     UiButtonKind::InventorySlot,
                                     UiButtonTone::Normal,
                                 ))
@@ -1376,232 +1673,164 @@
                                             text: String::new(),
                                             ..default()
                                         },
-                                        CssID(format!("{HAND_CRAFTED_BADGE_PREFIX}{idx}")),
+                                        CssID(format!("{PLAYER_INVENTORY_BADGE_PREFIX}{idx}")),
                                         BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
                                         Visibility::Hidden,
                                         Pickable::IGNORE,
                                     ));
                                 });
                             }
-
-                            row.spawn((
-                                Paragraph {
-                                    text: "->".to_string(),
-                                    ..default()
-                                },
-                                UiTextTone::Darker,
-                            ));
-                            row.spawn((
-                                Button {
-                                    text: String::new(),
-                                    ..default()
-                                },
-                                Visibility::Inherited,
-                                CssID(HAND_CRAFTED_RESULT_FRAME_ID.to_string()),
-                                UiButtonKind::InventoryResultSlot,
-                                UiButtonTone::Normal,
-                            ))
-                            .with_children(|slot| {
-                                slot.spawn((
-                                    Paragraph {
-                                        text: String::new(),
-                                        ..default()
-                                    },
-                                    CssID(HAND_CRAFTED_RESULT_BADGE_ID.to_string()),
-                                    BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
-                                    Visibility::Hidden,
-                                    Pickable::IGNORE,
-                                ));
-                            });
                         });
                     });
-                    left.spawn((
-                        Paragraph {
-                            text: format!("{} 0", language.localize_name_key("KEY_UI_ITEMS")),
-                            ..default()
-                        },
-                        CssID(PLAYER_INVENTORY_TOTAL_ID.to_string()),
-                    ));
-                    left.spawn((
-                        Node {
-                            width: Val::Percent(100.0),
-                            display: Display::Grid,
-                            grid_template_columns: RepeatedGridTrack::fr(6, 1.0),
-                            grid_auto_rows: vec![GridTrack::px(56.0)],
-                            row_gap: Val::Px(8.0),
-                            column_gap: Val::Px(8.0),
-                            ..default()
-                        },
-                        BackgroundColor::DEFAULT,
-                    ))
-                    .with_children(|grid| {
-                        for i in 1..=PLAYER_INVENTORY_SLOTS {
-                            let idx = format!("{i:02}");
-                            grid.spawn((
-                                Button {
-                                    text: String::new(),
-                                    ..default()
-                                },
-                                Visibility::Inherited,
-                                CssID(format!("{PLAYER_INVENTORY_FRAME_PREFIX}{idx}")),
-                                UiButtonKind::InventorySlot,
-                                UiButtonTone::Normal,
-                            ))
-                            .with_children(|slot| {
-                                slot.spawn((
-                                    Paragraph {
-                                        text: String::new(),
-                                        ..default()
-                                    },
-                                    CssID(format!("{PLAYER_INVENTORY_BADGE_PREFIX}{idx}")),
-                                    BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
-                                    Visibility::Hidden,
-                                    Pickable::IGNORE,
-                                ));
-                            });
-                        }
-                    });
-                });
 
-                panel.spawn((
-                    Node {
-                        width: Val::Percent(44.0),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(8.0),
-                        padding: UiRect::all(Val::Px(10.0)),
-                        border: UiRect::all(Val::Px(1.0)),
-                        ..default()
-                    },
-                    InventoryDropZonePanel,
-                    BackgroundColor(color_single_player_list_background().into()),
-                    BorderColor::all(color_background_hover()),
-                ))
-                .with_children(|right| {
-                    right.spawn((
-                        Paragraph {
-                            text: language.localize_name_key("KEY_UI_ITEMS_TITLE").to_string(),
-                            ..default()
-                        },
-                        UiTextTone::Heading,
-                    ));
-                    right.spawn((
-                        Paragraph {
-                            text: format!("{} 0", language.localize_name_key("KEY_UI_REGISTERED")),
-                            ..default()
-                        },
-                        CssID(CREATIVE_PANEL_TOTAL_ID.to_string()),
-                        UiTextTone::Darker,
-                    ));
-                    right.spawn((
+                panel
+                    .spawn((
                         Node {
-                            width: Val::Percent(100.0),
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(8.0),
-                            ..default()
-                        },
-                        BackgroundColor::DEFAULT,
-                    ))
-                    .with_children(|pager| {
-                        pager.spawn((
-                            Button {
-                                text: "<".to_string(),
-                                ..default()
-                            },
-                            CssID(CREATIVE_PANEL_PREV_ID.to_string()),
-                            UiButtonKind::ActionRow,
-                            UiButtonTone::Normal,
-                        ));
-                        pager.spawn((
-                            Paragraph {
-                                text: "1/1".to_string(),
-                                ..default()
-                            },
-                            CssID(CREATIVE_PANEL_PAGE_ID.to_string()),
-                            UiTextTone::Darker,
-                        ));
-                        pager.spawn((
-                            Button {
-                                text: ">".to_string(),
-                                ..default()
-                            },
-                            CssID(CREATIVE_PANEL_NEXT_ID.to_string()),
-                            UiButtonKind::ActionRow,
-                            UiButtonTone::Normal,
-                        ));
-                    });
-                    right.spawn((
-                        CreativePanelGridRoot,
-                        Node {
-                            width: Val::Percent(100.0),
-                            display: Display::Grid,
-                            grid_template_columns: RepeatedGridTrack::fr(
-                                CREATIVE_PANEL_COLUMNS as u16,
-                                1.0,
-                            ),
-                            grid_auto_rows: vec![GridTrack::px(56.0)],
-                            row_gap: Val::Px(6.0),
-                            column_gap: Val::Px(6.0),
-                            ..default()
-                        },
-                        BackgroundColor::DEFAULT,
-                    ))
-                    .with_children(|grid| {
-                        for i in 1..=CREATIVE_PANEL_PAGE_SIZE {
-                            let idx = format!("{i:02}");
-                            grid.spawn((
-                                Button {
-                                    text: String::new(),
-                                    ..default()
-                                },
-                                Visibility::Inherited,
-                                CssID(format!("{CREATIVE_PANEL_SLOT_PREFIX}{idx}")),
-                                UiButtonKind::InventorySlot,
-                                UiButtonTone::Normal,
-                            ));
-                        }
-                    });
-                    right.spawn((
-                        Button {
-                            text: language.localize_name_key("KEY_UI_TRASH").to_string(),
-                            ..default()
-                        },
-                        CssID(INVENTORY_TRASH_BUTTON_ID.to_string()),
-                        UiButtonKind::ActionRow,
-                        UiButtonTone::Normal,
-                    ));
-                    right.spawn((
-                        Node {
-                            width: Val::Percent(100.0),
-                            min_height: Val::Px(84.0),
+                            width: Val::Percent(44.0),
                             flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(4.0),
-                            padding: UiRect::all(Val::Px(8.0)),
+                            row_gap: Val::Px(8.0),
+                            padding: UiRect::all(Val::Px(10.0)),
                             border: UiRect::all(Val::Px(1.0)),
                             ..default()
                         },
-                        BackgroundColor(color_background().into()),
+                        InventoryDropZonePanel,
+                        BackgroundColor(color_single_player_list_background().into()),
                         BorderColor::all(color_background_hover()),
                     ))
-                    .with_children(|recipes| {
-                        recipes.spawn((
+                    .with_children(|right| {
+                        right.spawn((
                             Paragraph {
-                                text: language.localize_name_key("KEY_UI_RECIPE_INFO").to_string(),
+                                text: language.localize_name_key("KEY_UI_ITEMS_TITLE").to_string(),
                                 ..default()
                             },
-                            UiTextTone::CardName,
+                            UiTextTone::Heading,
                         ));
-                        recipes.spawn((
+                        right.spawn((
                             Paragraph {
-                                text: language
-                                    .localize_name_key("KEY_UI_RECIPE_HINT_DEFAULT")
-                                    .to_string(),
+                                text: format!(
+                                    "{} 0",
+                                    language.localize_name_key("KEY_UI_REGISTERED")
+                                ),
                                 ..default()
                             },
-                            CssID(CREATIVE_RECIPE_HINT_ID.to_string()),
+                            CssID(CREATIVE_PANEL_TOTAL_ID.to_string()),
                             UiTextTone::Darker,
                         ));
+                        right
+                            .spawn((
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    align_items: AlignItems::Center,
+                                    column_gap: Val::Px(8.0),
+                                    ..default()
+                                },
+                                BackgroundColor::DEFAULT,
+                            ))
+                            .with_children(|pager| {
+                                pager.spawn((
+                                    Button {
+                                        text: "<".to_string(),
+                                        ..default()
+                                    },
+                                    CssID(CREATIVE_PANEL_PREV_ID.to_string()),
+                                    UiButtonKind::ActionRow,
+                                    UiButtonTone::Normal,
+                                ));
+                                pager.spawn((
+                                    Paragraph {
+                                        text: "1/1".to_string(),
+                                        ..default()
+                                    },
+                                    CssID(CREATIVE_PANEL_PAGE_ID.to_string()),
+                                    UiTextTone::Darker,
+                                ));
+                                pager.spawn((
+                                    Button {
+                                        text: ">".to_string(),
+                                        ..default()
+                                    },
+                                    CssID(CREATIVE_PANEL_NEXT_ID.to_string()),
+                                    UiButtonKind::ActionRow,
+                                    UiButtonTone::Normal,
+                                ));
+                            });
+                        right
+                            .spawn((
+                                CreativePanelGridRoot,
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    display: Display::Grid,
+                                    grid_template_columns: RepeatedGridTrack::fr(
+                                        CREATIVE_PANEL_COLUMNS as u16,
+                                        1.0,
+                                    ),
+                                    grid_auto_rows: vec![GridTrack::px(56.0)],
+                                    row_gap: Val::Px(6.0),
+                                    column_gap: Val::Px(6.0),
+                                    ..default()
+                                },
+                                BackgroundColor::DEFAULT,
+                            ))
+                            .with_children(|grid| {
+                                for i in 1..=CREATIVE_PANEL_PAGE_SIZE {
+                                    let idx = format!("{i:02}");
+                                    grid.spawn((
+                                        Button {
+                                            text: String::new(),
+                                            ..default()
+                                        },
+                                        Visibility::Inherited,
+                                        CssID(format!("{CREATIVE_PANEL_SLOT_PREFIX}{idx}")),
+                                        UiButtonKind::InventorySlot,
+                                        UiButtonTone::Normal,
+                                    ));
+                                }
+                            });
+                        right.spawn((
+                            Button {
+                                text: language.localize_name_key("KEY_UI_TRASH").to_string(),
+                                ..default()
+                            },
+                            CssID(INVENTORY_TRASH_BUTTON_ID.to_string()),
+                            UiButtonKind::ActionRow,
+                            UiButtonTone::Normal,
+                        ));
+                        right
+                            .spawn((
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    min_height: Val::Px(84.0),
+                                    flex_direction: FlexDirection::Column,
+                                    row_gap: Val::Px(4.0),
+                                    padding: UiRect::all(Val::Px(8.0)),
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(color_background().into()),
+                                BorderColor::all(color_background_hover()),
+                            ))
+                            .with_children(|recipes| {
+                                recipes.spawn((
+                                    Paragraph {
+                                        text: language
+                                            .localize_name_key("KEY_UI_RECIPE_INFO")
+                                            .to_string(),
+                                        ..default()
+                                    },
+                                    UiTextTone::CardName,
+                                ));
+                                recipes.spawn((
+                                    Paragraph {
+                                        text: language
+                                            .localize_name_key("KEY_UI_RECIPE_HINT_DEFAULT")
+                                            .to_string(),
+                                        ..default()
+                                    },
+                                    CssID(CREATIVE_RECIPE_HINT_ID.to_string()),
+                                    UiTextTone::Darker,
+                                ));
+                            });
                     });
-                });
             });
             root.spawn((
                 Name::new("Inventory Tooltip"),
@@ -1692,63 +1921,68 @@
                         ));
                         panel.spawn((
                             Paragraph {
-                                text: language.localize_name_key("KEY_UI_HAND_CRAFTED").to_string(),
+                                text: language
+                                    .localize_name_key("KEY_UI_HAND_CRAFTED")
+                                    .to_string(),
                                 ..default()
                             },
                             CssID(RECIPE_PREVIEW_MODE_ID.to_string()),
                             UiTextTone::Darker,
                         ));
-                        panel.spawn((
-                            Node {
-                                width: Val::Percent(100.0),
-                                align_items: AlignItems::Center,
-                                justify_content: JustifyContent::Center,
-                                column_gap: Val::Px(8.0),
-                                ..default()
-                            },
-                            BackgroundColor::DEFAULT,
-                        ))
-                        .with_children(|tabs| {
-                            tabs.spawn((
-                                Button {
-                                    text: "<".to_string(),
+                        panel
+                            .spawn((
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    align_items: AlignItems::Center,
+                                    justify_content: JustifyContent::Center,
+                                    column_gap: Val::Px(8.0),
                                     ..default()
                                 },
-                                CssID(RECIPE_PREVIEW_TAB_PREV_ID.to_string()),
-                                UiButtonKind::RecipeTab,
-                                UiButtonTone::Normal,
-                            ));
-                            for i in 1..=RECIPE_PREVIEW_TABS_PER_PAGE {
+                                BackgroundColor::DEFAULT,
+                            ))
+                            .with_children(|tabs| {
                                 tabs.spawn((
                                     Button {
-                                        text: String::new(),
+                                        text: "<".to_string(),
                                         ..default()
                                     },
-                                    CssID(format!("{RECIPE_PREVIEW_TAB_PREFIX}{i:02}")),
+                                    CssID(RECIPE_PREVIEW_TAB_PREV_ID.to_string()),
                                     UiButtonKind::RecipeTab,
                                     UiButtonTone::Normal,
-                                ))
-                                .with_children(|tab| {
-                                    tab.spawn((
-                                        Img {
-                                            src: None,
+                                ));
+                                for i in 1..=RECIPE_PREVIEW_TABS_PER_PAGE {
+                                    tabs.spawn((
+                                        Button {
+                                            text: String::new(),
                                             ..default()
                                         },
-                                        CssID(format!("{RECIPE_PREVIEW_TAB_ICON_PREFIX}{i:02}")),
-                                        Pickable::IGNORE,
-                                    ));
-                                });
-                            }
-                            tabs.spawn((
-                                Button {
-                                    text: ">".to_string(),
-                                    ..default()
-                                },
-                                CssID(RECIPE_PREVIEW_TAB_NEXT_ID.to_string()),
-                                UiButtonKind::RecipeTab,
-                                UiButtonTone::Normal,
-                            ));
-                        });
+                                        CssID(format!("{RECIPE_PREVIEW_TAB_PREFIX}{i:02}")),
+                                        UiButtonKind::RecipeTab,
+                                        UiButtonTone::Normal,
+                                    ))
+                                    .with_children(|tab| {
+                                        tab.spawn((
+                                            Img {
+                                                src: None,
+                                                ..default()
+                                            },
+                                            CssID(format!(
+                                                "{RECIPE_PREVIEW_TAB_ICON_PREFIX}{i:02}"
+                                            )),
+                                            Pickable::IGNORE,
+                                        ));
+                                    });
+                                }
+                                tabs.spawn((
+                                    Button {
+                                        text: ">".to_string(),
+                                        ..default()
+                                    },
+                                    CssID(RECIPE_PREVIEW_TAB_NEXT_ID.to_string()),
+                                    UiButtonKind::RecipeTab,
+                                    UiButtonTone::Normal,
+                                ));
+                            });
                         panel.spawn((
                             Paragraph {
                                 text: String::new(),
@@ -1758,109 +1992,120 @@
                             UiTextTone::Darker,
                             Visibility::Hidden,
                         ));
-                        panel.spawn((
-                            Visibility::Inherited,
-                            Node {
-                                width: Val::Auto,
-                                align_items: AlignItems::Center,
-                                justify_content: JustifyContent::Center,
-                                align_self: AlignSelf::Center,
-                                column_gap: Val::Px(6.0),
-                                padding: UiRect::all(Val::Px(10.0)),
-                                border: UiRect::all(Val::Px(1.0)),
-                                ..default()
-                            },
-                            BackgroundColor(color_single_player_list_background().into()),
-                            BorderColor::all(color_background_hover()),
-                        ))
-                        .with_children(|row| {
-                            row.spawn((
+                        panel
+                            .spawn((
+                                Visibility::Inherited,
                                 Node {
-                                    display: Display::Grid,
-                                    grid_template_columns: RepeatedGridTrack::fr(4, 1.0),
-                                    grid_auto_rows: vec![GridTrack::px(56.0)],
-                                    row_gap: Val::Px(6.0),
-                                    column_gap: Val::Px(8.0),
-                                    ..default()
-                                },
-                                RecipePreviewInputGrid,
-                                BackgroundColor::DEFAULT,
-                            ))
-                            .with_children(|grid| {
-                                for i in 1..=RECIPE_PREVIEW_INPUT_SLOTS {
-                                    let idx = format!("{i:02}");
-                                    grid.spawn((
-                                        Button {
-                                            text: String::new(),
-                                            ..default()
-                                        },
-                                        Visibility::Inherited,
-                                        CssID(format!("{RECIPE_PREVIEW_INPUT_FRAME_PREFIX}{idx}")),
-                                        UiButtonKind::InventorySlot,
-                                        UiButtonTone::Normal,
-                                    ))
-                                    .with_children(|slot| {
-                                        slot.spawn((
-                                            Paragraph {
-                                                text: String::new(),
-                                                ..default()
-                                            },
-                                            CssID(format!("{RECIPE_PREVIEW_INPUT_BADGE_PREFIX}{idx}")),
-                                            BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
-                                            Visibility::Hidden,
-                                            Pickable::IGNORE,
-                                        ));
-                                    });
-                                }
-                            });
-
-                            row.spawn((
-                                Node {
-                                    width: Val::Px(74.0),
+                                    width: Val::Auto,
                                     align_items: AlignItems::Center,
                                     justify_content: JustifyContent::Center,
-                                    column_gap: Val::Px(8.0),
-                                    padding: UiRect {
-                                        right: Val::Px(10.0),
-                                        ..default()
-                                    },
+                                    align_self: AlignSelf::Center,
+                                    column_gap: Val::Px(6.0),
+                                    padding: UiRect::all(Val::Px(10.0)),
+                                    border: UiRect::all(Val::Px(1.0)),
                                     ..default()
                                 },
-                                BackgroundColor::DEFAULT,
+                                BackgroundColor(color_single_player_list_background().into()),
+                                BorderColor::all(color_background_hover()),
                             ))
-                            .with_children(|result| {
-                                result.spawn((
-                                    Paragraph {
-                                        text: "->".to_string(),
+                            .with_children(|row| {
+                                row.spawn((
+                                    Node {
+                                        display: Display::Grid,
+                                        grid_template_columns: RepeatedGridTrack::fr(4, 1.0),
+                                        grid_auto_rows: vec![GridTrack::px(56.0)],
+                                        row_gap: Val::Px(6.0),
+                                        column_gap: Val::Px(8.0),
                                         ..default()
                                     },
-                                    UiTextTone::Darker,
-                                ));
-                                result
-                                    .spawn((
-                                        Button {
-                                            text: String::new(),
-                                            ..default()
-                                        },
-                                        Visibility::Inherited,
-                                        CssID(RECIPE_PREVIEW_RESULT_FRAME_ID.to_string()),
-                                        UiButtonKind::InventoryResultSlot,
-                                        UiButtonTone::Normal,
-                                    ))
-                                    .with_children(|slot| {
-                                        slot.spawn((
-                                            Paragraph {
+                                    RecipePreviewInputGrid,
+                                    BackgroundColor::DEFAULT,
+                                ))
+                                .with_children(|grid| {
+                                    for i in 1..=RECIPE_PREVIEW_INPUT_SLOTS {
+                                        let idx = format!("{i:02}");
+                                        grid.spawn((
+                                            Button {
                                                 text: String::new(),
                                                 ..default()
                                             },
-                                            CssID(RECIPE_PREVIEW_RESULT_BADGE_ID.to_string()),
-                                            BackgroundColor(Color::srgba(0.06, 0.06, 0.08, 0.9)),
-                                            Visibility::Hidden,
-                                            Pickable::IGNORE,
-                                        ));
-                                    });
+                                            Visibility::Inherited,
+                                            CssID(format!(
+                                                "{RECIPE_PREVIEW_INPUT_FRAME_PREFIX}{idx}"
+                                            )),
+                                            UiButtonKind::InventorySlot,
+                                            UiButtonTone::Normal,
+                                        ))
+                                        .with_children(
+                                            |slot| {
+                                                slot.spawn((
+                                                    Paragraph {
+                                                        text: String::new(),
+                                                        ..default()
+                                                    },
+                                                    CssID(format!(
+                                                        "{RECIPE_PREVIEW_INPUT_BADGE_PREFIX}{idx}"
+                                                    )),
+                                                    BackgroundColor(Color::srgba(
+                                                        0.06, 0.06, 0.08, 0.9,
+                                                    )),
+                                                    Visibility::Hidden,
+                                                    Pickable::IGNORE,
+                                                ));
+                                            },
+                                        );
+                                    }
+                                });
+
+                                row.spawn((
+                                    Node {
+                                        width: Val::Px(74.0),
+                                        align_items: AlignItems::Center,
+                                        justify_content: JustifyContent::Center,
+                                        column_gap: Val::Px(8.0),
+                                        padding: UiRect {
+                                            right: Val::Px(10.0),
+                                            ..default()
+                                        },
+                                        ..default()
+                                    },
+                                    BackgroundColor::DEFAULT,
+                                ))
+                                .with_children(|result| {
+                                    result.spawn((
+                                        Paragraph {
+                                            text: "->".to_string(),
+                                            ..default()
+                                        },
+                                        UiTextTone::Darker,
+                                    ));
+                                    result
+                                        .spawn((
+                                            Button {
+                                                text: String::new(),
+                                                ..default()
+                                            },
+                                            Visibility::Inherited,
+                                            CssID(RECIPE_PREVIEW_RESULT_FRAME_ID.to_string()),
+                                            UiButtonKind::InventoryResultSlot,
+                                            UiButtonTone::Normal,
+                                        ))
+                                        .with_children(|slot| {
+                                            slot.spawn((
+                                                Paragraph {
+                                                    text: String::new(),
+                                                    ..default()
+                                                },
+                                                CssID(RECIPE_PREVIEW_RESULT_BADGE_ID.to_string()),
+                                                BackgroundColor(Color::srgba(
+                                                    0.06, 0.06, 0.08, 0.9,
+                                                )),
+                                                Visibility::Hidden,
+                                                Pickable::IGNORE,
+                                            ));
+                                        });
+                                });
                             });
-                        });
                         panel.spawn((
                             Paragraph {
                                 text: language
@@ -1964,7 +2209,9 @@
             .with_children(|panel| {
                 panel.spawn((
                     Paragraph {
-                        text: language.localize_name_key("KEY_UI_DEBUG_SYSTEM").to_string(),
+                        text: language
+                            .localize_name_key("KEY_UI_DEBUG_SYSTEM")
+                            .to_string(),
                         ..default()
                     },
                     UiTextTone::Heading,
@@ -2058,7 +2305,9 @@
                 ));
                 panel.spawn((
                     Paragraph {
-                        text: language.localize_name_key("KEY_UI_DEBUG_SECTION").to_string(),
+                        text: language
+                            .localize_name_key("KEY_UI_DEBUG_SECTION")
+                            .to_string(),
                         ..default()
                     },
                     UiTextTone::Heading,
@@ -2073,11 +2322,7 @@
                     BackgroundColor(color_accent().into()),
                     Pickable::IGNORE,
                 ));
-                for id in [
-                    ID_GRID,
-                    ID_INSPECTOR,
-                    ID_OVERLAY,
-                ] {
+                for id in [ID_GRID, ID_INSPECTOR, ID_OVERLAY] {
                     panel.spawn((
                         Paragraph {
                             text: String::new(),

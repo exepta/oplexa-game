@@ -494,6 +494,8 @@ fn style_slot_count_badges(
                 || css_id.0.starts_with(WORKBENCH_CRAFT_BADGE_PREFIX)
                 || css_id.0.starts_with(WORKBENCH_TOOL_BADGE_PREFIX)
                 || css_id.0.starts_with(WORKBENCH_PLAYER_INVENTORY_BADGE_PREFIX)
+                || css_id.0.starts_with(WORKBENCH_STORAGE_LEFT_BADGE_PREFIX)
+                || css_id.0.starts_with(WORKBENCH_STORAGE_RIGHT_BADGE_PREFIX)
                 || css_id.0.starts_with(CHEST_SLOT_BADGE_PREFIX)
                 || css_id.0.starts_with(CHEST_PLAYER_INVENTORY_BADGE_PREFIX)
                 || css_id.0.starts_with(RECIPE_PREVIEW_INPUT_BADGE_PREFIX)

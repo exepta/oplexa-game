@@ -1,20 +1,27 @@
 fn handle_open_workbench_recipe_menu_request(
     mut requests: MessageReader<OpenWorkbenchMenuRequest>,
     ui_interaction: Res<UiInteractionState>,
+    chunk_map: Res<ChunkMap>,
+    block_registry: Res<BlockRegistry>,
+    item_registry: Res<ItemRegistry>,
+    structure_recipe_registry: Option<Res<BuildingStructureRecipeRegistry>>,
+    structure_runtime: Option<Res<crate::logic::events::block_event_handler::StructureRuntimeState>>,
     mut workbench_menu: ResMut<WorkbenchRecipeMenuState>,
+    mut chest_inventory: ResMut<ChestInventoryUiState>,
     mut craft_progress: ResMut<WorkbenchCraftProgressState>,
     mut structure_menu: ResMut<StructureBuildMenuState>,
     mut active_structure_recipe: ResMut<ActiveStructureRecipeState>,
     mut active_structure_placement: ResMut<ActiveStructurePlacementState>,
     mut recipe_preview: ResMut<RecipePreviewDialogState>,
+    mut opened: MessageWriter<ChestInventoryUiOpened>,
 ) {
-    let mut requested = false;
-    for _ in requests.read() {
-        requested = true;
+    let mut requested_world_pos = None;
+    for request in requests.read() {
+        requested_world_pos = Some(request.world_pos);
     }
-    if !requested {
+    let Some(workbench_world_pos) = requested_world_pos else {
         return;
-    }
+    };
     if ui_interaction.menu_open
         || ui_interaction.chat_open
         || ui_interaction.inventory_open
@@ -29,6 +36,29 @@ fn handle_open_workbench_recipe_menu_request(
     active_structure_placement.rotation_quarters = 0;
     reset_workbench_craft_progress(&mut craft_progress);
     recipe_preview.open = false;
+    workbench_menu.world_pos = Some(workbench_world_pos);
+    let storage_neighbors = find_adjacent_storage_world_pos(
+        workbench_world_pos,
+        &chunk_map,
+        &block_registry,
+        &item_registry,
+        structure_runtime.as_deref(),
+        structure_recipe_registry.as_deref(),
+    );
+    workbench_menu.storage_left_world_pos = storage_neighbors.left;
+    workbench_menu.storage_right_world_pos = storage_neighbors.right;
+    chest_inventory.workbench_left_slots = [InventorySlot::default(); CHEST_INVENTORY_SLOTS];
+    chest_inventory.workbench_right_slots = [InventorySlot::default(); CHEST_INVENTORY_SLOTS];
+    if let Some(storage_world_pos) = workbench_menu.storage_left_world_pos {
+        opened.write(ChestInventoryUiOpened {
+            world_pos: storage_world_pos,
+        });
+    }
+    if let Some(storage_world_pos) = workbench_menu.storage_right_world_pos {
+        opened.write(ChestInventoryUiOpened {
+            world_pos: storage_world_pos,
+        });
+    }
     workbench_menu.open = true;
 }
 
@@ -37,12 +67,15 @@ fn handle_workbench_recipe_menu_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     global_config: Res<GlobalConfig>,
     mut workbench_menu: ResMut<WorkbenchRecipeMenuState>,
+    mut chest_inventory: ResMut<ChestInventoryUiState>,
     mut craft_progress: ResMut<WorkbenchCraftProgressState>,
     mut recipe_preview: ResMut<RecipePreviewDialogState>,
     mut cursor_item: ResMut<InventoryCursorItemState>,
     mut work_table_crafting: ResMut<WorkTableCraftingState>,
     mut workbench_tools: ResMut<WorkbenchToolSlotsState>,
     mut inventory: ResMut<PlayerInventory>,
+    mut closed: MessageWriter<ChestInventoryUiClosed>,
+    mut persist_requests: MessageWriter<ChestInventoryPersistRequest>,
     item_registry: Option<Res<ItemRegistry>>,
 ) {
     if !workbench_menu.open {
@@ -68,10 +101,43 @@ fn handle_workbench_recipe_menu_input(
         );
         flush_workbench_tools_to_inventory(&mut workbench_tools, &mut inventory, item_registry);
         flush_cursor_item_to_inventory(&mut cursor_item, &mut inventory, item_registry);
+        if let Some(storage_world_pos) = workbench_menu.storage_left_world_pos {
+            persist_requests.write(ChestInventoryPersistRequest {
+                world_pos: storage_world_pos,
+                slots: serialize_chest_slots_for_persist(
+                    &chest_inventory.workbench_left_slots,
+                    item_registry,
+                ),
+            });
+        }
+        if let Some(storage_world_pos) = workbench_menu.storage_right_world_pos {
+            persist_requests.write(ChestInventoryPersistRequest {
+                world_pos: storage_world_pos,
+                slots: serialize_chest_slots_for_persist(
+                    &chest_inventory.workbench_right_slots,
+                    item_registry,
+                ),
+            });
+        }
+    }
+    if let Some(storage_world_pos) = workbench_menu.storage_left_world_pos {
+        closed.write(ChestInventoryUiClosed {
+            world_pos: storage_world_pos,
+        });
+    }
+    if let Some(storage_world_pos) = workbench_menu.storage_right_world_pos {
+        closed.write(ChestInventoryUiClosed {
+            world_pos: storage_world_pos,
+        });
     }
     reset_workbench_craft_progress(&mut craft_progress);
     recipe_preview.open = false;
+    workbench_menu.world_pos = None;
+    workbench_menu.storage_left_world_pos = None;
+    workbench_menu.storage_right_world_pos = None;
     workbench_menu.open = false;
+    chest_inventory.workbench_left_slots = [InventorySlot::default(); CHEST_INVENTORY_SLOTS];
+    chest_inventory.workbench_right_slots = [InventorySlot::default(); CHEST_INVENTORY_SLOTS];
 }
 
 fn handle_workbench_recipe_menu_navigation(
@@ -166,6 +232,7 @@ struct WorkbenchRecipeUiSyncDeps<'w, 's> {
     game_mode: Res<'w, GameModeState>,
     creative_panel: Res<'w, CreativePanelState>,
     inventory: Res<'w, PlayerInventory>,
+    chest_inventory: Res<'w, ChestInventoryUiState>,
     work_table_crafting: Res<'w, WorkTableCraftingState>,
     workbench_tools: Res<'w, WorkbenchToolSlotsState>,
     craft_progress: Res<'w, WorkbenchCraftProgressState>,
@@ -177,16 +244,64 @@ struct WorkbenchRecipeUiSyncDeps<'w, 's> {
     asset_server: Res<'w, AssetServer>,
     image_cache: ResMut<'w, ImageCache>,
     images: ResMut<'w, Assets<Image>>,
-    root_q: Query<'w, 's, &'static mut Visibility, With<WorkbenchRecipeRoot>>,
-    paragraph_q: Query<
+    ui_q: ParamSet<
         'w,
         's,
         (
-            &'static CssID,
-            &'static mut Paragraph,
-            Option<&'static mut Visibility>,
+            Query<
+                'w,
+                's,
+                &'static mut Visibility,
+                (
+                    With<WorkbenchRecipeRoot>,
+                    Without<WorkbenchRecipeStorageRoot>,
+                    Without<WorkbenchRecipeStoragePanel>,
+                ),
+            >,
+            Query<
+                'w,
+                's,
+                &'static mut Visibility,
+                (
+                    With<WorkbenchRecipeStorageRoot>,
+                    Without<WorkbenchRecipeRoot>,
+                    Without<WorkbenchRecipeStoragePanel>,
+                ),
+            >,
+            Query<
+                'w,
+                's,
+                (
+                    &'static WorkbenchRecipeStoragePanel,
+                    &'static mut Visibility,
+                    &'static mut Node,
+                ),
+                (
+                    Without<WorkbenchRecipeRoot>,
+                    Without<WorkbenchRecipeStorageRoot>,
+                ),
+            >,
+            Query<
+                'w,
+                's,
+                (&'static CssID, &'static mut Paragraph),
+                (
+                    Without<WorkbenchRecipeRoot>,
+                    Without<WorkbenchRecipeStorageRoot>,
+                    Without<WorkbenchRecipeStoragePanel>,
+                ),
+            >,
+            Query<
+                'w,
+                's,
+                (&'static CssID, &'static mut Paragraph, &'static mut Visibility),
+                (
+                    Without<WorkbenchRecipeRoot>,
+                    Without<WorkbenchRecipeStorageRoot>,
+                    Without<WorkbenchRecipeStoragePanel>,
+                ),
+            >,
         ),
-        Without<WorkbenchRecipeRoot>,
     >,
     button_q: Query<'w, 's, (&'static CssID, &'static mut Button), With<Button>>,
     progress_q: Query<'w, 's, (&'static CssID, &'static mut ProgressBar), With<ProgressBar>>,
@@ -200,6 +315,7 @@ fn sync_workbench_recipe_menu_ui(
         game_mode,
         creative_panel,
         inventory,
+        chest_inventory,
         work_table_crafting,
         workbench_tools,
         craft_progress,
@@ -211,17 +327,39 @@ fn sync_workbench_recipe_menu_ui(
         asset_server,
         mut image_cache,
         mut images,
-        mut root_q,
-        mut paragraph_q,
+        mut ui_q,
         mut button_q,
         mut progress_q,
     } = deps;
 
-    if let Ok(mut visibility) = root_q.single_mut() {
+    if let Ok(mut visibility) = ui_q.p0().single_mut() {
         *visibility = if workbench_menu.open {
             Visibility::Inherited
         } else {
             Visibility::Hidden
+        };
+    }
+    let has_any_storage = workbench_menu.storage_left_world_pos.is_some()
+        || workbench_menu.storage_right_world_pos.is_some();
+    if let Ok(mut visibility) = ui_q.p1().single_mut() {
+        *visibility = if workbench_menu.open && has_any_storage {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for (panel, mut visibility, mut node) in &mut ui_q.p2() {
+        let side_world_pos = workbench_menu.storage_world_pos(panel.side);
+        let show_panel = workbench_menu.open && side_world_pos.is_some();
+        *visibility = if show_panel {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        node.display = if show_panel {
+            Display::Flex
+        } else {
+            Display::None
         };
     }
 
@@ -236,12 +374,20 @@ fn sync_workbench_recipe_menu_ui(
             ))
     });
 
-    for (css_id, mut paragraph, mut maybe_visibility) in &mut paragraph_q {
+    for (css_id, mut paragraph) in &mut ui_q.p3() {
         if css_id.0 == WORKBENCH_RECIPE_TITLE_ID {
             let next = language.localize_name_key("KEY_UI_WORKBENCH");
             if paragraph.text != next {
                 paragraph.text = next;
             }
+            continue;
+        }
+        if css_id.0 == WORKBENCH_STORAGE_LEFT_TITLE_ID {
+            paragraph.text = language.localize_name_key("KEY_UI_CHEST_INVENTORY");
+            continue;
+        }
+        if css_id.0 == WORKBENCH_STORAGE_RIGHT_TITLE_ID {
+            paragraph.text = language.localize_name_key("KEY_UI_CHEST_INVENTORY");
             continue;
         }
         if css_id.0 == WORKBENCH_ITEMS_TOTAL_ID {
@@ -279,43 +425,41 @@ fn sync_workbench_recipe_menu_ui(
             }
             continue;
         }
+    }
 
+    for (css_id, mut paragraph, mut visibility) in &mut ui_q.p4() {
         if let Some(slot_index) = parse_workbench_craft_badge_index(css_id.0.as_str())
             && let Some(slot) = work_table_crafting.input_slots.get(slot_index)
-            && let Some(visibility) = maybe_visibility.as_mut()
         {
             sync_badge(
                 &mut paragraph,
-                visibility,
+                &mut visibility,
                 slot.count,
                 slot.is_empty() || !workbench_menu.open,
             );
             continue;
         }
 
-        if css_id.0 == WORKBENCH_RESULT_BADGE_ID
-            && let Some(visibility) = maybe_visibility.as_mut()
-        {
+        if css_id.0 == WORKBENCH_RESULT_BADGE_ID {
             if let Some(result) = resolved_recipe.as_ref() {
                 sync_badge(
                     &mut paragraph,
-                    visibility,
+                    &mut visibility,
                     result.result.count,
                     !workbench_menu.open,
                 );
             } else {
-                sync_badge(&mut paragraph, visibility, 0, true);
+                sync_badge(&mut paragraph, &mut visibility, 0, true);
             }
             continue;
         }
 
         if let Some(slot_index) = parse_workbench_tool_badge_index(css_id.0.as_str())
             && let Some(slot) = workbench_tools.slots.get(slot_index)
-            && let Some(visibility) = maybe_visibility.as_mut()
         {
             sync_badge(
                 &mut paragraph,
-                visibility,
+                &mut visibility,
                 slot.count,
                 slot.is_empty() || !workbench_menu.open,
             );
@@ -324,13 +468,26 @@ fn sync_workbench_recipe_menu_ui(
 
         if let Some(slot_index) = parse_workbench_player_inventory_badge_index(css_id.0.as_str())
             && let Some(slot) = inventory.slots.get(slot_index)
-            && let Some(visibility) = maybe_visibility.as_mut()
         {
             sync_badge(
                 &mut paragraph,
-                visibility,
+                &mut visibility,
                 slot.count,
                 slot.is_empty() || !workbench_menu.open,
+            );
+            continue;
+        }
+
+        if let Some((side, slot_index)) = parse_workbench_storage_badge_index(css_id.0.as_str())
+            && let Some(slot) = chest_inventory.workbench_slots_ref(side).get(slot_index)
+        {
+            sync_badge(
+                &mut paragraph,
+                &mut visibility,
+                slot.count,
+                slot.is_empty()
+                    || !workbench_menu.open
+                    || workbench_menu.storage_world_pos(side).is_none(),
             );
         }
     }
@@ -441,6 +598,36 @@ fn sync_workbench_recipe_menu_ui(
             continue;
         }
 
+        if let Some((side, slot_index)) = parse_workbench_storage_slot_index(css_id.0.as_str()) {
+            if !button.text.is_empty() {
+                button.text.clear();
+            }
+            let slot = chest_inventory
+                .workbench_slots_ref(side)
+                .get(slot_index)
+                .copied()
+                .unwrap_or_default();
+            let next_icon = if !workbench_menu.open
+                || workbench_menu.storage_world_pos(side).is_none()
+                || slot.is_empty()
+            {
+                None
+            } else {
+                resolve_item_icon_path(
+                    &item_registry,
+                    &block_registry,
+                    &asset_server,
+                    &mut image_cache,
+                    &mut images,
+                    slot.item_id,
+                )
+            };
+            if button.icon_path != next_icon {
+                button.icon_path = next_icon;
+            }
+            continue;
+        }
+
         let Some(slot_index) = parse_workbench_item_slot_index(css_id.0.as_str()) else {
             continue;
         };
@@ -487,6 +674,7 @@ fn sync_workbench_recipe_menu_ui(
 fn close_workbench_recipe_menu_ui(
     mut ui_interaction: ResMut<UiInteractionState>,
     mut workbench_menu: ResMut<WorkbenchRecipeMenuState>,
+    mut chest_inventory: ResMut<ChestInventoryUiState>,
     mut craft_progress: ResMut<WorkbenchCraftProgressState>,
     mut root_q: Query<&mut Visibility, With<WorkbenchRecipeRoot>>,
     mut recipe_preview: ResMut<RecipePreviewDialogState>,
@@ -494,6 +682,8 @@ fn close_workbench_recipe_menu_ui(
     mut work_table_crafting: ResMut<WorkTableCraftingState>,
     mut workbench_tools: ResMut<WorkbenchToolSlotsState>,
     mut inventory: ResMut<PlayerInventory>,
+    mut closed: MessageWriter<ChestInventoryUiClosed>,
+    mut persist_requests: MessageWriter<ChestInventoryPersistRequest>,
     item_registry: Option<Res<ItemRegistry>>,
 ) {
     if let Some(item_registry) = item_registry.as_ref() {
@@ -504,9 +694,51 @@ fn close_workbench_recipe_menu_ui(
         );
         flush_workbench_tools_to_inventory(&mut workbench_tools, &mut inventory, item_registry);
         flush_cursor_item_to_inventory(&mut cursor_item, &mut inventory, item_registry);
+        if workbench_menu.open
+            && let Some(storage_world_pos) = workbench_menu.storage_left_world_pos
+        {
+            persist_requests.write(ChestInventoryPersistRequest {
+                world_pos: storage_world_pos,
+                slots: serialize_chest_slots_for_persist(
+                    &chest_inventory.workbench_left_slots,
+                    item_registry,
+                ),
+            });
+        }
+        if workbench_menu.open
+            && let Some(storage_world_pos) = workbench_menu.storage_right_world_pos
+        {
+            persist_requests.write(ChestInventoryPersistRequest {
+                world_pos: storage_world_pos,
+                slots: serialize_chest_slots_for_persist(
+                    &chest_inventory.workbench_right_slots,
+                    item_registry,
+                ),
+            });
+        }
+    }
+
+    if workbench_menu.open
+        && let Some(storage_world_pos) = workbench_menu.storage_left_world_pos
+    {
+        closed.write(ChestInventoryUiClosed {
+            world_pos: storage_world_pos,
+        });
+    }
+    if workbench_menu.open
+        && let Some(storage_world_pos) = workbench_menu.storage_right_world_pos
+    {
+        closed.write(ChestInventoryUiClosed {
+            world_pos: storage_world_pos,
+        });
     }
 
     workbench_menu.open = false;
+    workbench_menu.world_pos = None;
+    workbench_menu.storage_left_world_pos = None;
+    workbench_menu.storage_right_world_pos = None;
+    chest_inventory.workbench_left_slots = [InventorySlot::default(); CHEST_INVENTORY_SLOTS];
+    chest_inventory.workbench_right_slots = [InventorySlot::default(); CHEST_INVENTORY_SLOTS];
     reset_workbench_craft_progress(&mut craft_progress);
     ui_interaction.workbench_menu_open = false;
     recipe_preview.open = false;
@@ -664,6 +896,40 @@ fn parse_workbench_player_inventory_badge_index(css_id: &str) -> Option<usize> {
         .filter(|index| *index < PLAYER_INVENTORY_SLOTS)
 }
 
+fn parse_workbench_storage_slot_index(css_id: &str) -> Option<(WorkbenchStorageSide, usize)> {
+    if let Some(index) = css_id
+        .strip_prefix(WORKBENCH_STORAGE_LEFT_FRAME_PREFIX)
+        .and_then(|slot_number| slot_number.parse::<usize>().ok())
+        .and_then(|value| value.checked_sub(1))
+        .filter(|index| *index < CHEST_INVENTORY_SLOTS)
+    {
+        return Some((WorkbenchStorageSide::Left, index));
+    }
+    css_id
+        .strip_prefix(WORKBENCH_STORAGE_RIGHT_FRAME_PREFIX)
+        .and_then(|slot_number| slot_number.parse::<usize>().ok())
+        .and_then(|value| value.checked_sub(1))
+        .filter(|index| *index < CHEST_INVENTORY_SLOTS)
+        .map(|index| (WorkbenchStorageSide::Right, index))
+}
+
+fn parse_workbench_storage_badge_index(css_id: &str) -> Option<(WorkbenchStorageSide, usize)> {
+    if let Some(index) = css_id
+        .strip_prefix(WORKBENCH_STORAGE_LEFT_BADGE_PREFIX)
+        .and_then(|slot_number| slot_number.parse::<usize>().ok())
+        .and_then(|value| value.checked_sub(1))
+        .filter(|index| *index < CHEST_INVENTORY_SLOTS)
+    {
+        return Some((WorkbenchStorageSide::Left, index));
+    }
+    css_id
+        .strip_prefix(WORKBENCH_STORAGE_RIGHT_BADGE_PREFIX)
+        .and_then(|slot_number| slot_number.parse::<usize>().ok())
+        .and_then(|value| value.checked_sub(1))
+        .filter(|index| *index < CHEST_INVENTORY_SLOTS)
+        .map(|index| (WorkbenchStorageSide::Right, index))
+}
+
 fn parse_workbench_item_slot_index(css_id: &str) -> Option<usize> {
     css_id
         .strip_prefix(WORKBENCH_ITEMS_SLOT_PREFIX)
@@ -699,4 +965,202 @@ fn sync_workbench_item_slot_hover_border(
     }
 
     hovered_slot
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct WorkbenchStorageNeighbors {
+    left: Option<[i32; 3]>,
+    right: Option<[i32; 3]>,
+}
+
+fn find_adjacent_storage_world_pos(
+    workbench_world_pos: [i32; 3],
+    chunk_map: &ChunkMap,
+    block_registry: &BlockRegistry,
+    item_registry: &ItemRegistry,
+    structure_runtime: Option<&crate::logic::events::block_event_handler::StructureRuntimeState>,
+    structure_recipe_registry: Option<&BuildingStructureRecipeRegistry>,
+) -> WorkbenchStorageNeighbors {
+    let base = IVec3::new(
+        workbench_world_pos[0],
+        workbench_world_pos[1],
+        workbench_world_pos[2],
+    );
+
+    let (footprint, side_axis) = resolve_workbench_footprint_and_side_axis(
+        base,
+        chunk_map,
+        block_registry,
+        structure_runtime,
+        structure_recipe_registry,
+    );
+    let mut left_candidates = Vec::<IVec3>::new();
+    let mut right_candidates = Vec::<IVec3>::new();
+    for cell in &footprint {
+        let left_pos = *cell - side_axis;
+        if !footprint.contains(&left_pos) && !left_candidates.contains(&left_pos) {
+            left_candidates.push(left_pos);
+        }
+        let right_pos = *cell + side_axis;
+        if !footprint.contains(&right_pos) && !right_candidates.contains(&right_pos) {
+            right_candidates.push(right_pos);
+        }
+    }
+
+    let left = left_candidates.into_iter().find_map(|storage_pos| {
+        let block_id = get_block_world(chunk_map, storage_pos);
+        if !is_storage_block_id_for_workbench(block_id, block_registry, item_registry) {
+            return None;
+        }
+        Some([storage_pos.x, storage_pos.y, storage_pos.z])
+    });
+
+    let right = right_candidates.into_iter().find_map(|storage_pos| {
+        let block_id = get_block_world(chunk_map, storage_pos);
+        if !is_storage_block_id_for_workbench(block_id, block_registry, item_registry) {
+            return None;
+        }
+        Some([storage_pos.x, storage_pos.y, storage_pos.z])
+    });
+
+    WorkbenchStorageNeighbors { left, right }
+}
+
+fn resolve_workbench_footprint_and_side_axis(
+    base: IVec3,
+    chunk_map: &ChunkMap,
+    block_registry: &BlockRegistry,
+    structure_runtime: Option<&crate::logic::events::block_event_handler::StructureRuntimeState>,
+    structure_recipe_registry: Option<&BuildingStructureRecipeRegistry>,
+) -> (Vec<IVec3>, IVec3) {
+    if let Some((space_x, space_z, rotation_quarters)) = resolve_workbench_structure_shape(
+        base,
+        structure_runtime,
+        structure_recipe_registry,
+    ) {
+        let mut footprint = Vec::new();
+        for local_z in 0..space_z {
+            for local_x in 0..space_x {
+                let (x_offset, z_offset) = rotated_structure_offset(
+                    local_x,
+                    local_z,
+                    space_x,
+                    space_z,
+                    rotation_quarters,
+                );
+                footprint.push(base + IVec3::new(x_offset, 0, z_offset));
+            }
+        }
+        if !footprint.is_empty() {
+            return (footprint, workbench_local_x_axis_world(rotation_quarters));
+        }
+    }
+
+    let block_id = get_block_world(chunk_map, base);
+    let rotation_quarters =
+        parse_block_rotation_quarters(block_id, block_registry).unwrap_or(0);
+    (vec![base], workbench_local_x_axis_world(rotation_quarters))
+}
+
+fn resolve_workbench_structure_shape(
+    base: IVec3,
+    structure_runtime: Option<&crate::logic::events::block_event_handler::StructureRuntimeState>,
+    structure_recipe_registry: Option<&BuildingStructureRecipeRegistry>,
+) -> Option<(i32, i32, u8)> {
+    let structure_runtime = structure_runtime?;
+    let structure_recipe_registry = structure_recipe_registry?;
+    let (coord, _) = world_to_chunk_xz(base.x, base.z);
+    let entry = structure_runtime
+        .records_by_chunk
+        .get(&coord)
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| entry.place_origin == [base.x, base.y, base.z])
+        })?;
+    let recipe = structure_recipe_registry.recipe_by_name(entry.recipe_name.as_str())?;
+    let space_x = recipe.space.x as i32;
+    let space_z = recipe.space.z as i32;
+    if space_x <= 0 || space_z <= 0 {
+        return None;
+    }
+
+    let rotation_steps = entry
+        .rotation_steps
+        .map(i32::from)
+        .unwrap_or((entry.rotation_quarters as i32) * 2);
+    let normalized_steps = rotation_steps.rem_euclid(8) as u8;
+    let rotation_quarters = (normalized_steps / 2) % 4;
+    Some((space_x, space_z, rotation_quarters))
+}
+
+#[inline]
+fn rotated_structure_offset(
+    local_x: i32,
+    local_z: i32,
+    size_x: i32,
+    size_z: i32,
+    rotation_quarters: u8,
+) -> (i32, i32) {
+    match rotation_quarters % 4 {
+        0 => (local_x, local_z),
+        1 => (local_z, size_x - 1 - local_x),
+        2 => (size_x - 1 - local_x, size_z - 1 - local_z),
+        _ => (size_z - 1 - local_z, local_x),
+    }
+}
+
+#[inline]
+fn workbench_local_x_axis_world(rotation_quarters: u8) -> IVec3 {
+    match rotation_quarters % 4 {
+        0 => IVec3::new(1, 0, 0),
+        1 => IVec3::new(0, 0, -1),
+        2 => IVec3::new(-1, 0, 0),
+        _ => IVec3::new(0, 0, 1),
+    }
+}
+
+fn parse_block_rotation_quarters(block_id: u16, block_registry: &BlockRegistry) -> Option<u8> {
+    if block_id == 0 {
+        return None;
+    }
+    let def = block_registry.def_opt(block_id)?;
+    parse_rotation_suffix(def.localized_name.as_str()).or_else(|| parse_rotation_suffix(def.name.as_str()))
+}
+
+fn parse_rotation_suffix(value: &str) -> Option<u8> {
+    if let Some(rotation) = value.rsplit_once("_r").and_then(|(_, suffix)| suffix.parse::<u8>().ok()) {
+        return Some(rotation % 4);
+    }
+    value
+        .rsplit_once("_R")
+        .and_then(|(_, suffix)| suffix.parse::<u8>().ok())
+        .map(|rotation| rotation % 4)
+}
+
+fn is_storage_block_id_for_workbench(
+    block_id: u16,
+    block_registry: &BlockRegistry,
+    item_registry: &ItemRegistry,
+) -> bool {
+    if block_id == 0 {
+        return false;
+    }
+
+    let is_storage_category = item_registry
+        .item_for_block(block_id)
+        .and_then(|item_id| item_registry.def_opt(item_id))
+        .is_some_and(|item| item.category.eq_ignore_ascii_case("storage"));
+    if is_storage_category {
+        return true;
+    }
+
+    block_registry.def_opt(block_id).is_some_and(|def| {
+        let localized = def.localized_name.to_ascii_lowercase();
+        let key = def.name.to_ascii_uppercase();
+        localized == "chest_block"
+            || localized.starts_with("chest_block_r")
+            || key == "KEY_CHEST_BLOCK"
+            || key.starts_with("KEY_CHEST_BLOCK_R")
+    })
 }

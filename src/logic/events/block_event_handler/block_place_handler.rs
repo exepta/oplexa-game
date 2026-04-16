@@ -85,7 +85,9 @@ fn block_place_handler(
         // Block interaction UI has priority over hammer right-click interaction.
         active_structure_recipe.selected_recipe_name = None;
         active_structure_placement.rotation_quarters = 0;
-        open_workbench_menu_requests.write(OpenWorkbenchMenuRequest);
+        open_workbench_menu_requests.write(OpenWorkbenchMenuRequest {
+            world_pos: [meta.place_origin.x, meta.place_origin.y, meta.place_origin.z],
+        });
         return;
     }
     if let Some(hit) = sel.hit
@@ -95,7 +97,9 @@ fn block_place_handler(
         // Block interaction UI has priority over hammer right-click interaction.
         active_structure_recipe.selected_recipe_name = None;
         active_structure_placement.rotation_quarters = 0;
-        open_workbench_menu_requests.write(OpenWorkbenchMenuRequest);
+        open_workbench_menu_requests.write(OpenWorkbenchMenuRequest {
+            world_pos: [hit.block_pos.x, hit.block_pos.y, hit.block_pos.z],
+        });
         return;
     }
 

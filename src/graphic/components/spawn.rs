@@ -713,7 +713,7 @@ fn spawn_hardcoded_ui(
         .id();
 
     // Extracted large panel/timer/debug sections for readability.
-    include!("spawn_hardcoded_ui_panels.rs");
+    spawn_hardcoded_ui_panels::spawn_hardcoded_ui_panels(&mut commands, language.as_ref());
     commands.insert_resource(UiEntities {
         single_player_world_list,
         multiplayer_server_list,

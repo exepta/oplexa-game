@@ -1,7 +1,7 @@
 use crate::core::inventory::items::{DEFAULT_ITEM_STACK_SIZE, ItemId, ItemRegistry};
 use bevy::prelude::*;
 
-pub const PLAYER_INVENTORY_SLOTS: usize = 12;
+pub const PLAYER_INVENTORY_SLOTS: usize = 16;
 pub const PLAYER_INVENTORY_STACK_MAX: u16 = DEFAULT_ITEM_STACK_SIZE;
 
 /// Represents inventory slot used by the `core::entities::player::inventory` module.

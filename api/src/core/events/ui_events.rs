@@ -61,7 +61,9 @@ pub struct OpenStructureBuildMenuRequest;
 
 /// Represents request to open workbench recipe menu.
 #[derive(Message, Clone, Copy, Debug, Default)]
-pub struct OpenWorkbenchMenuRequest;
+pub struct OpenWorkbenchMenuRequest {
+    pub world_pos: [i32; 3],
+}
 
 /// Represents request to open chest inventory UI for one chest block.
 #[derive(Message, Clone, Copy, Debug, Default)]

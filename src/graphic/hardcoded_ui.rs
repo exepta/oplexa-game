@@ -39,7 +39,7 @@ use crate::core::ui::{HOTBAR_SLOTS, HotbarSelectionState, UiInteractionState};
 use crate::core::world::biome::func::dominant_biome_at_p_chunks;
 use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::{
-    BlockRegistry, MiningState, SelectedBlock, VOXEL_SIZE, mining_progress,
+    BlockRegistry, MiningState, SelectedBlock, VOXEL_SIZE, get_block_world, mining_progress,
 };
 use crate::core::world::chunk::{CaveTracker, ChunkMap, LoadCenter};
 use crate::core::world::chunk_dimension::{CX, CZ, SEC_COUNT, world_to_chunk_xz};
@@ -171,6 +171,12 @@ const WORKBENCH_TOOL_FRAME_PREFIX: &str = "workbench-tool-frame-";
 const WORKBENCH_TOOL_BADGE_PREFIX: &str = "workbench-tool-badge-";
 const WORKBENCH_PLAYER_INVENTORY_FRAME_PREFIX: &str = "workbench-player-inventory-frame-";
 const WORKBENCH_PLAYER_INVENTORY_BADGE_PREFIX: &str = "workbench-player-inventory-badge-";
+const WORKBENCH_STORAGE_LEFT_TITLE_ID: &str = "workbench-storage-left-title";
+const WORKBENCH_STORAGE_RIGHT_TITLE_ID: &str = "workbench-storage-right-title";
+const WORKBENCH_STORAGE_LEFT_FRAME_PREFIX: &str = "workbench-storage-left-frame-";
+const WORKBENCH_STORAGE_RIGHT_FRAME_PREFIX: &str = "workbench-storage-right-frame-";
+const WORKBENCH_STORAGE_LEFT_BADGE_PREFIX: &str = "workbench-storage-left-badge-";
+const WORKBENCH_STORAGE_RIGHT_BADGE_PREFIX: &str = "workbench-storage-right-badge-";
 const WORKBENCH_ITEMS_TOTAL_ID: &str = "workbench-items-total";
 const WORKBENCH_ITEMS_PAGE_ID: &str = "workbench-items-page";
 const WORKBENCH_ITEMS_PREV_ID: &str = "workbench-items-prev";
@@ -180,7 +186,7 @@ const WORKBENCH_RECIPE_HINT_ID: &str = "workbench-recipe-hint";
 const WORKBENCH_TRASH_BUTTON_ID: &str = "workbench-trash-button";
 const CHEST_INVENTORY_TITLE_ID: &str = "chest-inventory-title";
 const CHEST_INVENTORY_HINT_ID: &str = "chest-inventory-hint";
-const CHEST_INVENTORY_SLOTS: usize = 18;
+const CHEST_INVENTORY_SLOTS: usize = 24;
 const CHEST_SLOT_FRAME_PREFIX: &str = "chest-slot-frame-";
 const CHEST_SLOT_BADGE_PREFIX: &str = "chest-slot-badge-";
 const CHEST_PLAYER_INVENTORY_FRAME_PREFIX: &str = "chest-player-inventory-frame-";
@@ -363,6 +369,21 @@ struct WorkbenchRecipeMainPanel;
 /// Represents workbench recipe player inventory panel used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct WorkbenchRecipeInventoryPanel;
+/// Represents workbench recipe linked storage panel used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct WorkbenchRecipeStorageRoot;
+
+/// Represents one workbench recipe linked storage panel (left or right) used by the `graphic::hardcoded_ui` module.
+#[derive(Component)]
+struct WorkbenchRecipeStoragePanel {
+    side: WorkbenchStorageSide,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkbenchStorageSide {
+    Left,
+    Right,
+}
 /// Represents workbench recipe item grid root used by the `graphic::hardcoded_ui` module.
 #[derive(Component)]
 struct WorkbenchRecipeItemGridRoot;
@@ -571,6 +592,18 @@ struct StructureBuildMenuState {
 #[derive(Resource, Debug, Default, Clone, Copy)]
 struct WorkbenchRecipeMenuState {
     open: bool,
+    world_pos: Option<[i32; 3]>,
+    storage_left_world_pos: Option<[i32; 3]>,
+    storage_right_world_pos: Option<[i32; 3]>,
+}
+
+impl WorkbenchRecipeMenuState {
+    fn storage_world_pos(&self, side: WorkbenchStorageSide) -> Option<[i32; 3]> {
+        match side {
+            WorkbenchStorageSide::Left => self.storage_left_world_pos,
+            WorkbenchStorageSide::Right => self.storage_right_world_pos,
+        }
+    }
 }
 
 /// Represents chest inventory menu state used by the `graphic::hardcoded_ui` module.
@@ -584,6 +617,8 @@ struct ChestInventoryMenuState {
 #[derive(Resource, Debug, Clone, Copy)]
 struct ChestInventoryUiState {
     slots: [InventorySlot; CHEST_INVENTORY_SLOTS],
+    workbench_left_slots: [InventorySlot; CHEST_INVENTORY_SLOTS],
+    workbench_right_slots: [InventorySlot; CHEST_INVENTORY_SLOTS],
 }
 
 impl Default for ChestInventoryUiState {
@@ -591,6 +626,30 @@ impl Default for ChestInventoryUiState {
     fn default() -> Self {
         Self {
             slots: [InventorySlot::default(); CHEST_INVENTORY_SLOTS],
+            workbench_left_slots: [InventorySlot::default(); CHEST_INVENTORY_SLOTS],
+            workbench_right_slots: [InventorySlot::default(); CHEST_INVENTORY_SLOTS],
+        }
+    }
+}
+
+impl ChestInventoryUiState {
+    fn workbench_slots_ref(
+        &self,
+        side: WorkbenchStorageSide,
+    ) -> &[InventorySlot; CHEST_INVENTORY_SLOTS] {
+        match side {
+            WorkbenchStorageSide::Left => &self.workbench_left_slots,
+            WorkbenchStorageSide::Right => &self.workbench_right_slots,
+        }
+    }
+
+    fn workbench_slots_mut(
+        &mut self,
+        side: WorkbenchStorageSide,
+    ) -> &mut [InventorySlot; CHEST_INVENTORY_SLOTS] {
+        match side {
+            WorkbenchStorageSide::Left => &mut self.workbench_left_slots,
+            WorkbenchStorageSide::Right => &mut self.workbench_right_slots,
         }
     }
 }
@@ -1286,6 +1345,8 @@ include!("components/ui_interaction_sync.rs");
 include!("components/debug_overlay.rs");
 include!("components/benchmark_auto.rs");
 include!("components/benchmark.rs");
+#[path = "components/spawn_hardcoded_ui_panels.rs"]
+mod spawn_hardcoded_ui_panels;
 
 /// Runs the `bytes_to_mib` routine for bytes to mib in the `graphic::hardcoded_ui` module.
 #[inline]

@@ -1,3 +1,6 @@
+const HUD_CHEST_PREVIEW_COMPACT_SLOTS: usize = 5;
+const HUD_CHEST_PREVIEW_EXPANDED_COLUMNS: u16 = 8;
+
 /// Runs the `show_hud_hotbar_ui` routine for show hud hotbar ui in the `graphic::components::hud` module.
 fn show_hud_hotbar_ui(mut root: Query<&mut Visibility, With<HudRoot>>) {
     if let Ok(mut visible) = root.single_mut() {
@@ -102,7 +105,9 @@ fn select_hotbar_with_number_keys(
             2 => global_config.input.hotbar_slot_3.as_str(),
             3 => global_config.input.hotbar_slot_4.as_str(),
             4 => global_config.input.hotbar_slot_5.as_str(),
-            _ => global_config.input.hotbar_slot_6.as_str(),
+            5 => global_config.input.hotbar_slot_6.as_str(),
+            6 => global_config.input.hotbar_slot_7.as_str(),
+            _ => global_config.input.hotbar_slot_8.as_str(),
         };
         let fallback = match slot_index {
             0 => KeyCode::Digit1,
@@ -110,7 +115,9 @@ fn select_hotbar_with_number_keys(
             2 => KeyCode::Digit3,
             3 => KeyCode::Digit4,
             4 => KeyCode::Digit5,
-            _ => KeyCode::Digit6,
+            5 => KeyCode::Digit6,
+            6 => KeyCode::Digit7,
+            _ => KeyCode::Digit8,
         };
         let key = convert(key_name).unwrap_or(fallback);
 
@@ -362,7 +369,11 @@ struct LookedBlockHudQueries<'w, 's> {
         'w,
         's,
         (&'static mut ImageNode, &'static mut Node),
-        (With<HudLookedBlockIcon>, Without<HudLookedBlockChestPreviewIcon>),
+        (
+            With<HudLookedBlockIcon>,
+            Without<HudLookedBlockChestPreviewIcon>,
+            Without<HudLookedBlockChestPreviewRow>,
+        ),
     >,
     display_name_q: Query<
         'w,
@@ -417,7 +428,7 @@ struct LookedBlockHudQueries<'w, 's> {
     chest_preview_row_q: Query<
         'w,
         's,
-        &'static mut Visibility,
+        (&'static mut Visibility, &'static mut Node),
         (
             With<HudLookedBlockChestPreviewRow>,
             Without<HudLookedBlockCard>,
@@ -426,6 +437,7 @@ struct LookedBlockHudQueries<'w, 's> {
             Without<HudLookedBlockChestPreviewSlot>,
             Without<HudLookedBlockChestPreviewBadge>,
             Without<HudLookedBlockChestPreviewMore>,
+            Without<HudLookedBlockIcon>,
         ),
     >,
     chest_slot_q: Query<
@@ -434,6 +446,7 @@ struct LookedBlockHudQueries<'w, 's> {
         (
             &'static HudLookedBlockChestPreviewSlot,
             &'static mut Visibility,
+            &'static mut Node,
         ),
         (
             Without<HudLookedBlockCard>,
@@ -442,13 +455,26 @@ struct LookedBlockHudQueries<'w, 's> {
             Without<HudLookedBlockChestPreviewRow>,
             Without<HudLookedBlockChestPreviewBadge>,
             Without<HudLookedBlockChestPreviewMore>,
+            Without<HudLookedBlockChestPreviewIcon>,
+            Without<HudLookedBlockIcon>,
         ),
     >,
     chest_icon_q: Query<
         'w,
         's,
-        (&'static HudLookedBlockChestPreviewIcon, &'static mut ImageNode),
-        (With<HudLookedBlockChestPreviewIcon>, Without<HudLookedBlockIcon>),
+        (
+            &'static HudLookedBlockChestPreviewIcon,
+            &'static mut ImageNode,
+            &'static mut Node,
+        ),
+        (
+            With<HudLookedBlockChestPreviewIcon>,
+            Without<HudLookedBlockIcon>,
+            Without<HudLookedBlockChestPreviewSlot>,
+            Without<HudLookedBlockChestPreviewBadge>,
+            Without<HudLookedBlockChestPreviewMore>,
+            Without<HudLookedBlockChestPreviewRow>,
+        ),
     >,
     chest_badge_q: Query<
         'w,
@@ -473,7 +499,7 @@ struct LookedBlockHudQueries<'w, 's> {
     chest_more_q: Query<
         'w,
         's,
-        &'static mut Visibility,
+        (&'static mut Visibility, &'static mut Node),
         (
             With<HudLookedBlockChestPreviewMore>,
             Without<HudLookedBlockCard>,
@@ -482,12 +508,16 @@ struct LookedBlockHudQueries<'w, 's> {
             Without<HudLookedBlockChestPreviewRow>,
             Without<HudLookedBlockChestPreviewSlot>,
             Without<HudLookedBlockChestPreviewBadge>,
+            Without<HudLookedBlockChestPreviewIcon>,
+            Without<HudLookedBlockIcon>,
         ),
     >,
 }
 
 #[allow(clippy::too_many_arguments)]
 fn sync_hud_looked_block_card(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    global_config: Res<GlobalConfig>,
     selection: Res<SelectionState>,
     mining_state: Res<MiningState>,
     hotbar_state: Res<HotbarSelectionState>,
@@ -753,14 +783,18 @@ fn sync_hud_looked_block_card(
 
     let preview = looked
         .world_pos
-        .and_then(|world_pos| {
-            build_chest_hud_preview(
-                world_pos,
-                structure_runtime.as_deref(),
-                &item_registry,
-            )
-        })
+        .and_then(|world_pos| build_chest_hud_preview(world_pos, structure_runtime.as_deref(), &item_registry))
         .unwrap_or_default();
+    let sneak_key = convert(global_config.input.movement_sneak.as_str()).unwrap_or(KeyCode::ShiftLeft);
+    let show_expanded = keyboard.pressed(sneak_key);
+    let compact_items: Vec<InventorySlot> = preview
+        .slots
+        .iter()
+        .copied()
+        .filter(|slot| !slot.is_empty())
+        .take(HUD_CHEST_PREVIEW_COMPACT_SLOTS)
+        .collect();
+    let compact_has_more = preview.non_empty_count > HUD_CHEST_PREVIEW_COMPACT_SLOTS;
 
     if let Ok((mut paragraph, mut visibility)) = chest_count_q.single_mut() {
         paragraph.text = format!(
@@ -770,35 +804,64 @@ fn sync_hud_looked_block_card(
         );
         *visibility = Visibility::Inherited;
     }
-    if let Ok(mut visibility) = chest_preview_row_q.single_mut() {
-        *visibility = if preview.items.is_empty() && !preview.has_more {
-            Visibility::Hidden
+    if let Ok((mut visibility, mut node)) = chest_preview_row_q.single_mut() {
+        if show_expanded {
+            node.display = Display::Grid;
+            node.grid_template_columns =
+                RepeatedGridTrack::fr(HUD_CHEST_PREVIEW_EXPANDED_COLUMNS, 1.0);
+            node.grid_auto_rows = vec![GridTrack::px(40.0)];
+            node.row_gap = Val::Px(6.0);
+            node.column_gap = Val::Px(6.0);
+            *visibility = Visibility::Inherited;
         } else {
-            Visibility::Inherited
-        };
+            node.display = Display::Flex;
+            node.grid_template_columns.clear();
+            node.grid_auto_rows.clear();
+            node.row_gap = Val::Px(0.0);
+            node.column_gap = Val::Px(6.0);
+            *visibility = if compact_items.is_empty() && !compact_has_more {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            };
+        }
     }
 
-    for (slot, mut visibility) in &mut chest_slot_q {
-        *visibility = if preview.items.get(slot.index).is_some() {
+    for (slot, mut visibility, mut node) in &mut chest_slot_q {
+        let should_show = if show_expanded {
+            slot.index < CHEST_INVENTORY_SLOTS
+        } else {
+            compact_items.get(slot.index).is_some()
+        };
+        *visibility = if should_show {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
+        node.display = if should_show {
+            Display::Flex
+        } else {
+            Display::None
+        };
     }
-    for (icon, mut img) in &mut chest_icon_q {
-        let next_handle = preview
-            .items
-            .get(icon.index)
-            .and_then(|entry| {
-            resolve_item_icon_path(
-                &item_registry,
-                &block_registry,
-                &asset_server,
-                &mut image_cache,
-                &mut images,
-                entry.item_id,
-            )
-        })
+    for (icon, mut img, mut node) in &mut chest_icon_q {
+        let source_slot = if show_expanded {
+            preview.slots.get(icon.index).copied().unwrap_or_default()
+        } else {
+            compact_items.get(icon.index).copied().unwrap_or_default()
+        };
+        let next_handle = (!source_slot.is_empty())
+            .then(|| {
+                resolve_item_icon_path(
+                    &item_registry,
+                    &block_registry,
+                    &asset_server,
+                    &mut image_cache,
+                    &mut images,
+                    source_slot.item_id,
+                )
+            })
+            .flatten()
             .map(|path| {
                 image_cache
                     .map
@@ -810,10 +873,20 @@ fn sync_hud_looked_block_card(
         if img.image != next_handle {
             img.image = next_handle;
         }
+        node.display = if source_slot.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
     }
     for (badge, mut paragraph, mut visibility) in &mut chest_badge_q {
-        if let Some(entry) = preview.items.get(badge.index) {
-            paragraph.text = entry.count.to_string();
+        let slot = if show_expanded {
+            preview.slots.get(badge.index).copied().unwrap_or_default()
+        } else {
+            compact_items.get(badge.index).copied().unwrap_or_default()
+        };
+        if !slot.is_empty() {
+            paragraph.text = slot.count.to_string();
             *visibility = Visibility::Inherited;
         } else {
             if !paragraph.text.is_empty() {
@@ -822,26 +895,26 @@ fn sync_hud_looked_block_card(
             *visibility = Visibility::Hidden;
         }
     }
-    if let Ok(mut visibility) = chest_more_q.single_mut() {
-        *visibility = if preview.has_more {
+    if let Ok((mut visibility, mut node)) = chest_more_q.single_mut() {
+        let show_more = !show_expanded && compact_has_more;
+        *visibility = if show_more {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
+        node.display = if show_more {
+            Display::Flex
+        } else {
+            Display::None
+        };
     }
-}
-
-#[derive(Clone, Debug)]
-struct ChestHudPreviewItem {
-    item_id: ItemId,
-    count: u32,
 }
 
 #[derive(Clone, Debug, Default)]
 struct ChestHudPreview {
     total_count: u32,
-    items: Vec<ChestHudPreviewItem>,
-    has_more: bool,
+    slots: [InventorySlot; CHEST_INVENTORY_SLOTS],
+    non_empty_count: usize,
 }
 
 fn build_chest_hud_preview(
@@ -860,40 +933,27 @@ fn build_chest_hud_preview(
     let mut ordered_slots = entry.inventory_slots.clone();
     ordered_slots.sort_by_key(|slot| slot.slot);
 
-    let mut total_count = 0u32;
-    let mut items = Vec::<ChestHudPreviewItem>::new();
-    let mut by_item = HashMap::<ItemId, usize>::new();
-    for slot in ordered_slots {
-        if slot.count == 0 {
+    let mut preview = ChestHudPreview::default();
+    for saved in ordered_slots {
+        let slot_index = saved.slot as usize;
+        if slot_index >= CHEST_INVENTORY_SLOTS || saved.count == 0 {
             continue;
         }
-        let item_name = slot.item.trim();
+        let item_name = saved.item.trim();
         if item_name.is_empty() {
             continue;
         }
         let Some(item_id) = item_registry.id_opt(item_name) else {
             continue;
         };
-        let count = slot.count as u32;
-        total_count = total_count.saturating_add(count);
-        if let Some(index) = by_item.get(&item_id).copied() {
-            items[index].count = items[index].count.saturating_add(count);
-        } else {
-            by_item.insert(item_id, items.len());
-            items.push(ChestHudPreviewItem { item_id, count });
-        }
+        preview.slots[slot_index] = InventorySlot {
+            item_id,
+            count: saved.count.max(1),
+        };
     }
-
-    let has_more = items.len() > 5;
-    if items.len() > 5 {
-        items.truncate(5);
-    }
-
-    Some(ChestHudPreview {
-        total_count,
-        items,
-        has_more,
-    })
+    preview.total_count = preview.slots.iter().map(|slot| slot.count as u32).sum();
+    preview.non_empty_count = preview.slots.iter().filter(|slot| !slot.is_empty()).count();
+    Some(preview)
 }
 
 fn is_chest_structure_meta(
@@ -937,7 +997,7 @@ fn reset_hud_chest_preview(
         ),
     >,
     row_q: &mut Query<
-        &mut Visibility,
+        (&mut Visibility, &mut Node),
         (
             With<HudLookedBlockChestPreviewRow>,
             Without<HudLookedBlockCard>,
@@ -946,10 +1006,15 @@ fn reset_hud_chest_preview(
             Without<HudLookedBlockChestPreviewSlot>,
             Without<HudLookedBlockChestPreviewBadge>,
             Without<HudLookedBlockChestPreviewMore>,
+            Without<HudLookedBlockIcon>,
         ),
     >,
     slot_q: &mut Query<
-        (&HudLookedBlockChestPreviewSlot, &mut Visibility),
+        (
+            &HudLookedBlockChestPreviewSlot,
+            &mut Visibility,
+            &mut Node,
+        ),
         (
             Without<HudLookedBlockCard>,
             Without<HudLookedBlockProgress>,
@@ -957,11 +1022,20 @@ fn reset_hud_chest_preview(
             Without<HudLookedBlockChestPreviewRow>,
             Without<HudLookedBlockChestPreviewBadge>,
             Without<HudLookedBlockChestPreviewMore>,
+            Without<HudLookedBlockChestPreviewIcon>,
+            Without<HudLookedBlockIcon>,
         ),
     >,
     icon_q: &mut Query<
-        (&HudLookedBlockChestPreviewIcon, &mut ImageNode),
-        (With<HudLookedBlockChestPreviewIcon>, Without<HudLookedBlockIcon>),
+        (&HudLookedBlockChestPreviewIcon, &mut ImageNode, &mut Node),
+        (
+            With<HudLookedBlockChestPreviewIcon>,
+            Without<HudLookedBlockIcon>,
+            Without<HudLookedBlockChestPreviewSlot>,
+            Without<HudLookedBlockChestPreviewBadge>,
+            Without<HudLookedBlockChestPreviewMore>,
+            Without<HudLookedBlockChestPreviewRow>,
+        ),
     >,
     badge_q: &mut Query<
         (
@@ -982,7 +1056,7 @@ fn reset_hud_chest_preview(
         ),
     >,
     more_q: &mut Query<
-        &mut Visibility,
+        (&mut Visibility, &mut Node),
         (
             With<HudLookedBlockChestPreviewMore>,
             Without<HudLookedBlockCard>,
@@ -991,6 +1065,8 @@ fn reset_hud_chest_preview(
             Without<HudLookedBlockChestPreviewRow>,
             Without<HudLookedBlockChestPreviewSlot>,
             Without<HudLookedBlockChestPreviewBadge>,
+            Without<HudLookedBlockChestPreviewIcon>,
+            Without<HudLookedBlockIcon>,
         ),
     >,
 ) {
@@ -1000,16 +1076,23 @@ fn reset_hud_chest_preview(
         }
         *visibility = Visibility::Hidden;
     }
-    if let Ok(mut visibility) = row_q.single_mut() {
+    if let Ok((mut visibility, mut node)) = row_q.single_mut() {
+        node.display = Display::Flex;
+        node.grid_template_columns.clear();
+        node.grid_auto_rows.clear();
+        node.row_gap = Val::Px(0.0);
+        node.column_gap = Val::Px(6.0);
         *visibility = Visibility::Hidden;
     }
-    for (_, mut visibility) in slot_q.iter_mut() {
+    for (_, mut visibility, mut node) in slot_q.iter_mut() {
         *visibility = Visibility::Hidden;
+        node.display = Display::None;
     }
-    for (_, mut img) in icon_q.iter_mut() {
+    for (_, mut img, mut node) in icon_q.iter_mut() {
         if img.image != Handle::default() {
             img.image = Handle::default();
         }
+        node.display = Display::None;
     }
     for (_, mut paragraph, mut visibility) in badge_q.iter_mut() {
         if !paragraph.text.is_empty() {
@@ -1017,8 +1100,9 @@ fn reset_hud_chest_preview(
         }
         *visibility = Visibility::Hidden;
     }
-    if let Ok(mut visibility) = more_q.single_mut() {
+    if let Ok((mut visibility, mut node)) = more_q.single_mut() {
         *visibility = Visibility::Hidden;
+        node.display = Display::None;
     }
 }
 

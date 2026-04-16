@@ -1,5 +1,5 @@
 {
-  "animated": true,
+  "animated": false,
   "model_anchor": "center",
   "item_view": true,
   "model_offset": [0.0, -0.5, 0.0],

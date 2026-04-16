@@ -6,6 +6,7 @@ use bevy::ecs::{query::QueryFilter, system::SystemParam};
 enum InventoryUiSlotTarget {
     Player(usize),
     Chest(usize),
+    WorkbenchStorage(WorkbenchStorageSide, usize),
     HandCrafted(usize),
     WorkTable(usize),
     WorkbenchTool(usize),
@@ -365,6 +366,16 @@ fn handle_inventory_drag_and_drop(
             }
             Some(InventoryUiSlotTarget::Chest(slot_index)) => {
                 let _ = transfer_chest_slot_to_inventory(
+                    slot_index,
+                    &mut chest_inventory,
+                    &mut inventory,
+                    &drop_deps.item_registry,
+                );
+                return;
+            }
+            Some(InventoryUiSlotTarget::WorkbenchStorage(side, slot_index)) => {
+                let _ = transfer_workbench_storage_slot_to_inventory(
+                    side,
                     slot_index,
                     &mut chest_inventory,
                     &mut inventory,
@@ -1400,6 +1411,8 @@ fn sync_inventory_slot_hover_border(
             Some(InventoryUiSlotTarget::Player(slot_index))
         } else if let Some(slot_index) = parse_chest_slot_index(css_id.0.as_str()) {
             Some(InventoryUiSlotTarget::Chest(slot_index))
+        } else if let Some((side, slot_index)) = parse_workbench_storage_slot_index(css_id.0.as_str()) {
+            Some(InventoryUiSlotTarget::WorkbenchStorage(side, slot_index))
         } else if let Some(slot_index) = parse_workbench_craft_slot_index(css_id.0.as_str()) {
             Some(InventoryUiSlotTarget::WorkTable(slot_index))
         } else if let Some(slot_index) = parse_workbench_tool_slot_index(css_id.0.as_str()) {
@@ -1602,6 +1615,34 @@ fn transfer_chest_slot_to_inventory(
     true
 }
 
+fn transfer_workbench_storage_slot_to_inventory(
+    side: WorkbenchStorageSide,
+    slot_index: usize,
+    chest_inventory: &mut ChestInventoryUiState,
+    inventory: &mut PlayerInventory,
+    item_registry: &ItemRegistry,
+) -> bool {
+    if slot_index >= CHEST_INVENTORY_SLOTS {
+        return false;
+    }
+    let source_slot = chest_inventory.workbench_slots_ref(side)[slot_index];
+    if source_slot.is_empty() {
+        return false;
+    }
+
+    let leftover = inventory.add_item(source_slot.item_id, source_slot.count, item_registry);
+    if leftover == source_slot.count {
+        return false;
+    }
+    let side_slots = chest_inventory.workbench_slots_mut(side);
+    if leftover == 0 {
+        side_slots[slot_index] = InventorySlot::default();
+    } else {
+        side_slots[slot_index].count = leftover;
+    }
+    true
+}
+
 /// Runs the `take_all_from_target_to_cursor` routine for take all from target to cursor in the `graphic::components::inventory` module.
 fn take_all_from_target_to_cursor(
     slot_target: InventoryUiSlotTarget,
@@ -1622,6 +1663,12 @@ fn take_all_from_target_to_cursor(
         }
         InventoryUiSlotTarget::Chest(index) if index < CHEST_INVENTORY_SLOTS => {
             take_all_from_slot_to_cursor(&mut chest_inventory.slots[index], &mut cursor_item.slot)
+        }
+        InventoryUiSlotTarget::WorkbenchStorage(side, index) if index < CHEST_INVENTORY_SLOTS => {
+            take_all_from_slot_to_cursor(
+                &mut chest_inventory.workbench_slots_mut(side)[index],
+                &mut cursor_item.slot,
+            )
         }
         InventoryUiSlotTarget::HandCrafted(index) if index < HAND_CRAFTED_INPUT_SLOTS => {
             take_all_from_slot_to_cursor(&mut hand_crafted.input_slots[index], &mut cursor_item.slot)
@@ -1658,6 +1705,13 @@ fn take_half_from_target_to_cursor(
         InventoryUiSlotTarget::Chest(index) if index < CHEST_INVENTORY_SLOTS => {
             take_half_from_slot_to_cursor(
                 &mut chest_inventory.slots[index],
+                &mut cursor_item.slot,
+                item_registry,
+            )
+        }
+        InventoryUiSlotTarget::WorkbenchStorage(side, index) if index < CHEST_INVENTORY_SLOTS => {
+            take_half_from_slot_to_cursor(
+                &mut chest_inventory.workbench_slots_mut(side)[index],
                 &mut cursor_item.slot,
                 item_registry,
             )
@@ -1711,6 +1765,13 @@ fn place_one_from_cursor_on_target(
                 item_registry,
             )
         }
+        InventoryUiSlotTarget::WorkbenchStorage(side, index) if index < CHEST_INVENTORY_SLOTS => {
+            place_one_from_cursor(
+                &mut chest_inventory.workbench_slots_mut(side)[index],
+                &mut cursor_item.slot,
+                item_registry,
+            )
+        }
         InventoryUiSlotTarget::HandCrafted(index) if index < HAND_CRAFTED_INPUT_SLOTS => {
             place_one_from_cursor(
                 &mut hand_crafted.input_slots[index],
@@ -1756,6 +1817,13 @@ fn place_all_from_cursor_on_target(
         InventoryUiSlotTarget::Chest(index) if index < CHEST_INVENTORY_SLOTS => {
             place_all_from_cursor(
                 &mut chest_inventory.slots[index],
+                &mut cursor_item.slot,
+                item_registry,
+            )
+        }
+        InventoryUiSlotTarget::WorkbenchStorage(side, index) if index < CHEST_INVENTORY_SLOTS => {
+            place_all_from_cursor(
+                &mut chest_inventory.workbench_slots_mut(side)[index],
                 &mut cursor_item.slot,
                 item_registry,
             )

@@ -5,6 +5,7 @@ move_left = "A"
 move_right = "D"
 jump = "Space"
 sprint = "ShiftLeft"
+movement_sneak = "ShiftLeft"
 
 # Interaction
 interact = "E"
@@ -25,6 +26,8 @@ hotbar_slot_3 = "3"
 hotbar_slot_4 = "4"
 hotbar_slot_5 = "5"
 hotbar_slot_6 = "6"
+hotbar_slot_7 = "7"
+hotbar_slot_8 = "8"
 
 # Debug
 debug_overlay = "F3"

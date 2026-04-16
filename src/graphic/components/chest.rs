@@ -27,14 +27,46 @@ fn handle_open_chest_inventory_menu_request(
 fn handle_chest_inventory_contents_sync(
     mut sync_messages: MessageReader<ChestInventoryContentsSync>,
     chest_menu: Res<ChestInventoryMenuState>,
+    workbench_menu: Res<WorkbenchRecipeMenuState>,
     item_registry: Res<ItemRegistry>,
     mut chest_inventory: ResMut<ChestInventoryUiState>,
 ) {
+    let active_chest_world_pos = if chest_menu.open {
+        chest_menu.world_pos
+    } else {
+        None
+    };
+    let active_workbench_storage_world_pos = if workbench_menu.open {
+        Some((
+            workbench_menu.storage_left_world_pos,
+            workbench_menu.storage_right_world_pos,
+        ))
+    } else {
+        None
+    };
     for sync in sync_messages.read() {
-        if chest_menu.world_pos != Some(sync.world_pos) {
+        let applies_to_chest = active_chest_world_pos == Some(sync.world_pos);
+        if applies_to_chest {
+            apply_chest_slots_from_sync(&mut chest_inventory.slots, sync, &item_registry);
             continue;
         }
-        apply_chest_slots_from_sync(&mut chest_inventory, sync, &item_registry);
+        if let Some((left_world_pos, right_world_pos)) = active_workbench_storage_world_pos {
+            if left_world_pos == Some(sync.world_pos) {
+                apply_chest_slots_from_sync(
+                    chest_inventory.workbench_slots_mut(WorkbenchStorageSide::Left),
+                    sync,
+                    &item_registry,
+                );
+                continue;
+            }
+            if right_world_pos == Some(sync.world_pos) {
+                apply_chest_slots_from_sync(
+                    chest_inventory.workbench_slots_mut(WorkbenchStorageSide::Right),
+                    sync,
+                    &item_registry,
+                );
+            }
+        }
     }
 }
 
@@ -69,7 +101,7 @@ fn handle_chest_inventory_menu_input(
     if let Some(world_pos) = chest_menu.world_pos {
         persist_requests.write(ChestInventoryPersistRequest {
             world_pos,
-            slots: serialize_chest_slots_for_persist(&chest_inventory, &item_registry),
+            slots: serialize_chest_slots_for_persist(&chest_inventory.slots, &item_registry),
         });
         closed.write(ChestInventoryUiClosed { world_pos });
     }
@@ -368,7 +400,7 @@ fn close_chest_inventory_menu_ui(
             flush_cursor_item_to_inventory(&mut cursor_item, &mut inventory, item_registry);
             persist_requests.write(ChestInventoryPersistRequest {
                 world_pos,
-                slots: serialize_chest_slots_for_persist(&chest_inventory, item_registry),
+                slots: serialize_chest_slots_for_persist(&chest_inventory.slots, item_registry),
             });
         }
         closed.write(ChestInventoryUiClosed { world_pos });
@@ -384,11 +416,11 @@ fn close_chest_inventory_menu_ui(
 }
 
 fn serialize_chest_slots_for_persist(
-    chest_inventory: &ChestInventoryUiState,
+    slots: &[InventorySlot; CHEST_INVENTORY_SLOTS],
     item_registry: &ItemRegistry,
 ) -> Vec<ChestInventorySlotPayload> {
     let mut payload = Vec::new();
-    for (slot_index, slot) in chest_inventory.slots.iter().copied().enumerate() {
+    for (slot_index, slot) in slots.iter().copied().enumerate() {
         if slot.is_empty() || slot.count == 0 {
             continue;
         }
@@ -405,11 +437,11 @@ fn serialize_chest_slots_for_persist(
 }
 
 fn apply_chest_slots_from_sync(
-    chest_inventory: &mut ChestInventoryUiState,
+    slots: &mut [InventorySlot; CHEST_INVENTORY_SLOTS],
     sync: &ChestInventoryContentsSync,
     item_registry: &ItemRegistry,
 ) {
-    chest_inventory.slots = [InventorySlot::default(); CHEST_INVENTORY_SLOTS];
+    *slots = [InventorySlot::default(); CHEST_INVENTORY_SLOTS];
     for slot_payload in &sync.slots {
         let slot_index = slot_payload.slot as usize;
         if slot_index >= CHEST_INVENTORY_SLOTS || slot_payload.count == 0 {
@@ -422,7 +454,7 @@ fn apply_chest_slots_from_sync(
         let Some(item_id) = item_registry.id_opt(item_name) else {
             continue;
         };
-        chest_inventory.slots[slot_index] = InventorySlot {
+        slots[slot_index] = InventorySlot {
             item_id,
             count: slot_payload.count.max(1),
         };
