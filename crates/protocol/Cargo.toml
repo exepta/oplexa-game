@@ -1,0 +1,14 @@
+[package]
+name = "oplexa-protocol"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_log", "multi_threaded"] }
+lightyear = { workspace = true, features = ["websocket", "netcode"] }
+oplexa-core = { path = "../core" }
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = { workspace = true, features = ["parse", "display"] }

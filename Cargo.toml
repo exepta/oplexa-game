@@ -1,21 +1,47 @@
-[package]
-name = "oplexa-game"
+[workspace]
+members = [
+    "apps/client",
+    "apps/server",
+    "crates/api",
+    "crates/core",
+    "crates/game_client",
+    "crates/game_server",
+    "crates/protocol",
+    "crates/shared",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 authors = ["Daniel Ramke <genshin.exepta@outlook.com>"]
 
-[workspace]
-members = ["api", "server"]
-
-[[bin]]
-name = "oplexa-game"
-path = "src/main.rs"
-
-[features]
-default = []
-vram_nvml  = ["api/vram_nvml"]
-vram_dxgi  = ["api/vram_dxgi"]
-vram_metal = ["api/vram_metal"]
+[workspace.dependencies]
+bevy = { version = "0.18.1", default-features = false }
+bevy-inspector-egui = "0.36.0"
+bevy_rapier3d = { version = "0.33.0", default-features = false }
+bevy_extended_ui = "1.5.0"
+chrono = "0.4.42"
+ctrlc = "3.4.5"
+dotenvy = "0.15.7"
+fastnoise-lite = "1.1.1"
+fluent-bundle = "0.16.0"
+futures-lite = "2.6.1"
+image = { version = "0.25.8", default-features = false }
+lightyear = { version = "=0.26.4", default-features = false }
+log = "0.4.28"
+lz4_flex = "0.13.0"
+metal = "0.33.0"
+nvml-wrapper = "0.12.0"
+rand = "0.10.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sysinfo = "0.38.4"
+toml = "1.1.0"
+tracing-subscriber = "0.3.20"
+unic-langid = "0.9.6"
+windows = { version = "0.62.0", default-features = false }
+wincode = "0.5.0"
 
 [profile.release]
 panic = "unwind"
@@ -31,106 +57,3 @@ incremental = false
 [profile.dev.package."*"]
 opt-level = 3
 debug = true
-
-[dependencies.bevy]
-version = "0.18.1"
-default-features = false
-features = [
-    "bevy_asset",
-    "bevy_state",
-    "bevy_core_pipeline",
-    "bevy_gizmos",
-    "bevy_gizmos_render",
-    "bevy_log",
-    "bevy_render",
-    "bevy_window",
-    "png",
-    "bevy_text",
-    "bevy_winit",
-    "default_font",
-    "multi_threaded",
-    "x11",
-    "wayland",
-    "bevy_scene",
-    "bevy_gltf",
-    "bevy_pbr",
-    "bevy_animation",
-    "reflect_auto_register",
-    "tonemapping_luts",
-    "bevy_color",
-    "bevy_ui",
-    "jpeg",
-    "zstd_rust"
-]
-
-[dependencies.bevy-inspector-egui]
-version = "0.36.0"
-
-[dependencies.bevy_rapier3d]
-version = "0.33.0"
-default-features = false
-features = ["dim3", "async-collider"]
-
-[dependencies.bevy_extended_ui]
-version = "1.5.0"
-
-[dependencies.tracing-subscriber]
-version = "0.3.20"
-
-[dependencies.chrono]
-version = "0.4.42"
-features = ["clock"]
-
-[dependencies.dotenvy]
-version = "0.15.7"
-
-[dependencies.ctrlc]
-version = "3.4.5"
-
-[dependencies.sysinfo]
-version = "0.38.4"
-
-[dependencies.serde]
-version = "1.0.228"
-features = ["derive"]
-
-[dependencies.serde_json]
-version = "1.0.149"
-
-[dependencies.rand]
-version = "0.10.0"
-
-[dependencies.toml]
-version = "1.1.0"
-features = [
-    "parse",
-    "display"
-]
-
-[dependencies.fluent-bundle]
-version = "0.16.0"
-
-[dependencies.unic-langid]
-version = "0.9.6"
-
-[dependencies.fastnoise-lite]
-version = "1.1.1"
-
-[dependencies.lz4_flex]
-version = "0.13.0"
-
-[dependencies.futures-lite]
-version = "2.6.1"
-
-[dependencies.wincode]
-version = "0.5.0"
-
-[dependencies]
-api = { path = "api" }
-lightyear = { version = "0.26.4", features = ["websocket", "netcode"] }
-
-[target.'cfg(windows)'.dependencies]
-api = { path = "api", features = ["vram_dxgi"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-api = { path = "api", features = ["vram_metal"] }

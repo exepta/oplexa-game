@@ -1,0 +1,27 @@
+[package]
+name = "oplexa-shared"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+vram_nvml = ["dep:nvml-wrapper"]
+vram_dxgi = ["dep:windows"]
+vram_metal = ["dep:metal"]
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_state", "multi_threaded"] }
+serde.workspace = true
+sysinfo.workspace = true
+toml = { workspace = true, features = ["parse", "display"] }
+nvml-wrapper = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, optional = true, features = [
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = { workspace = true, optional = true }

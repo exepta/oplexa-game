@@ -277,22 +277,10 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 name = "api"
 version = "0.1.0"
 dependencies = [
- "bevy",
- "bevy_rapier3d",
- "fastnoise-lite",
- "futures-lite",
- "image",
- "lightyear",
- "lz4_flex",
- "metal 0.33.0",
- "nvml-wrapper",
- "rand 0.10.0",
+ "oplexa-core",
+ "oplexa-protocol",
+ "oplexa-shared",
  "serde",
- "serde_json",
- "sysinfo",
- "toml",
- "wincode",
- "windows 0.62.2",
 ]
 
 [[package]]
@@ -5082,6 +5070,7 @@ dependencies = [
  "lightyear_avian3d",
  "lightyear_connection",
  "lightyear_core",
+ "lightyear_crossbeam",
  "lightyear_frame_interpolation",
  "lightyear_inputs",
  "lightyear_inputs_bei",
@@ -5206,6 +5195,22 @@ dependencies = [
  "lightyear_serde",
  "lightyear_utils",
  "serde",
+ "tracing",
+]
+
+[[package]]
+name = "lightyear_crossbeam"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9b353e8b692034c99e6f9a89cc3c95ec4f7d123b32622228ccf680b849855fd"
+dependencies = [
+ "aeronet_io",
+ "bevy_app",
+ "bevy_ecs",
+ "bytes",
+ "crossbeam-channel",
+ "lightyear_core",
+ "lightyear_link",
  "tracing",
 ]
 
@@ -6618,7 +6623,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
-name = "oplexa-game"
+name = "oplexa-client-app"
+version = "0.1.0"
+dependencies = [
+ "oplexa-game-client",
+]
+
+[[package]]
+name = "oplexa-core"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "image",
+ "lz4_flex",
+ "rand 0.10.0",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "oplexa-game-client"
 version = "0.1.0"
 dependencies = [
  "api",
@@ -6634,6 +6659,10 @@ dependencies = [
  "futures-lite",
  "lightyear",
  "lz4_flex",
+ "oplexa-core",
+ "oplexa-game-server",
+ "oplexa-protocol",
+ "oplexa-shared",
  "rand 0.10.0",
  "serde",
  "serde_json",
@@ -6650,12 +6679,52 @@ version = "0.1.0"
 dependencies = [
  "api",
  "bevy",
+ "bevy_rapier3d",
+ "fastnoise-lite",
  "futures-lite",
  "lightyear",
  "log",
+ "lz4_flex",
+ "oplexa-core",
+ "oplexa-protocol",
+ "oplexa-shared",
  "serde",
  "serde_json",
  "sysinfo",
+ "wincode",
+]
+
+[[package]]
+name = "oplexa-protocol"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lightyear",
+ "oplexa-core",
+ "rand 0.10.0",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "oplexa-server-app"
+version = "0.1.0"
+dependencies = [
+ "oplexa-game-server",
+]
+
+[[package]]
+name = "oplexa-shared"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "metal 0.33.0",
+ "nvml-wrapper",
+ "serde",
+ "sysinfo",
+ "toml",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -7311,7 +7380,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.3",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

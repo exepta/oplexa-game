@@ -1,0 +1,11 @@
+[package]
+name = "api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+oplexa-core = { path = "../core" }
+oplexa-protocol = { path = "../protocol" }
+oplexa-shared = { path = "../shared" }
+serde.workspace = true

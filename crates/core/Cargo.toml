@@ -1,0 +1,37 @@
+[package]
+name = "oplexa-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+bevy = { workspace = true, features = [
+    "bevy_animation",
+    "bevy_asset",
+    "bevy_color",
+    "bevy_core_pipeline",
+    "bevy_gizmos",
+    "bevy_gizmos_render",
+    "bevy_gltf",
+    "bevy_log",
+    "bevy_pbr",
+    "bevy_render",
+    "bevy_scene",
+    "bevy_state",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_window",
+    "default_font",
+    "jpeg",
+    "multi_threaded",
+    "png",
+    "reflect_auto_register",
+    "tonemapping_luts",
+    "zstd_rust",
+] }
+image = { workspace = true, features = ["png"] }
+lz4_flex.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = { workspace = true, features = ["parse", "display"] }

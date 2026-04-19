@@ -1,0 +1,8 @@
+[package]
+name = "oplexa-server-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+oplexa-game-server = { path = "../../crates/game_server" }

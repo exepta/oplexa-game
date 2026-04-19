@@ -1,0 +1,34 @@
+[package]
+name = "oplexa-game-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+integrated = ["lightyear/crossbeam"]
+
+[dependencies]
+api = { path = "../api" }
+bevy = { workspace = true, features = ["bevy_log", "multi_threaded"] }
+bevy_rapier3d = { workspace = true, features = ["dim3"] }
+fastnoise-lite.workspace = true
+futures-lite.workspace = true
+lightyear = { workspace = true, features = [
+    "interpolation",
+    "netcode",
+    "prediction",
+    "replication",
+    "server",
+    "std",
+    "websocket",
+] }
+log.workspace = true
+lz4_flex.workspace = true
+oplexa-core = { path = "../core" }
+oplexa-protocol = { path = "../protocol" }
+oplexa-shared = { path = "../shared" }
+serde.workspace = true
+serde_json.workspace = true
+sysinfo.workspace = true
+wincode.workspace = true

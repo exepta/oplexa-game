@@ -1,0 +1,73 @@
+[package]
+name = "oplexa-game-client"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[features]
+default = ["integrated"]
+integrated = [
+    "lightyear/crossbeam",
+    "oplexa-game-server/integrated",
+]
+
+[dependencies]
+api = { path = "../api" }
+bevy = { workspace = true, features = [
+    "bevy_animation",
+    "bevy_asset",
+    "bevy_color",
+    "bevy_core_pipeline",
+    "bevy_gizmos",
+    "bevy_gizmos_render",
+    "bevy_gltf",
+    "bevy_log",
+    "bevy_pbr",
+    "bevy_render",
+    "bevy_scene",
+    "bevy_state",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_window",
+    "bevy_winit",
+    "default_font",
+    "jpeg",
+    "multi_threaded",
+    "png",
+    "reflect_auto_register",
+    "tonemapping_luts",
+    "wayland",
+    "x11",
+    "zstd_rust",
+] }
+bevy-inspector-egui.workspace = true
+bevy_rapier3d = { workspace = true, features = ["dim3", "async-collider"] }
+bevy_extended_ui.workspace = true
+chrono = { workspace = true, features = ["clock"] }
+ctrlc.workspace = true
+dotenvy.workspace = true
+fastnoise-lite.workspace = true
+fluent-bundle.workspace = true
+futures-lite.workspace = true
+lightyear = { workspace = true, features = [
+    "client",
+    "interpolation",
+    "netcode",
+    "prediction",
+    "replication",
+    "std",
+    "websocket",
+] }
+lz4_flex.workspace = true
+oplexa-core = { path = "../core" }
+oplexa-game-server = { path = "../game_server" }
+oplexa-protocol = { path = "../protocol" }
+oplexa-shared = { path = "../shared" }
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sysinfo.workspace = true
+toml = { workspace = true, features = ["parse", "display"] }
+tracing-subscriber.workspace = true
+unic-langid.workspace = true
+wincode.workspace = true
