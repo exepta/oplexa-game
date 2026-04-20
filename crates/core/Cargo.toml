@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
+oplexa-shared = { path = "../shared" }
 bevy = { workspace = true, features = [
     "bevy_animation",
     "bevy_asset",

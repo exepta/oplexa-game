@@ -89,7 +89,7 @@ fn handle_multiplayer_back_navigation(
     mut disconnect_writer: MessageWriter<DisconnectFromServerRequest>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    let close_key = convert(global_config.input.ui_close_back.as_str()).unwrap_or(KeyCode::Escape);
+    let close_key = convert_input(global_config.input.ui_close_back.as_str()).unwrap_or(KeyCode::Escape);
     if !keyboard.just_pressed(close_key) {
         return;
     }

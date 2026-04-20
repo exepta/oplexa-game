@@ -1,24 +1,26 @@
 use crate::core::config::GlobalConfig;
-use crate::core::entities::player::PlayerCamera;
 use crate::core::entities::player::block_selection::{SelectionState, StructureHit};
 use crate::core::entities::player::inventory::{InventorySlot, PlayerInventory};
+use crate::core::entities::player::PlayerCamera;
 use crate::core::entities::player::{FpsController, GameMode, GameModeState, Player};
 use crate::core::inventory::items::ItemRegistry;
 use crate::core::inventory::recipe::{
-    ActiveStructurePlacementState, ActiveStructureRecipeState, BuildingModelAnchor,
-    BuildingStructureRecipe, BuildingStructureRecipeRegistry,
+    ActiveStructurePlacementState, ActiveStructureRecipeState, BuildingStructureRecipe,
+    BuildingStructureRecipeRegistry,
 };
 use crate::core::states::states::{AppState, InGameStates};
-use crate::core::ui::{HOTBAR_SLOTS, HotbarSelectionState, UiInteractionState};
+use crate::core::ui::{HotbarSelectionState, UiInteractionState, HOTBAR_SLOTS};
 use crate::core::world::block::{
-    BlockId, BlockRegistry, Face, SelectedBlock, VOXEL_SIZE, get_block_world,
-    get_stacked_block_world,
+    get_block_world, get_stacked_block_world, BlockId, BlockRegistry, Face, SelectedBlock,
+    VOXEL_SIZE,
 };
 use crate::core::world::chunk::{ChunkMap, VoxelStage};
-use crate::core::world::chunk_dimension::{CX, CY, CZ, Y_MIN, world_to_chunk_xz};
+use crate::core::world::chunk_dimension::{world_to_chunk_xz, CX, CY, CZ, Y_MIN};
 use crate::core::world::ray_cast_voxels;
 use crate::logic::events::block_event_handler::{
-    PlacedStructureMetadata, resolve_placement_for_selected,
+    normalize_rotation_quarters, normalize_rotation_steps, resolve_placement_for_selected,
+    rotated_structure_offset, rotation_steps_to_placement_quarters, structure_model_translation,
+    PlacedStructureMetadata,
 };
 use bevy::camera::visibility::RenderLayers;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -1022,83 +1024,6 @@ fn structure_preview_model_transform(
         translation,
         rotation,
         scale: Vec3::ONE,
-    }
-}
-
-fn structure_model_translation(
-    recipe: &BuildingStructureRecipe,
-    place_origin: IVec3,
-    placement_rotation_quarters: u8,
-    model_rotation_quarters: u8,
-) -> Vec3 {
-    match recipe.model_meta.model_anchor {
-        BuildingModelAnchor::Center => {
-            let recipe_space =
-                rotated_structure_space(recipe.space, placement_rotation_quarters).as_vec3();
-            Vec3::new(
-                (place_origin.x as f32 + recipe_space.x * 0.5) * VOXEL_SIZE,
-                (place_origin.y as f32 + recipe_space.y * 0.5) * VOXEL_SIZE,
-                (place_origin.z as f32 + recipe_space.z * 0.5) * VOXEL_SIZE,
-            )
-        }
-        BuildingModelAnchor::MinCorner => {
-            let offset = rotated_model_corner_offset(recipe.space, model_rotation_quarters);
-            Vec3::new(
-                (place_origin.x as f32 + offset.x) * VOXEL_SIZE,
-                (place_origin.y as f32) * VOXEL_SIZE,
-                (place_origin.z as f32 + offset.z) * VOXEL_SIZE,
-            )
-        }
-    }
-}
-
-#[inline]
-fn rotated_model_corner_offset(space: UVec3, rotation_quarters: u8) -> Vec3 {
-    match rotation_quarters % 4 {
-        0 => Vec3::ZERO,
-        1 => Vec3::new(space.z as f32, 0.0, 0.0),
-        2 => Vec3::new(space.x as f32, 0.0, space.z as f32),
-        _ => Vec3::new(0.0, 0.0, space.x as f32),
-    }
-}
-
-#[inline]
-fn normalize_rotation_quarters(raw: i32) -> u8 {
-    raw.rem_euclid(4) as u8
-}
-
-#[inline]
-fn normalize_rotation_steps(raw: i32) -> u8 {
-    raw.rem_euclid(8) as u8
-}
-
-#[inline]
-fn rotation_steps_to_placement_quarters(rotation_steps: u8) -> u8 {
-    normalize_rotation_quarters((rotation_steps as i32) / 2)
-}
-
-#[inline]
-fn rotated_structure_space(space: UVec3, rotation_quarters: u8) -> UVec3 {
-    if rotation_quarters % 2 == 0 {
-        space
-    } else {
-        UVec3::new(space.z, space.y, space.x)
-    }
-}
-
-#[inline]
-fn rotated_structure_offset(
-    local_x: i32,
-    local_z: i32,
-    size_x: i32,
-    size_z: i32,
-    rotation_quarters: u8,
-) -> (i32, i32) {
-    match rotation_quarters % 4 {
-        0 => (local_x, local_z),
-        1 => (local_z, size_x - 1 - local_x),
-        2 => (size_x - 1 - local_x, size_z - 1 - local_z),
-        _ => (size_z - 1 - local_z, local_x),
     }
 }
 

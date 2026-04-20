@@ -1,5 +1,5 @@
 /// Structure transform and rotation utility helpers.
-fn structure_model_translation(
+pub(crate) fn structure_model_translation(
     recipe: &BuildingStructureRecipe,
     place_origin: IVec3,
     placement_rotation_quarters: u8,
@@ -28,7 +28,7 @@ fn structure_model_translation(
 }
 
 #[inline]
-fn rotated_model_corner_offset(space: UVec3, rotation_quarters: u8) -> Vec3 {
+pub(crate) fn rotated_model_corner_offset(space: UVec3, rotation_quarters: u8) -> Vec3 {
     match rotation_quarters % 4 {
         0 => Vec3::ZERO,
         1 => Vec3::new(space.z as f32, 0.0, 0.0),
@@ -38,23 +38,23 @@ fn rotated_model_corner_offset(space: UVec3, rotation_quarters: u8) -> Vec3 {
 }
 
 #[inline]
-fn normalize_rotation_quarters(raw: i32) -> u8 {
+pub(crate) fn normalize_rotation_quarters(raw: i32) -> u8 {
     raw.rem_euclid(4) as u8
 }
 
 #[inline]
-fn normalize_rotation_steps(raw: i32) -> u8 {
+pub(crate) fn normalize_rotation_steps(raw: i32) -> u8 {
     raw.rem_euclid(8) as u8
 }
 
 #[inline]
-fn rotation_steps_to_placement_quarters(rotation_steps: u8) -> u8 {
+pub(crate) fn rotation_steps_to_placement_quarters(rotation_steps: u8) -> u8 {
     normalize_rotation_quarters((rotation_steps as i32) / 2)
 }
 
 #[inline]
-fn rotated_structure_space(space: UVec3, rotation_quarters: u8) -> UVec3 {
-    if rotation_quarters % 2 == 0 {
+pub(crate) fn rotated_structure_space(space: UVec3, rotation_quarters: u8) -> UVec3 {
+    if rotation_quarters.is_multiple_of(2) {
         space
     } else {
         UVec3::new(space.z, space.y, space.x)
@@ -62,7 +62,7 @@ fn rotated_structure_space(space: UVec3, rotation_quarters: u8) -> UVec3 {
 }
 
 #[inline]
-fn rotated_structure_offset(
+pub(crate) fn rotated_structure_offset(
     local_x: i32,
     local_z: i32,
     size_x: i32,

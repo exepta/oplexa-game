@@ -119,7 +119,7 @@ fn select_hotbar_with_number_keys(
             6 => KeyCode::Digit7,
             _ => KeyCode::Digit8,
         };
-        let key = convert(key_name).unwrap_or(fallback);
+        let key = convert_input(key_name).unwrap_or(fallback);
 
         if keyboard.just_pressed(key) {
             hotbar_state.selected_index = slot_index;
@@ -153,7 +153,7 @@ fn drop_selected_hotbar_item(
         return;
     }
 
-    let drop_key = convert(global_config.input.drop_item.as_str()).unwrap_or(KeyCode::KeyQ);
+    let drop_key = convert_input(global_config.input.drop_item.as_str()).unwrap_or(KeyCode::KeyQ);
     if !keyboard.just_pressed(drop_key) {
         return;
     }
@@ -787,7 +787,7 @@ fn sync_hud_looked_block_card(
             build_chest_hud_preview(world_pos, chest_snapshot_cache.as_ref(), &item_registry)
         })
         .unwrap_or_default();
-    let sneak_key = convert(global_config.input.movement_sneak.as_str()).unwrap_or(KeyCode::ShiftLeft);
+    let sneak_key = convert_input(global_config.input.movement_sneak.as_str()).unwrap_or(KeyCode::ShiftLeft);
     let show_expanded = keyboard.pressed(sneak_key);
     let compact_items: Vec<InventorySlot> = preview
         .slots

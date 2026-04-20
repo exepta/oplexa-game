@@ -93,9 +93,9 @@ fn toggle_player_inventory_ui(
     item_registry: Option<Res<ItemRegistry>>,
 ) {
     let open_key =
-        convert(global_config.input.ui_inventory.as_str()).expect("Invalid inventory key");
+        convert_input(global_config.input.ui_inventory.as_str()).expect("Invalid inventory key");
     let close_key =
-        convert(global_config.input.ui_close_back.as_str()).expect("Invalid close/back key");
+        convert_input(global_config.input.ui_close_back.as_str()).expect("Invalid close/back key");
 
     if inventory_ui.open && keyboard.just_pressed(close_key) {
         if recipe_preview.open {
@@ -297,7 +297,7 @@ fn handle_inventory_drag_and_drop(
         }
     }
 
-    let recipe_open_key = convert(global_config.input.inventory_recipe_open.as_str())
+    let recipe_open_key = convert_input(global_config.input.inventory_recipe_open.as_str())
         .unwrap_or(KeyCode::KeyR);
     if keyboard.just_pressed(recipe_open_key) {
         let Some(recipe_registry) = recipe_registry.as_ref() else {
@@ -571,7 +571,7 @@ fn handle_inventory_drag_and_drop(
         return;
     }
 
-    let drop_key = convert(global_config.input.drop_item.as_str()).unwrap_or(KeyCode::KeyQ);
+    let drop_key = convert_input(global_config.input.drop_item.as_str()).unwrap_or(KeyCode::KeyQ);
 
     if keyboard.just_pressed(drop_key) {
         let Some(InventoryUiSlotTarget::Player(slot_index)) = hovered_slot else {

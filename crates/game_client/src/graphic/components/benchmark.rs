@@ -219,7 +219,7 @@ fn toggle_benchmark(
         return;
     }
 
-    let benchmark_key = convert(global_config.input.benchmark.as_str()).unwrap_or(KeyCode::KeyB);
+    let benchmark_key = convert_input(global_config.input.benchmark.as_str()).unwrap_or(KeyCode::KeyB);
     if !keyboard.just_pressed(benchmark_key) {
         return;
     }

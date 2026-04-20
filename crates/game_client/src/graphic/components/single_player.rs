@@ -174,7 +174,7 @@ fn handle_single_player_back_navigation(
     mut ui_state: ResMut<SinglePlayerUiState>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    let close_key = convert(global_config.input.ui_close_back.as_str()).unwrap_or(KeyCode::Escape);
+    let close_key = convert_input(global_config.input.ui_close_back.as_str()).unwrap_or(KeyCode::Escape);
     if !keyboard.just_pressed(close_key) {
         return;
     }

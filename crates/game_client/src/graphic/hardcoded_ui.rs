@@ -54,7 +54,7 @@ use crate::generator::chunk::chunk_runtime::{
     ChunkStageTelemetry, ColliderBacklog, PendingColliderBuild,
 };
 use crate::generator::chunk::chunk_runtime_types::{MeshBacklog, PendingGen, PendingMesh};
-use crate::utils::key_utils::convert;
+use crate::utils::key_utils::convert_input;
 use api::core::network::config::NetworkSettings;
 use api::core::network::discovery::{LanDiscoveryClient, LanServerInfo};
 use crate::utils::v_ram_utils;
@@ -1176,7 +1176,7 @@ impl Plugin for HardcodedUiPlugin {
             )
             .add_systems(
                 OnEnter(AppState::InGame(InGameStates::Game)),
-                hide_world_gen_ui,
+                (finalize_world_gen_progress, hide_world_gen_ui).chain(),
             )
             .add_systems(
                 OnEnter(AppState::InGame(InGameStates::Game)),

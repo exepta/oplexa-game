@@ -7,9 +7,9 @@ fn toggle_pause_menu(
     mut root: Query<&mut Visibility, With<PauseMenuRoot>>,
     mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
-    let menu_key = convert(global_config.input.ui_menu.as_str()).unwrap_or(KeyCode::Enter);
+    let menu_key = convert_input(global_config.input.ui_menu.as_str()).unwrap_or(KeyCode::Enter);
     let close_key =
-        convert(global_config.input.ui_close_back.as_str()).expect("Invalid close/back key");
+        convert_input(global_config.input.ui_close_back.as_str()).expect("Invalid close/back key");
     let toggle_requested = keyboard.just_pressed(menu_key);
     let close_requested = pause_menu.open && keyboard.just_pressed(close_key);
     if !toggle_requested && !close_requested {

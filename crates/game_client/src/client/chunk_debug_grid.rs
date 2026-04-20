@@ -5,7 +5,7 @@ use crate::core::world::block::VOXEL_SIZE;
 use crate::core::world::chunk_dimension::{
     CX, CZ, SEC_COUNT, SEC_H, Y_MAX, Y_MIN, world_to_chunk_xz,
 };
-use crate::utils::key_utils::convert;
+use crate::utils::key_utils::convert_input;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::math::primitives::Cuboid;
 use bevy::mesh::Mesh3d;
@@ -35,7 +35,7 @@ pub(super) fn toggle_chunk_grid(
     cam_query: Query<&GlobalTransform, With<PlayerCamera>>,
     player_query: Query<&Transform, With<Player>>,
 ) {
-    let key = convert(game_config.input.chunk_grid.as_str()).unwrap_or(KeyCode::F9);
+    let key = convert_input(game_config.input.chunk_grid.as_str()).unwrap_or(KeyCode::F9);
 
     if keyboard.just_pressed(key) {
         debug_grid.mode = match debug_grid.mode {

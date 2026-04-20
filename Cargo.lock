@@ -6636,6 +6636,7 @@ dependencies = [
  "bevy",
  "image",
  "lz4_flex",
+ "oplexa-shared",
  "rand 0.10.0",
  "serde",
  "serde_json",

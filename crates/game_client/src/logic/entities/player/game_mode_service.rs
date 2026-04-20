@@ -1,7 +1,7 @@
 use crate::core::config::GlobalConfig;
 use crate::core::entities::player::{FlightState, GameMode, GameModeState};
 use crate::core::states::states::{AppState, InGameStates};
-use crate::utils::key_utils::convert;
+use crate::utils::key_utils::convert_input;
 use bevy::prelude::*;
 
 /// Represents change game mode handler used by the `logic::entities::player::game_mode_service` module.
@@ -24,7 +24,7 @@ fn change_mode(
     game_config: Res<GlobalConfig>,
     mut fly_state: Query<&mut FlightState>,
 ) {
-    let key = convert(game_config.input.toggle_game_mode.as_str()).expect("Invalid key");
+    let key = convert_input(game_config.input.toggle_game_mode.as_str()).expect("Invalid key");
     if keys.just_pressed(key) {
         game_mode.0 = match game_mode.0 {
             GameMode::Survival => GameMode::Creative,

@@ -1,5 +1,6 @@
 use fluent_bundle::{FluentResource, concurrent::FluentBundle};
 use unic_langid::LanguageIdentifier;
+use oplexa_shared::utils::key_utils::last_was_separator;
 
 const LANG_DEFAULTS_PATH: &str = "assets/lang/defaults.toml";
 const LANG_ROOT: &str = "assets/lang";
@@ -104,7 +105,7 @@ fn localize_block_name(
 
 fn localize_block_name_for_id(
     language: &ClientLanguageState,
-    block_registry: &crate::core::world::block::BlockRegistry,
+    block_registry: &BlockRegistry,
     block_id: crate::core::world::block::BlockId,
 ) -> String {
     let block = block_registry.def(block_id);
@@ -139,16 +140,7 @@ fn name_key_from_identity(value: &str) -> String {
 fn to_name_key(value: &str) -> String {
     let mut key = String::with_capacity(value.len() + 4);
     key.push_str("KEY_");
-    let mut last_was_separator = false;
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() {
-            key.push(ch.to_ascii_uppercase());
-            last_was_separator = false;
-        } else if !last_was_separator {
-            key.push('_');
-            last_was_separator = true;
-        }
-    }
+    last_was_separator(value, &mut key);
     while key.ends_with('_') {
         key.pop();
     }

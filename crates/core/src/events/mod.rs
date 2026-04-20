@@ -8,8 +8,7 @@ use crate::core::events::ui_events::{
     ChatSubmitRequest, ChestInventoryContentsSync, ChestInventoryPersistRequest,
     ChestInventorySnapshotRequest, ChestInventoryUiClosed, ChestInventoryUiOpened,
     ConnectToServerRequest, DisconnectFromServerRequest, DropItemRequest,
-    OpenChestInventoryMenuRequest,
-    OpenStructureBuildMenuRequest, OpenWorkbenchMenuRequest,
+    OpenChestInventoryMenuRequest, OpenStructureBuildMenuRequest, OpenWorkbenchMenuRequest,
 };
 use bevy::prelude::*;
 

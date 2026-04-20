@@ -299,10 +299,10 @@ pub fn choose_biome_label_thresholded(biomes: &BiomeRegistry, coord: IVec2, seed
     let pz = coord.y as f32 + 0.5;
     let (best_land, best_ocean) = best_land_and_ocean_sites(biomes, Vec2::new(px, pz), seed);
 
-    if let Some((b, _pos, _r, s)) = best_land {
-        if s <= LAND_SCORE_MAX {
-            return b;
-        }
+    if let Some((b, _pos, _r, s)) = best_land
+        && s <= LAND_SCORE_MAX
+    {
+        return b;
     }
     if let Some((b, _pos, _r, _s)) = best_ocean {
         return b;
@@ -383,41 +383,93 @@ pub fn locate_biome_chunk_by_localized_name(
 /* == Site Queries / Sizes ================================================ */
 /* ======================================================================= */
 
+type SiteScore<'a> = (&'a Biome, Vec2, f32, f32);
+
+#[inline]
+fn set_if_better_site<'a>(best: &mut Option<SiteScore<'a>>, candidate: SiteScore<'a>) {
+    if best.is_none_or(|(_, _, _, best_score)| candidate.3 < best_score) {
+        *best = Some(candidate);
+    }
+}
+
+#[inline]
+fn site_search_grid_origin(p_chunks: Vec2) -> (i32, i32) {
+    (
+        (p_chunks.x.floor() as i32).div_euclid(BASE_CELL_CHUNKS),
+        (p_chunks.y.floor() as i32).div_euclid(BASE_CELL_CHUNKS),
+    )
+}
+
+#[inline]
+fn for_each_site_in_search_radius<'a>(
+    biomes: &'a BiomeRegistry,
+    p_chunks: Vec2,
+    world_seed: i32,
+    mut visitor: impl FnMut(Vec2, &'a Biome, f32),
+) {
+    let (grid_x, grid_z) = site_search_grid_origin(p_chunks);
+    for cell_offset_z in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
+        for cell_offset_x in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
+            let cell_x = grid_x + cell_offset_x;
+            let cell_z = grid_z + cell_offset_z;
+            let (site_pos, site_biome, site_radius) =
+                site_properties_for_cell(biomes, cell_x, cell_z, world_seed);
+            visitor(site_pos, site_biome, site_radius);
+        }
+    }
+}
+
+#[inline]
+fn second_best_site_with_kind<'a>(
+    biomes: &'a BiomeRegistry,
+    p_chunks: Vec2,
+    world_seed: i32,
+    host_site_pos: Vec2,
+    want_ocean_site: bool,
+) -> Option<SiteScore<'a>> {
+    let mut best: Option<SiteScore<'a>> = None;
+    for_each_site_in_search_radius(
+        biomes,
+        p_chunks,
+        world_seed,
+        |site_pos, site_biome, site_radius| {
+            if is_ocean_biome(site_biome) != want_ocean_site {
+                return;
+            }
+            // Filter the exact same site (same center) as host.
+            if (site_pos - host_site_pos).length_squared() < 1e-6 {
+                return;
+            }
+            let score = p_chunks.distance(site_pos) / site_radius.max(1.0);
+            set_if_better_site(&mut best, (site_biome, site_pos, site_radius, score));
+        },
+    );
+
+    best
+}
+
 /// Find best land and ocean sites around `p_chunks` within a search window.
 pub fn best_land_and_ocean_sites<'a>(
     biomes: &'a BiomeRegistry,
     p_chunks: Vec2,
     world_seed: i32,
-) -> (
-    Option<(&'a Biome, Vec2, f32, f32)>,
-    Option<(&'a Biome, Vec2, f32, f32)>,
-) {
-    let gx = (p_chunks.x.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
-    let gz = (p_chunks.y.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
+) -> (Option<SiteScore<'a>>, Option<SiteScore<'a>>) {
+    let mut best_land: Option<SiteScore<'a>> = None;
+    let mut best_ocean: Option<SiteScore<'a>> = None;
 
-    let mut best_land: Option<(&'a Biome, Vec2, f32, f32)> = None;
-    let mut best_ocean: Option<(&'a Biome, Vec2, f32, f32)> = None;
-
-    for dz in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
-        for dx in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
-            let cx = gx + dx;
-            let cz = gz + dz;
-
-            let (site_pos, site_biome, site_radius) =
-                site_properties_for_cell(biomes, cx, cz, world_seed);
-
-            let d = p_chunks.distance(site_pos);
-            let score = d / site_radius.max(1.0);
-
+    for_each_site_in_search_radius(
+        biomes,
+        p_chunks,
+        world_seed,
+        |site_pos, site_biome, site_radius| {
+            let score = p_chunks.distance(site_pos) / site_radius.max(1.0);
             if is_ocean_biome(site_biome) {
-                if best_ocean.map_or(true, |(_, _, _, s)| score < s) {
-                    best_ocean = Some((site_biome, site_pos, site_radius, score));
-                }
-            } else if best_land.map_or(true, |(_, _, _, s)| score < s) {
-                best_land = Some((site_biome, site_pos, site_radius, score));
+                set_if_better_site(&mut best_ocean, (site_biome, site_pos, site_radius, score));
+            } else {
+                set_if_better_site(&mut best_land, (site_biome, site_pos, site_radius, score));
             }
-        }
-    }
+        },
+    );
 
     (best_land, best_ocean)
 }
@@ -428,38 +480,8 @@ pub fn best_second_land_site<'a>(
     p_chunks: Vec2,
     world_seed: i32,
     host_site_pos: Vec2,
-) -> Option<(&'a Biome, Vec2, f32, f32)> {
-    let gx = (p_chunks.x.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
-    let gz = (p_chunks.y.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
-
-    let mut best: Option<(&'a Biome, Vec2, f32, f32)> = None;
-
-    for dz in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
-        for dx in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
-            let cx = gx + dx;
-            let cz = gz + dz;
-
-            let (site_pos, site_biome, site_radius) =
-                site_properties_for_cell(biomes, cx, cz, world_seed);
-
-            if is_ocean_biome(site_biome) {
-                continue;
-            }
-            // Filter the exact same site (same center) as host.
-            if (site_pos - host_site_pos).length_squared() < 1e-6 {
-                continue;
-            }
-
-            let d = p_chunks.distance(site_pos);
-            let score = d / site_radius.max(1.0);
-
-            if best.map_or(true, |(_, _, _, s)| score < s) {
-                best = Some((site_biome, site_pos, site_radius, score));
-            }
-        }
-    }
-
-    best
+) -> Option<SiteScore<'a>> {
+    second_best_site_with_kind(biomes, p_chunks, world_seed, host_site_pos, false)
 }
 
 /// Find the second-best *ocean* site distinct from `host_site_pos`.
@@ -468,38 +490,8 @@ pub fn best_second_ocean_site<'a>(
     p_chunks: Vec2,
     world_seed: i32,
     host_site_pos: Vec2,
-) -> Option<(&'a Biome, Vec2, f32, f32)> {
-    let gx = (p_chunks.x.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
-    let gz = (p_chunks.y.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
-
-    let mut best: Option<(&'a Biome, Vec2, f32, f32)> = None;
-
-    for dz in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
-        for dx in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
-            let cx = gx + dx;
-            let cz = gz + dz;
-
-            let (site_pos, site_biome, site_radius) =
-                site_properties_for_cell(biomes, cx, cz, world_seed);
-
-            if !is_ocean_biome(site_biome) {
-                continue;
-            }
-            // Filter the exact same site (same center) as host.
-            if (site_pos - host_site_pos).length_squared() < 1e-6 {
-                continue;
-            }
-
-            let d = p_chunks.distance(site_pos);
-            let score = d / site_radius.max(1.0);
-
-            if best.map_or(true, |(_, _, _, s)| score < s) {
-                best = Some((site_biome, site_pos, site_radius, score));
-            }
-        }
-    }
-
-    best
+) -> Option<SiteScore<'a>> {
+    second_best_site_with_kind(biomes, p_chunks, world_seed, host_site_pos, true)
 }
 
 /// Compute site position, chosen biome and radius for a cell.
@@ -624,15 +616,14 @@ pub fn size_to_area_bounds(size: &BiomeSize) -> (f32, f32) {
 /* == Sub-biomes: Picking / Adjacency ===================================== */
 /* ======================================================================= */
 
+#[derive(Clone, Copy)]
+struct SubBiomeHostQuery<'a>(&'a BiomeRegistry, &'a Biome, Vec2, f32, Vec2, i32);
+
 fn pick_sub_biome_in_host_internal<'a>(
-    biomes: &'a BiomeRegistry,
-    host: &'a Biome,
-    host_pos: Vec2,
-    host_r: f32,
-    p: Vec2,
-    world_seed: i32,
+    query: SubBiomeHostQuery<'a>,
     require_relief_sub: bool,
 ) -> Option<(&'a Biome, f32)> {
+    let SubBiomeHostQuery(biomes, host, host_pos, host_r, p, world_seed) = query;
     let subs = host.subs.as_ref()?;
     if subs.is_empty() {
         return None;
@@ -787,7 +778,7 @@ fn pick_sub_biome_in_host_internal<'a>(
             } else {
                 s_raw
             };
-            if best.map_or(true, |(_, sb)| s < sb) {
+            if best.is_none_or(|(_, sb)| s < sb) {
                 best = Some((sub, s));
             }
         }
@@ -796,30 +787,35 @@ fn pick_sub_biome_in_host_internal<'a>(
     best
 }
 
-/// Pick a sub-biome inside a host land biome near `p`. Returns `(sub, s)`
-/// where `s` is normalized distance to sub center (`p.distance/r_site`).
-pub fn pick_sub_biome_in_host<'a>(
-    biomes: &'a BiomeRegistry,
-    host: &'a Biome,
-    host_pos: Vec2,
-    host_r: f32,
-    p: Vec2,
-    world_seed: i32,
-) -> Option<(&'a Biome, f32)> {
-    pick_sub_biome_in_host_internal(biomes, host, host_pos, host_r, p, world_seed, false)
+macro_rules! define_sub_biome_picker {
+    ($fn_name:ident, $require_relief:expr, $doc:literal) => {
+        #[doc = $doc]
+        pub fn $fn_name<'a>(
+            biomes: &'a BiomeRegistry,
+            host: &'a Biome,
+            host_pos: Vec2,
+            host_r: f32,
+            p: Vec2,
+            world_seed: i32,
+        ) -> Option<(&'a Biome, f32)> {
+            pick_sub_biome_in_host_internal(
+                SubBiomeHostQuery(biomes, host, host_pos, host_r, p, world_seed),
+                $require_relief,
+            )
+        }
+    };
 }
 
-/// Pick the nearest sub-biome that can contribute mountain relief (`mount_*` set).
-pub fn pick_relief_sub_biome_in_host<'a>(
-    biomes: &'a BiomeRegistry,
-    host: &'a Biome,
-    host_pos: Vec2,
-    host_r: f32,
-    p: Vec2,
-    world_seed: i32,
-) -> Option<(&'a Biome, f32)> {
-    pick_sub_biome_in_host_internal(biomes, host, host_pos, host_r, p, world_seed, true)
-}
+define_sub_biome_picker!(
+    pick_sub_biome_in_host,
+    false,
+    "Pick a sub-biome inside a host land biome near `p`. Returns `(sub, s)` where `s` is normalized distance to sub center (`p.distance/r_site`)."
+);
+define_sub_biome_picker!(
+    pick_relief_sub_biome_in_host,
+    true,
+    "Pick the nearest sub-biome that can contribute mountain relief (`mount_*` set)."
+);
 
 /// Down-weight sub-biome dominance if the nearest *different* land site
 /// would likely not support the sub-biome; returns [0..1] multiplier.
@@ -830,38 +826,29 @@ pub fn adjacency_support_factor(
     host_biome: &Biome,
     sub_name: &str,
 ) -> f32 {
-    let gx = (p_chunks.x.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
-    let gz = (p_chunks.y.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
-
     let mut best: Option<(f32, bool)> = None;
-
-    for dz in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
-        for dx in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
-            let cx = gx + dx;
-            let cz = gz + dz;
-
-            let (site_pos, site_biome, site_radius) =
-                site_properties_for_cell(biomes, cx, cz, world_seed);
-
+    for_each_site_in_search_radius(
+        biomes,
+        p_chunks,
+        world_seed,
+        |site_pos, site_biome, site_radius| {
             if is_ocean_biome(site_biome) {
-                continue;
+                return;
             }
             if std::ptr::eq(site_biome, host_biome) {
-                continue;
+                return;
             }
             if site_biome.name.eq_ignore_ascii_case(&host_biome.name) {
-                continue;
+                return;
             }
-
-            let d = p_chunks.distance(site_pos);
-            let score = d / site_radius.max(1.0);
+            let distance_to_site = p_chunks.distance(site_pos);
+            let score = distance_to_site / site_radius.max(1.0);
             let neighbor_supports = supports_sub(site_biome, sub_name);
-
-            if best.map_or(true, |(s, _)| score < s) {
+            if best.is_none_or(|(s, _)| score < s) {
                 best = Some((score, neighbor_supports));
             }
-        }
-    }
+        },
+    );
 
     if let Some((s, ok)) = best {
         if ok {
@@ -972,12 +959,7 @@ pub fn is_ocean_biome(b: &Biome) -> bool {
 
 /// Return any ocean biome defined in the registry (if present).
 pub fn any_ocean_biome(biomes: &BiomeRegistry) -> Option<&Biome> {
-    for b in biomes.by_name.values() {
-        if is_ocean_biome(b) {
-            return Some(b);
-        }
-    }
-    None
+    biomes.by_name.values().find(|biome| is_ocean_biome(biome))
 }
 
 /// `true` if `host` supports a sub-biome named `sub_name` (case-insensitive).

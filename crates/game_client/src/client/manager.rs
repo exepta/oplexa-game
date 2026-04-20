@@ -9,7 +9,7 @@ use crate::generator::ChunkRuntimeModule;
 use crate::graphic::GraphicModule;
 use crate::logic::LogicModule;
 use crate::shader::WorldShaderService;
-use crate::utils::key_utils::convert;
+use crate::utils::key_utils::convert_input;
 use bevy::gizmos::config::{DefaultGizmoConfigGroup, GizmoConfigStore};
 use bevy::light::DirectionalLightShadowMap;
 use bevy::prelude::*;
@@ -87,7 +87,7 @@ fn toggle_world_inspector(
     keyboard: Res<ButtonInput<KeyCode>>,
     game_config: Res<GlobalConfig>,
 ) {
-    let key = convert(game_config.input.world_inspector.as_str())
+    let key = convert_input(game_config.input.world_inspector.as_str())
         .expect("Invalid key for world inspector");
     if keyboard.just_pressed(key) {
         debug_context.0 = !debug_context.0;
@@ -102,7 +102,7 @@ fn toggle_block_collider_gizmos(
     mut gizmo_state: ResMut<BlockColliderGizmoState>,
 ) {
     let debug_key =
-        convert(game_config.input.collider_debug.as_str()).expect("Invalid key for collider debug");
+        convert_input(game_config.input.collider_debug.as_str()).expect("Invalid key for collider debug");
 
     if keyboard.just_pressed(debug_key) {
         gizmo_state.show = !gizmo_state.show;

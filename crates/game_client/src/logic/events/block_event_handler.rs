@@ -13,8 +13,8 @@ use crate::core::events::ui_events::{
     OpenChestInventoryMenuRequest, OpenStructureBuildMenuRequest, OpenWorkbenchMenuRequest,
 };
 use crate::core::inventory::items::{
-    ItemId, ItemRegistry, block_requirement_for_id, can_drop_from_block, mining_speed_multiplier,
-    spawn_world_item_for_block_break, spawn_world_item_with_motion,
+    block_requirement_for_id, can_drop_from_block, mining_speed_multiplier,
+    spawn_world_item_for_block_break, spawn_world_item_with_motion, ItemId, ItemRegistry,
 };
 use crate::core::inventory::recipe::{
     ActiveStructurePlacementState, ActiveStructureRecipeState, BuildingMaterialRequirement,
@@ -30,9 +30,9 @@ use crate::core::world::chunk::*;
 use crate::core::world::chunk_dimension::*;
 use crate::core::world::fluid::{FluidChunk, FluidMap};
 use crate::core::world::save::{
+    container_find, container_upsert, decode_structure_entries, encode_structure_entries,
     RegionCache, StructureRegionDropItem, StructureRegionEntry, StructureRegionInventorySlot,
-    TAG_STR1, WorldSave, container_find, container_upsert, decode_structure_entries,
-    encode_structure_entries,
+    WorldSave, TAG_STR1,
 };
 use crate::core::world::{mark_dirty_block_and_neighbors, world_access_mut};
 use crate::generator::chunk::chunk_meshing::safe_despawn_entity;
@@ -73,7 +73,6 @@ struct StructureMeshColliderNameFilterPending;
 struct StructureMeshColliderCleanupPending;
 
 #[derive(Component, Clone)]
-#[allow(dead_code)]
 /// Runtime metadata attached to a spawned structure entity.
 pub(crate) struct PlacedStructureMetadata {
     pub recipe_name: String,
@@ -81,9 +80,6 @@ pub(crate) struct PlacedStructureMetadata {
     pub model_animated: bool,
     pub stats: BlockStats,
     pub place_origin: IVec3,
-    pub rotation_quarters: u8,
-    pub rotation_steps: u8,
-    pub origin_chunk: IVec2,
     pub drop_requirements: Vec<BuildingMaterialRequirement>,
     pub registration: Option<BuildingStructureBlockRegistration>,
     pub selection_center_world: Vec3,

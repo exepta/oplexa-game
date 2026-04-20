@@ -10,7 +10,7 @@ fn toggle_benchmark_menu_dialog(
     global_config: Res<GlobalConfig>,
     mut benchmark_automation: ResMut<BenchmarkAutomationState>,
 ) {
-    let benchmark_key = convert(global_config.input.benchmark.as_str()).unwrap_or(KeyCode::KeyB);
+    let benchmark_key = convert_input(global_config.input.benchmark.as_str()).unwrap_or(KeyCode::KeyB);
     if keyboard.just_pressed(benchmark_key) {
         benchmark_automation.dialog_open = !benchmark_automation.dialog_open;
     }
@@ -139,7 +139,7 @@ fn run_benchmark_automation(
         return;
     }
 
-    let close_key = convert(global_config.input.ui_close_back.as_str()).unwrap_or(KeyCode::Escape);
+    let close_key = convert_input(global_config.input.ui_close_back.as_str()).unwrap_or(KeyCode::Escape);
     if keyboard.just_pressed(close_key) {
         benchmark_automation.abort_requested = true;
     }

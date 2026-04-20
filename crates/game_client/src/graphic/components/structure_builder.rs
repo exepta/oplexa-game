@@ -44,7 +44,7 @@ fn handle_structure_build_menu_input(
     }
 
     let close_key =
-        convert(global_config.input.ui_close_back.as_str()).expect("Invalid close/back key");
+        convert_input(global_config.input.ui_close_back.as_str()).expect("Invalid close/back key");
     if structure_menu.open && keyboard.just_pressed(close_key) {
         structure_menu.open = false;
         return;
@@ -122,7 +122,7 @@ fn rotate_structure_preview_with_scroll(
     }
 
     let rotate_key =
-        convert(global_config.input.structure_rotate_preview.as_str()).unwrap_or(KeyCode::KeyR);
+        convert_input(global_config.input.structure_rotate_preview.as_str()).unwrap_or(KeyCode::KeyR);
 
     let mut total_steps = 0i32;
     if keyboard.just_pressed(rotate_key) {

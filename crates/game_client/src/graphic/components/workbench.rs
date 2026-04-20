@@ -90,7 +90,7 @@ fn handle_workbench_recipe_menu_input(
     }
 
     let close_key =
-        convert(global_config.input.ui_close_back.as_str()).expect("Invalid close/back key");
+        convert_input(global_config.input.ui_close_back.as_str()).expect("Invalid close/back key");
     if !keyboard.just_pressed(close_key) {
         return;
     }

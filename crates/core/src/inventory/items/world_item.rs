@@ -160,7 +160,7 @@ pub fn build_world_item_drop_visual(
     }
 
     if let Some(block_id) = resolve_drop_block_id(block_registry, item_registry, item_id) {
-        let block_size = size.min(WORLD_BLOCK_DROP_SIZE).max(0.10);
+        let block_size = size.clamp(0.10, WORLD_BLOCK_DROP_SIZE);
         let mut mesh = build_block_cube_mesh(block_registry, block_id, block_size);
         center_mesh_vertices(&mut mesh, block_size * 0.5);
         let visual_scale = block_registry
@@ -258,6 +258,65 @@ pub fn spawn_world_item_with_motion(
         NotShadowCaster,
         NotShadowReceiver,
     ));
+}
+
+/// Returns a stable resting rotation for flat item visuals.
+#[inline]
+pub fn resting_flat_item_rotation(current_rotation: Quat) -> Quat {
+    let forward = current_rotation * Vec3::Z;
+    let yaw = forward.x.atan2(forward.z);
+    Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)
+}
+
+/// Returns a stable resting rotation for cube-like block drop visuals.
+#[inline]
+pub fn resting_block_drop_rotation(
+    current_rotation: Quat,
+    translation: Vec3,
+    impact_velocity: Vec3,
+) -> Quat {
+    let forward = current_rotation * Vec3::Z;
+    let yaw = forward.x.atan2(forward.z);
+    let base_rotation = Quat::from_rotation_y(yaw);
+
+    let frac_x = translation.x - translation.x.floor();
+    let frac_z = translation.z - translation.z.floor();
+    let edge_bias_x = (frac_x - 0.5).abs();
+    let edge_bias_z = (frac_z - 0.5).abs();
+    let horizontal_speed = Vec2::new(impact_velocity.x, impact_velocity.z).length();
+
+    let (tilt_axis, tilt_angle_degrees): (Vec3, f32) = if horizontal_speed > 0.45 {
+        let slide_direction = Vec2::new(impact_velocity.x, impact_velocity.z).normalize_or_zero();
+        let axis = Vec3::new(-slide_direction.y, 0.0, slide_direction.x).normalize_or_zero();
+        (
+            if axis.length_squared() > 0.000_001 {
+                axis
+            } else {
+                Vec3::X
+            },
+            72.0,
+        )
+    } else if edge_bias_x.max(edge_bias_z) > 0.34 {
+        if edge_bias_x >= edge_bias_z {
+            (Vec3::Z * if frac_x >= 0.5 { 1.0 } else { -1.0 }, 58.0)
+        } else {
+            (Vec3::X * if frac_z >= 0.5 { -1.0 } else { 1.0 }, 58.0)
+        }
+    } else {
+        let grid_x = translation.x.floor() as i32;
+        let grid_z = translation.z.floor() as i32;
+        if ((grid_x ^ grid_z) & 1) == 0 {
+            (Vec3::X, 90.0)
+        } else {
+            (Vec3::Z, 90.0)
+        }
+    };
+
+    (Quat::from_axis_angle(
+        tilt_axis.normalize_or_zero(),
+        tilt_angle_degrees.to_radians(),
+    ) * base_rotation)
+        .normalize()
 }
 
 /// Runs the `player_drop_throw_direction` routine for player drop throw direction in the `core::inventory::items::world_item` module.

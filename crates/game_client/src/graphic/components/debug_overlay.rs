@@ -16,7 +16,7 @@ fn toggle_system_last_ui(
     mut overlay: ResMut<DebugOverlayState>,
 ) {
     let key =
-        convert(global_config.input.debug_overlay.as_str()).expect("Invalid debug overlay key");
+        convert_input(global_config.input.debug_overlay.as_str()).expect("Invalid debug overlay key");
 
     if !keyboard.just_pressed(key) {
         return;

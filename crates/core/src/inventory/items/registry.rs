@@ -14,6 +14,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use oplexa_shared::utils::key_utils::{is_name_key, last_was_separator};
 
 /// Prefix used by virtual UI icon keys for block items.
 pub const BLOCK_ICON_CACHE_PREFIX: &str = "block-icon://";
@@ -1158,26 +1159,10 @@ fn normalize_item_name_key(raw_name: &str, fallback_key: &str) -> String {
     item_name_key_from_key(fallback_key)
 }
 
-fn is_name_key(value: &str) -> bool {
-    value.starts_with("KEY_")
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
-}
-
 fn item_name_key_from_key(key: &str) -> String {
     let mut name_key = String::with_capacity(key.len() + 4);
     name_key.push_str("KEY_");
-    let mut last_was_separator = false;
-    for ch in key.chars() {
-        if ch.is_ascii_alphanumeric() {
-            name_key.push(ch.to_ascii_uppercase());
-            last_was_separator = false;
-        } else if !last_was_separator {
-            name_key.push('_');
-            last_was_separator = true;
-        }
-    }
+    last_was_separator(key, &mut name_key);
     while name_key.ends_with('_') {
         name_key.pop();
     }

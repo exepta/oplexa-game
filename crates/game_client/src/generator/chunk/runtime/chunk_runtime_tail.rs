@@ -440,20 +440,23 @@ fn unload_far_chunks(
     game_config: Res<GlobalConfig>,
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    load_center: Option<Res<LoadCenter>>,
     mut ev_water_unload: MessageWriter<ChunkUnloadEvent>,
     mut ready_latency: ResMut<ChunkReadyLatencyState>,
     mut immediate_ready: ResMut<ImmediateMeshReadyQueue>,
 ) {
-    let cam = if let Ok(t) = q_cam.single() {
-        t
+    let center_c = if let Some(cam) = q_cam.iter().next() {
+        let cam_pos = cam.translation();
+        let (coord, _) = world_to_chunk_xz(
+            (cam_pos.x / VOXEL_SIZE).floor() as i32,
+            (cam_pos.z / VOXEL_SIZE).floor() as i32,
+        );
+        coord
+    } else if let Some(lc) = load_center {
+        lc.world_xz
     } else {
         return;
     };
-    let cam_pos = cam.translation();
-    let (center_c, _) = world_to_chunk_xz(
-        (cam_pos.x / VOXEL_SIZE).floor() as i32,
-        (cam_pos.z / VOXEL_SIZE).floor() as i32,
-    );
 
     let keep_radius = loaded_radius(game_config.graphics.chunk_range) + HIDDEN_PRELOAD_RING + 1;
     let unload_budget = game_config.graphics.chunk_unload_budget_per_frame.max(1);

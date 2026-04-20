@@ -5,6 +5,7 @@ mod registry;
 mod state;
 mod types;
 mod work_table_crafting;
+mod helpers;
 
 pub const CRAFTING_SHAPED_RECIPE_KIND: &str = "shaped";
 pub const CRAFTING_SHAPELESS_RECIPE_KIND: &str = "shapeless";

@@ -861,7 +861,6 @@ fn spawn_structure_model_entity(
         model_rotation_quarters,
     ) + (model_rotation * recipe.model_meta.model_offset) * VOXEL_SIZE;
     let scene_handle = asset_server.load(recipe.model_asset_path.clone());
-    let (origin_chunk, _) = world_to_chunk_xz(place_origin.x, place_origin.z);
 
     let structure_entity = commands
         .spawn((
@@ -872,9 +871,6 @@ fn spawn_structure_model_entity(
                 model_animated: recipe.model_meta.animated,
                 stats: recipe.model_meta.stats.clone(),
                 place_origin,
-                rotation_quarters,
-                rotation_steps,
-                origin_chunk,
                 drop_requirements,
                 registration: recipe.model_meta.block_registration.clone(),
                 selection_center_world,

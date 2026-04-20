@@ -19,7 +19,10 @@ use crate::core::events::ui_events::{
     ChestInventorySnapshotRequest, ChestInventoryUiOpened, ConnectToServerRequest,
     DisconnectFromServerRequest, DropItemRequest,
 };
-use crate::core::inventory::items::{ItemRegistry, build_world_item_drop_visual};
+use crate::core::inventory::items::{
+    ItemRegistry, build_world_item_drop_visual, resting_block_drop_rotation,
+    resting_flat_item_rotation,
+};
 use crate::core::multiplayer::{MultiplayerConnectionPhase, MultiplayerConnectionState};
 use crate::core::states::states::{AppState, BeforeUiState, LoadingStates};
 use crate::core::world::biome::func::locate_biome_chunk_by_localized_name;
@@ -27,7 +30,8 @@ use crate::core::world::biome::registry::BiomeRegistry;
 use crate::core::world::block::{BlockRegistry, VOXEL_SIZE, get_block_world};
 use crate::core::world::chunk::{ChunkData, ChunkMap, LoadCenter, SEA_LEVEL, VoxelStage};
 use crate::core::world::chunk_dimension::{
-    CX, CZ, SEC_COUNT, SEC_H, Y_MAX, Y_MIN, world_to_chunk_xz, world_y_to_local,
+    CX, CZ, SEC_COUNT, SEC_H, Y_MAX, Y_MIN, locate_radius_chunks_from_blocks, world_to_chunk_xz,
+    world_y_to_local,
 };
 use crate::core::world::fluid::{FluidChunk, FluidMap, WaterMeshIndex};
 use crate::core::world::save::RegionCache;
@@ -97,7 +101,6 @@ use runtime::*;
 /// Represents remote player avatar used by the `client` module.
 #[derive(Component)]
 struct RemotePlayerAvatar {
-    #[allow(dead_code)]
     player_id: u64,
 }
 
@@ -569,18 +572,10 @@ const MULTIPLAYER_CHUNK_APPLY_PER_FRAME_BASE: usize = 3;
 const MULTIPLAYER_CHUNK_APPLY_PER_FRAME_MAX: usize = 12;
 const MULTIPLAYER_CHUNK_REMESH_COORDS_PER_FRAME_BASE: usize = 2;
 const MULTIPLAYER_CHUNK_REMESH_COORDS_PER_FRAME_MAX: usize = 6;
-const LOCATE_MAX_RADIUS_BLOCKS_CAP: i32 = 1000;
 const NETWORK_CONFIG_PATH: &str = "config/network.toml";
 const SERVER_TIMEOUT_ERROR_TEXT: &str = "Server time out!";
 
 static TERMINAL_INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-/// Converts locate radius from blocks into chunks and clamps it to safe bounds.
-fn locate_radius_chunks_from_blocks(radius_blocks: i32) -> i32 {
-    let clamped_blocks = radius_blocks.clamp(1, LOCATE_MAX_RADIUS_BLOCKS_CAP);
-    let chunk_span = (CX as i32).max(CZ as i32);
-    (clamped_blocks + (chunk_span - 1)) / chunk_span
-}
 
 /// Dynamic decode budget for streamed multiplayer chunks.
 fn multiplayer_chunk_decode_budget(

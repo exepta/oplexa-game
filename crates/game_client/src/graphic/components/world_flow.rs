@@ -27,6 +27,7 @@ fn sync_world_gen_progress(
     time: Res<Time>,
     app_state: Res<State<AppState>>,
     game_config: Res<GlobalConfig>,
+    multiplayer_connection: Option<Res<MultiplayerConnectionState>>,
     language: Res<ClientLanguageState>,
     loading_data: LoadingProgressData,
     mut loading_progress: ResMut<LoadingProgress>,
@@ -38,6 +39,7 @@ fn sync_world_gen_progress(
     let metrics = compute_loading_progress_metrics(
         app_state.get(),
         game_config.graphics.chunk_range,
+        multiplayer_connection.as_deref(),
         loading_data.load_center.as_deref(),
         &loading_data.chunk_map,
         loading_data.pending_gen.as_deref(),
@@ -62,26 +64,29 @@ fn sync_world_gen_progress(
         .min(metrics.total_chunks);
 
     loading_progress.phase = metrics.phase;
-    animation.displayed_pct = smooth_progress(
-        animation.displayed_pct,
-        progress_log_state.phase_peak_percent,
-        time.delta_secs(),
-    );
+    animation.displayed_pct = if progress_log_state.phase_peak_percent >= 99.5 {
+        100.0
+    } else {
+        smooth_progress(
+            animation.displayed_pct,
+            progress_log_state.phase_peak_percent,
+            time.delta_secs(),
+        )
+    };
     loading_progress.overall_pct = progress_log_state.phase_peak_percent;
 
     progress_log_state.timer.tick(time.delta());
-    if progress_log_state.timer.just_finished() {
-        let pct = animation.displayed_pct.round().clamp(0.0, 100.0) as u8;
-        if progress_log_state
+    let pct = animation.displayed_pct.round().clamp(0.0, 100.0) as u8;
+    if (progress_log_state.timer.just_finished() || pct >= 100)
+        && progress_log_state
             .last_logged_percent
             .is_none_or(|last| pct > last)
-        {
-            info!(
-                "[GENERATE]: progress {}%",
-                pct
-            );
-            progress_log_state.last_logged_percent = Some(pct);
-        }
+    {
+        info!(
+            "[GENERATE]: progress {}%",
+            pct
+        );
+        progress_log_state.last_logged_percent = Some(pct);
     }
 
     for (css_id, mut progress_bar) in &mut progress_bars {
@@ -130,6 +135,7 @@ struct LoadingProgressMetrics {
 fn compute_loading_progress_metrics(
     app_state: &AppState,
     chunk_range: i32,
+    multiplayer_connection: Option<&MultiplayerConnectionState>,
     load_center: Option<&LoadCenter>,
     chunk_map: &ChunkMap,
     pending_gen: Option<&PendingGen>,
@@ -145,6 +151,10 @@ fn compute_loading_progress_metrics(
     match phase {
         LoadingPhase::BaseGen => {
             let radius = loading_preload_radius_for_ui(chunk_range).max(0);
+            let ready_radius = loading_ready_radius_for_ui(
+                radius,
+                multiplayer_connection.is_some_and(|connection| connection.is_remote_session()),
+            );
             let center = load_center.map(|lc| lc.world_xz).unwrap_or(IVec2::ZERO);
             let side = (radius as usize).saturating_mul(2).saturating_add(1);
             let total = side.saturating_mul(side).max(1);
@@ -159,6 +169,7 @@ fn compute_loading_progress_metrics(
 
             const SCORE_PENDING_GEN: f32 = 0.25;
             const SCORE_LOADED_GEN: f32 = 0.70;
+            const SCORE_OUTER_RING_CHUNK_PRESENT: f32 = 1.0;
             const SCORE_READY: f32 = 1.0;
 
             let mut equivalent_done = 0.0f32;
@@ -170,6 +181,11 @@ fn compute_loading_progress_metrics(
                         continue;
                     }
                     if !chunk_map.chunks.contains_key(&coord) {
+                        continue;
+                    }
+                    let in_ready_core = dx.abs() <= ready_radius && dz.abs() <= ready_radius;
+                    if !in_ready_core {
+                        equivalent_done += SCORE_OUTER_RING_CHUNK_PRESENT;
                         continue;
                     }
                     if busy_mesh.contains(&coord) {
@@ -184,14 +200,14 @@ fn compute_loading_progress_metrics(
             let progress_chunks = equivalent_done.round().clamp(0.0, total as f32) as usize;
             LoadingProgressMetrics {
                 phase,
-                overall_pct: ratio * 72.0,
+                overall_pct: ratio * 100.0,
                 progress_chunks,
                 total_chunks: total,
             }
         }
         LoadingPhase::CaveGen => LoadingProgressMetrics {
             phase,
-            overall_pct: 84.0,
+            overall_pct: 100.0,
             progress_chunks: 1,
             total_chunks: 1,
         },
@@ -207,6 +223,18 @@ fn compute_loading_progress_metrics(
 #[inline]
 fn loading_preload_radius_for_ui(chunk_range: i32) -> i32 {
     chunk_range.max(0)
+}
+
+#[inline]
+fn loading_ready_radius_for_ui(preload_radius: i32, remote_session: bool) -> i32 {
+    if remote_session {
+        1
+    } else {
+        (preload_radius / 2)
+            .clamp(2, 8)
+            .min(preload_radius)
+            .max(1)
+    }
 }
 
 /// Checks whether loading state in the `graphic::components::world_flow` module.
@@ -232,11 +260,40 @@ fn reset_world_gen_ui_animation(
     progress_log_state.timer.reset();
 }
 
+/// Forces final world generation progress to 100% when entering gameplay.
+fn finalize_world_gen_progress(
+    mut loading_progress: ResMut<LoadingProgress>,
+    mut animation: ResMut<WorldGenUiAnimation>,
+    mut progress_log_state: ResMut<WorldGenProgressLogState>,
+    mut progress_bars: Query<(&CssID, &mut ProgressBar)>,
+) {
+    loading_progress.phase = LoadingPhase::Done;
+    loading_progress.overall_pct = 100.0;
+    animation.displayed_pct = 100.0;
+    progress_log_state.phase_peak_percent = 100.0;
+    if progress_log_state
+        .last_logged_percent
+        .is_none_or(|last| last < 100)
+    {
+        info!("[GENERATE]: progress 100%");
+        progress_log_state.last_logged_percent = Some(100);
+    }
+
+    for (css_id, mut progress_bar) in &mut progress_bars {
+        if css_id.0 != WORLD_GEN_PROGRESS_ID {
+            continue;
+        }
+        progress_bar.min = 0.0;
+        progress_bar.max = 100.0;
+        progress_bar.value = 100.0;
+    }
+}
+
 #[inline]
 fn phase_floor_percent(phase: LoadingPhase) -> f32 {
     match phase {
         LoadingPhase::BaseGen => 0.0,
-        LoadingPhase::CaveGen => 72.0,
+        LoadingPhase::CaveGen => 100.0,
         LoadingPhase::Done => 100.0,
     }
 }
@@ -244,8 +301,8 @@ fn phase_floor_percent(phase: LoadingPhase) -> f32 {
 #[inline]
 fn phase_cap_percent(phase: LoadingPhase) -> f32 {
     match phase {
-        LoadingPhase::BaseGen => 72.0,
-        LoadingPhase::CaveGen => 84.0,
+        LoadingPhase::BaseGen => 100.0,
+        LoadingPhase::CaveGen => 100.0,
         LoadingPhase::Done => 100.0,
     }
 }

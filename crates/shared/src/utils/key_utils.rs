@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 /// Function for create a [`KeyCode`] from a plain string.
 /// Use this if you try to make a config for inputs.
-pub fn convert(key: &str) -> Option<KeyCode> {
+pub fn convert_input(key: &str) -> Option<KeyCode> {
     match key {
         "Escape" => Some(KeyCode::Escape),
         "Backspace" => Some(KeyCode::Backspace),
@@ -90,5 +90,25 @@ pub fn convert(key: &str) -> Option<KeyCode> {
         "8" => Some(KeyCode::Digit8),
         "9" => Some(KeyCode::Digit9),
         _ => None,
+    }
+}
+
+pub fn is_name_key(value: &str) -> bool {
+    value.starts_with("KEY_")
+        && value
+        .chars()
+        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+}
+
+pub fn last_was_separator(localized_name: &str, key: &mut String) {
+    let mut last_was_separator = false;
+    for ch in localized_name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            key.push(ch.to_ascii_uppercase());
+            last_was_separator = false;
+        } else if !last_was_separator {
+            key.push('_');
+            last_was_separator = true;
+        }
     }
 }

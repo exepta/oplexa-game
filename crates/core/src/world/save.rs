@@ -302,6 +302,36 @@ pub fn default_saves_root() -> PathBuf {
 pub struct RegionCache(pub HashMap<IVec2, RegionFile>);
 
 impl RegionCache {
+    #[inline]
+    fn write_chunk_internal(
+        &mut self,
+        ws: &WorldSave,
+        chunk_coord: IVec2,
+        data: &[u8],
+        replace_existing: bool,
+    ) -> std::io::Result<()> {
+        self.with_region_file_for_chunk(ws, chunk_coord, |region_file, target_chunk_coord| {
+            if replace_existing {
+                let slot_index = RegionFile::slot_index_for_chunk(target_chunk_coord);
+                region_file.write_slot_replace(slot_index, data)
+            } else {
+                region_file.write_chunk(target_chunk_coord, data)
+            }
+        })
+    }
+
+    #[inline]
+    fn with_region_file_for_chunk<R>(
+        &mut self,
+        ws: &WorldSave,
+        chunk_coord: IVec2,
+        op: impl FnOnce(&mut RegionFile, IVec2) -> std::io::Result<R>,
+    ) -> std::io::Result<R> {
+        let region_coord = chunk_to_region(chunk_coord);
+        let region_file = self.get_or_open(ws, region_coord)?;
+        op(region_file, chunk_coord)
+    }
+
     /// Returns a mutable handle to the region file for region `rc`,
     /// opening it if necessary.
     ///
@@ -321,9 +351,7 @@ impl RegionCache {
     /// # Errors
     /// Propagate I/O errors from region open or slot read.
     pub fn read_chunk(&mut self, ws: &WorldSave, coord: IVec2) -> std::io::Result<Option<Vec<u8>>> {
-        let rc = chunk_to_region(coord);
-        let rf = self.get_or_open(ws, rc)?;
-        rf.read_chunk(coord)
+        self.with_region_file_for_chunk(ws, coord, RegionFile::read_chunk)
     }
 
     /// Writes a chunk payload at **world** chunk coordinate `coord`.
@@ -336,9 +364,7 @@ impl RegionCache {
         coord: IVec2,
         data: &[u8],
     ) -> std::io::Result<()> {
-        let rc = chunk_to_region(coord);
-        let rf = self.get_or_open(ws, rc)?;
-        rf.write_chunk(coord, data)
+        self.write_chunk_internal(ws, coord, data, false)
     }
 
     /// Writes chunk replace for the `core::world::save` module.
@@ -348,10 +374,7 @@ impl RegionCache {
         coord: IVec2,
         data: &[u8],
     ) -> std::io::Result<()> {
-        let rc = chunk_to_region(coord);
-        let rf = self.get_or_open(ws, rc)?;
-        let idx = RegionFile::slot_index_for_chunk(coord);
-        rf.write_slot_replace(idx, data)
+        self.write_chunk_internal(ws, coord, data, true)
     }
 }
 

@@ -16,6 +16,8 @@ pub const SEC_H: usize = 16;
 
 /// Number of vertical sections per chunk (`CY / SEC_H`).
 pub const SEC_COUNT: usize = CY / SEC_H;
+/// Hard safety cap for `/locate` radius input in block units.
+pub const LOCATE_MAX_RADIUS_BLOCKS_CAP: i32 = 1000;
 
 /// Converts world-space `(x, z)` to:
 /// - the chunk coordinate (`IVec2`) that contains the position, and
@@ -56,4 +58,14 @@ pub fn world_y_to_local(y: i32) -> usize {
 #[inline]
 pub fn local_y_to_world(ly: usize) -> i32 {
     (ly as i32) + Y_MIN
+}
+
+/// Converts a `/locate` radius from blocks into chunk radius and applies safe bounds.
+///
+/// The result is always at least `1` chunk and uses ceil-division by chunk span.
+#[inline]
+pub fn locate_radius_chunks_from_blocks(radius_blocks: i32) -> i32 {
+    let clamped_block_radius = radius_blocks.clamp(1, LOCATE_MAX_RADIUS_BLOCKS_CAP);
+    let chunk_span_blocks = (CX as i32).max(CZ as i32);
+    (clamped_block_radius + (chunk_span_blocks - 1)) / chunk_span_blocks
 }

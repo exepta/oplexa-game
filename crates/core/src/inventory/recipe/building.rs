@@ -5,6 +5,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use oplexa_shared::utils::key_utils::{is_name_key, last_was_separator};
+use crate::inventory::recipe::helpers::collect_recipe_json_paths;
 
 pub const BUILDING_SHAPED_RECIPE_KIND: &str = "building_shaped";
 const STRUCTURE_COLLIDER_MIN_SIZE_METERS: f32 = 0.01;
@@ -343,23 +345,6 @@ fn recipe_json_paths_recursively(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
-fn collect_recipe_json_paths(dir: &Path, paths: &mut Vec<PathBuf>) {
-    let Ok(read_dir) = fs::read_dir(dir) else {
-        return;
-    };
-
-    for entry in read_dir.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_recipe_json_paths(path.as_path(), paths);
-            continue;
-        }
-        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-            paths.push(path);
-        }
-    }
-}
-
 fn parse_space(raw: &str) -> Option<UVec3> {
     let mut tokens = raw
         .trim()
@@ -674,25 +659,12 @@ fn normalize_runtime_block_localized_name(raw: &str, fallback: &str) -> String {
 #[inline]
 fn normalize_runtime_block_name_key(raw_name: &str, fallback_localized_name: &str) -> String {
     let trimmed = raw_name.trim();
-    if trimmed.starts_with("KEY_")
-        && trimmed
-            .chars()
-            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
-    {
+    if is_name_key(trimmed) {
         return trimmed.to_string();
     }
     let mut key = String::with_capacity(fallback_localized_name.len() + 10);
     key.push_str("KEY_");
-    let mut last_sep = false;
-    for ch in fallback_localized_name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            key.push(ch.to_ascii_uppercase());
-            last_sep = false;
-        } else if !last_sep {
-            key.push('_');
-            last_sep = true;
-        }
-    }
+    last_was_separator(fallback_localized_name, &mut key);
     while key.ends_with('_') {
         key.pop();
     }

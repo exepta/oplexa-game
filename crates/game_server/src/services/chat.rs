@@ -8,7 +8,9 @@ use api::core::network::protocols::{
     ServerTeleport, UnorderedReliable, UnorderedUnreliable,
 };
 use api::core::world::biome::func::locate_biome_chunk_by_localized_name;
-use api::core::world::chunk_dimension::{CX, CZ, world_to_chunk_xz};
+use api::core::world::chunk_dimension::{
+    CX, CZ, locate_radius_chunks_from_blocks, world_to_chunk_xz,
+};
 use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
@@ -16,15 +18,6 @@ use std::io::BufRead;
 use std::sync::Mutex;
 use std::sync::mpsc;
 use std::time::Instant;
-
-const LOCATE_MAX_RADIUS_BLOCKS_CAP: i32 = 1000;
-
-/// Converts locate radius from blocks into chunks and clamps it to safe bounds.
-fn locate_radius_chunks_from_blocks(radius_blocks: i32) -> i32 {
-    let clamped_blocks = radius_blocks.clamp(1, LOCATE_MAX_RADIUS_BLOCKS_CAP);
-    let chunk_span = (CX as i32).max(CZ as i32);
-    (clamped_blocks + (chunk_span - 1)) / chunk_span
-}
 
 /// Shared server command registry resource.
 #[derive(Resource, Clone, Debug)]

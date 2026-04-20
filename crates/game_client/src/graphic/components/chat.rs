@@ -49,8 +49,8 @@ fn update_chat_ui_state(
         }
     }
 
-    let open_chat_key = convert(global_config.input.open_chat.as_str()).unwrap_or(KeyCode::KeyC);
-    let close_key = convert(global_config.input.ui_close_back.as_str()).unwrap_or(KeyCode::Escape);
+    let open_chat_key = convert_input(global_config.input.open_chat.as_str()).unwrap_or(KeyCode::KeyC);
+    let close_key = convert_input(global_config.input.ui_close_back.as_str()).unwrap_or(KeyCode::Escape);
 
     if ui_interaction.menu_open
         || ui_interaction.inventory_open

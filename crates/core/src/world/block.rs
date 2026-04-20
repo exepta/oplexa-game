@@ -10,6 +10,7 @@ use serde::de::{self, Deserializer};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use oplexa_shared::utils::key_utils::{is_name_key, last_was_separator};
 /* ---------------- constants ---------------- */
 
 pub const VOXEL_SIZE: f32 = 1.0;
@@ -241,6 +242,31 @@ impl Default for SelectedBlock {
             name: "air".to_string(),
         }
     }
+}
+
+struct LoadedBlockCommon {
+    localized_name: String,
+    display_name: String,
+    overridable: bool,
+    stats: BlockStats,
+    mining_wobble: MiningWobbleConfig,
+    prop: Option<PropDefinition>,
+    collider: BlockColliderDefinition,
+    fluid_flow: Option<FluidFlowDef>,
+    water_logged: bool,
+    allowed_environments: Vec<BlockEnvironment>,
+}
+
+struct LoadedBlockVisual {
+    uv_top: UvRect,
+    uv_bottom: UvRect,
+    uv_north: UvRect,
+    uv_east: UvRect,
+    uv_south: UvRect,
+    uv_west: UvRect,
+    connected_texture: Option<ConnectedTextureDef>,
+    image: Handle<Image>,
+    material: Handle<StandardMaterial>,
 }
 
 /* ---------------- registry ---------------- */
@@ -486,199 +512,72 @@ impl BlockRegistry {
         materials: &mut Assets<StandardMaterial>,
         blocks_dir: &str,
     ) -> Self {
-        // 0 = air
-        let mut defs: Vec<BlockDef> = Vec::new();
-        let mut name_to_id = HashMap::new();
-
-        defs.push(BlockDef {
-            localized_name: "air".into(),
-            name: "air".into(),
-            mesh_visible: false,
-            overridable: false,
-            stats: BlockStats::default(),
-            mining_wobble: MiningWobbleConfig::default(),
-            prop: None,
-            collider: BlockColliderDefinition::default(),
-            uv_top: Z,
-            uv_bottom: Z,
-            uv_north: Z,
-            uv_east: Z,
-            uv_south: Z,
-            uv_west: Z,
-            connected_texture: None,
-            fluid_flow: None,
-            water_logged: false,
-            allowed_environments: Vec::new(),
-            image: Handle::default(),
-            material: Handle::default(),
-        });
-        name_to_id.insert("air".into(), 0);
-
-        for path in block_json_paths(blocks_dir) {
-            let block_json: BlockJson = read_json(path.to_str().unwrap());
-            let (localized_name, display_name) =
-                normalize_block_identity(&block_json.localized_name, &block_json.name);
-            let collider = block_json.collider.sanitized();
-            let mining_wobble = block_json.mining_wobble.sanitized();
-            let stats = normalize_block_stats(block_json.stats);
-            let fluid_flow = resolve_fluid_flow(block_json.fluid_flow.as_ref(), &stats);
-            let allowed_environments =
-                sanitize_allowed_environments(block_json.allowed_environments.as_slice());
+        Self::load_with_visual_builder(blocks_dir, |block_json, common| {
             let tex_dir = block_json
                 .texture_dir
                 .clone()
-                .unwrap_or_else(|| guess_tex_dir_from_block_name(&localized_name));
+                .unwrap_or_else(|| guess_tex_dir_from_block_name(&common.localized_name));
 
-            // tileset is read from disk (not via asset server)
+            // Tileset is read from disk (not via asset server).
             let tileset_path = format!("assets/{}/data.json", tex_dir);
             let tileset: BlockTileset = read_json(&tileset_path);
 
-            // atlas image is loaded via asset_server
+            // Atlas image is loaded via asset_server.
             let atlas_path = format!("{}/{}", tex_dir, tileset.image);
             let image: Handle<Image> = asset_server.load(atlas_path);
 
-            // resolve faces (supports: specific keys, 'all', 'vertical', 'horizontal', and 'nord' fallback)
+            // Resolve faces (supports: specific keys, 'all', 'vertical', 'horizontal', and 'nord' fallback).
             let faces = block_json.texture.resolve();
-            let uv_top =
-                tile_uv(&tileset, require_face(&faces.top, "top", &localized_name)).unwrap();
+            let uv_top = tile_uv(
+                &tileset,
+                require_face(&faces.top, "top", &common.localized_name),
+            )
+            .unwrap();
             let uv_bottom = tile_uv(
                 &tileset,
-                require_face(&faces.bottom, "bottom", &localized_name),
+                require_face(&faces.bottom, "bottom", &common.localized_name),
             )
             .unwrap();
             let uv_north = tile_uv(
                 &tileset,
-                require_face(&faces.north, "north", &localized_name),
+                require_face(&faces.north, "north", &common.localized_name),
             )
             .unwrap();
-            let uv_east =
-                tile_uv(&tileset, require_face(&faces.east, "east", &localized_name)).unwrap();
+            let uv_east = tile_uv(
+                &tileset,
+                require_face(&faces.east, "east", &common.localized_name),
+            )
+            .unwrap();
             let uv_south = tile_uv(
                 &tileset,
-                require_face(&faces.south, "south", &localized_name),
+                require_face(&faces.south, "south", &common.localized_name),
             )
             .unwrap();
-            let uv_west =
-                tile_uv(&tileset, require_face(&faces.west, "west", &localized_name)).unwrap();
+            let uv_west = tile_uv(
+                &tileset,
+                require_face(&faces.west, "west", &common.localized_name),
+            )
+            .unwrap();
             let connected_texture = resolve_connected_texture(
                 block_json.connected_texture.as_ref(),
                 &tileset,
                 faces.north,
-                &localized_name,
+                &common.localized_name,
             );
+            let material = add_standard_block_material(materials, &image, &common.stats);
 
-            let (alpha_mode, base_color) = material_policy_from_stats(&stats);
-
-            let material = materials.add(StandardMaterial {
-                base_color_texture: Some(image.clone()),
-                base_color,
-                alpha_mode,
-                unlit: false,
-                metallic: 0.0,
-                perceptual_roughness: 1.0,
-                reflectance: 0.0,
-                ..Default::default()
-            });
-
-            let id = defs.len() as BlockId;
-            name_to_id.insert(localized_name.clone(), id);
-            defs.push(BlockDef {
-                localized_name,
-                name: display_name,
-                mesh_visible: true,
-                overridable: block_json.overridable,
-                stats,
-                mining_wobble,
-                prop: block_json.prop.map(PropDefinition::sanitized),
-                collider,
-                uv_top,
-                uv_bottom,
-                uv_north,
-                uv_east,
-                uv_south,
-                uv_west,
+            loaded_block_visual_from_parts(
+                (uv_top, uv_bottom, uv_north, uv_east, uv_south, uv_west),
                 connected_texture,
-                fluid_flow,
-                water_logged: block_json.water_logged,
-                allowed_environments,
                 image,
                 material,
-            });
-            append_auto_slab_variants(&mut defs, &mut name_to_id, id);
-            append_auto_fluid_flow_variants(&mut defs, &mut name_to_id, id);
-        }
-
-        Self { defs, name_to_id }
+            )
+        })
     }
 
     /// Loads headless for the `core::world::block` module.
     pub fn load_headless(blocks_dir: &str) -> Self {
-        let mut defs: Vec<BlockDef> = Vec::new();
-        let mut name_to_id = HashMap::new();
-
-        defs.push(BlockDef {
-            localized_name: "air".into(),
-            name: "air".into(),
-            mesh_visible: false,
-            overridable: false,
-            stats: BlockStats::default(),
-            mining_wobble: MiningWobbleConfig::default(),
-            prop: None,
-            collider: BlockColliderDefinition::default(),
-            uv_top: Z,
-            uv_bottom: Z,
-            uv_north: Z,
-            uv_east: Z,
-            uv_south: Z,
-            uv_west: Z,
-            connected_texture: None,
-            fluid_flow: None,
-            water_logged: false,
-            allowed_environments: Vec::new(),
-            image: Handle::default(),
-            material: Handle::default(),
-        });
-        name_to_id.insert("air".into(), 0);
-
-        for path in block_json_paths(blocks_dir) {
-            let block_json: BlockJson = read_json(path.to_str().unwrap());
-            let (localized_name, display_name) =
-                normalize_block_identity(&block_json.localized_name, &block_json.name);
-            let collider = block_json.collider.sanitized();
-            let mining_wobble = block_json.mining_wobble.sanitized();
-            let stats = normalize_block_stats(block_json.stats);
-            let fluid_flow = resolve_fluid_flow(block_json.fluid_flow.as_ref(), &stats);
-            let allowed_environments =
-                sanitize_allowed_environments(block_json.allowed_environments.as_slice());
-            let id = defs.len() as BlockId;
-            name_to_id.insert(localized_name.clone(), id);
-            defs.push(BlockDef {
-                localized_name,
-                name: display_name,
-                mesh_visible: true,
-                overridable: block_json.overridable,
-                stats,
-                mining_wobble,
-                prop: block_json.prop.map(PropDefinition::sanitized),
-                collider,
-                uv_top: Z,
-                uv_bottom: Z,
-                uv_north: Z,
-                uv_east: Z,
-                uv_south: Z,
-                uv_west: Z,
-                connected_texture: None,
-                fluid_flow,
-                water_logged: block_json.water_logged,
-                allowed_environments,
-                image: Handle::default(),
-                material: Handle::default(),
-            });
-            append_auto_slab_variants(&mut defs, &mut name_to_id, id);
-            append_auto_fluid_flow_variants(&mut defs, &mut name_to_id, id);
-        }
-
-        Self { defs, name_to_id }
+        Self::load_with_visual_builder(blocks_dir, |_, _| headless_loaded_block_visual())
     }
 
     /// Ensures that one runtime-defined block exists and returns its id.
@@ -690,68 +589,16 @@ impl BlockRegistry {
         name: &str,
         stats: BlockStats,
     ) -> BlockId {
-        let stats = normalize_block_stats(stats);
-        let normalized_localized_name = normalize_runtime_block_localized_name(localized_name);
-        if let Some(existing) = self.id_opt(normalized_localized_name.as_str()) {
-            return existing;
-        }
-
-        let display_name =
-            normalize_runtime_block_name_key(name, normalized_localized_name.as_str());
+        let normalized_stats = normalize_block_stats(stats);
         let image: Handle<Image> = asset_server.load("textures/items/missing.png");
-        let (alpha_mode, base_color) = material_policy_from_stats(&stats);
-        let material = materials.add(StandardMaterial {
-            base_color_texture: Some(image.clone()),
-            base_color,
-            alpha_mode,
-            unlit: false,
-            metallic: 0.0,
-            perceptual_roughness: 1.0,
-            reflectance: 0.0,
-            ..Default::default()
-        });
-        let collider = if stats.solid {
-            BlockColliderDefinition {
-                kind: BlockColliderKind::None,
-                block_entities: false,
-                size_m: default_block_collider_size_m(),
-                offset_m: [0.0, 0.0, 0.0],
-            }
-        } else {
-            BlockColliderDefinition {
-                kind: BlockColliderKind::None,
-                block_entities: false,
-                size_m: default_block_collider_size_m(),
-                offset_m: [0.0, 0.0, 0.0],
-            }
-        };
-
-        let id = self.defs.len() as BlockId;
-        self.name_to_id
-            .insert(normalized_localized_name.clone(), id);
-        self.defs.push(BlockDef {
-            localized_name: normalized_localized_name,
-            name: display_name,
-            mesh_visible: false,
-            overridable: !stats.solid,
-            stats,
-            mining_wobble: MiningWobbleConfig::default(),
-            prop: None,
-            collider,
-            uv_top: Z,
-            uv_bottom: Z,
-            uv_north: Z,
-            uv_east: Z,
-            uv_south: Z,
-            uv_west: Z,
-            connected_texture: None,
-            fluid_flow: None,
-            water_logged: false,
-            allowed_environments: Vec::new(),
+        let material = add_standard_block_material(materials, &image, &normalized_stats);
+        self.ensure_runtime_block_with_visual(
+            localized_name,
+            name,
+            normalized_stats,
             image,
             material,
-        });
-        id
+        )
     }
 
     /// Ensures that one runtime-defined block exists in headless mode and returns its id.
@@ -761,7 +608,23 @@ impl BlockRegistry {
         name: &str,
         stats: BlockStats,
     ) -> BlockId {
-        let stats = normalize_block_stats(stats);
+        self.ensure_runtime_block_with_visual(
+            localized_name,
+            name,
+            normalize_block_stats(stats),
+            Handle::default(),
+            Handle::default(),
+        )
+    }
+
+    fn ensure_runtime_block_with_visual(
+        &mut self,
+        localized_name: &str,
+        name: &str,
+        stats: BlockStats,
+        image: Handle<Image>,
+        material: Handle<StandardMaterial>,
+    ) -> BlockId {
         let normalized_localized_name = normalize_runtime_block_localized_name(localized_name);
         if let Some(existing) = self.id_opt(normalized_localized_name.as_str()) {
             return existing;
@@ -769,48 +632,33 @@ impl BlockRegistry {
 
         let display_name =
             normalize_runtime_block_name_key(name, normalized_localized_name.as_str());
-        let collider = if stats.solid {
-            BlockColliderDefinition {
-                kind: BlockColliderKind::None,
-                block_entities: false,
-                size_m: default_block_collider_size_m(),
-                offset_m: [0.0, 0.0, 0.0],
-            }
-        } else {
-            BlockColliderDefinition {
-                kind: BlockColliderKind::None,
-                block_entities: false,
-                size_m: default_block_collider_size_m(),
-                offset_m: [0.0, 0.0, 0.0],
-            }
-        };
-
         let id = self.defs.len() as BlockId;
         self.name_to_id
             .insert(normalized_localized_name.clone(), id);
-        self.defs.push(BlockDef {
-            localized_name: normalized_localized_name,
-            name: display_name,
-            mesh_visible: false,
-            overridable: !stats.solid,
+        self.defs.push(runtime_block_def(
+            normalized_localized_name,
+            display_name,
             stats,
-            mining_wobble: MiningWobbleConfig::default(),
-            prop: None,
-            collider,
-            uv_top: Z,
-            uv_bottom: Z,
-            uv_north: Z,
-            uv_east: Z,
-            uv_south: Z,
-            uv_west: Z,
-            connected_texture: None,
-            fluid_flow: None,
-            water_logged: false,
-            allowed_environments: Vec::new(),
-            image: Handle::default(),
-            material: Handle::default(),
-        });
+            image,
+            material,
+        ));
         id
+    }
+
+    fn load_with_visual_builder<F>(blocks_dir: &str, mut visual_builder: F) -> Self
+    where
+        F: FnMut(&BlockJson, &LoadedBlockCommon) -> LoadedBlockVisual,
+    {
+        let (mut defs, mut name_to_id) = registry_store_with_air();
+
+        for path in block_json_paths(blocks_dir) {
+            let block_json: BlockJson = read_json(path.to_str().unwrap());
+            let common = build_loaded_block_common(&block_json);
+            let visual = visual_builder(&block_json, &common);
+            insert_loaded_block_and_variants(&mut defs, &mut name_to_id, common, visual);
+        }
+
+        Self { defs, name_to_id }
     }
 }
 
@@ -854,17 +702,11 @@ fn append_auto_slab_variants(
 
     for (suffix, variant) in variants {
         let localized_name = format!("{base_name_prefix}{suffix}");
-        if name_to_id.contains_key(localized_name.as_str()) {
-            continue;
-        }
 
         let mut def = source.clone();
-        def.localized_name = localized_name.clone();
         def.name = normalize_block_name_key("", localized_name.as_str());
         def.collider = slab_variant_collider(&source.collider, variant);
-        let id = defs.len() as BlockId;
-        defs.push(def);
-        name_to_id.insert(localized_name, id);
+        insert_variant_block_if_absent(defs, name_to_id, localized_name, def);
     }
 }
 
@@ -883,12 +725,8 @@ fn append_auto_fluid_flow_variants(
 
     for level in 1..=10u8 {
         let localized_name = format!("{}_flow_{level}", source.localized_name);
-        if name_to_id.contains_key(localized_name.as_str()) {
-            continue;
-        }
 
         let mut def = source.clone();
-        def.localized_name = localized_name.clone();
         def.name = format!("{} Flow {}", source.name, level);
         def.overridable = true;
         def.stats.fluid_level = level;
@@ -899,9 +737,9 @@ fn append_auto_fluid_flow_variants(
         // Variants are render-only levels; the source keeps flow settings.
         def.fluid_flow = None;
 
-        let id = defs.len() as BlockId;
-        defs.push(def);
-        name_to_id.insert(localized_name, id);
+        let Some(id) = insert_variant_block_if_absent(defs, name_to_id, localized_name, def) else {
+            continue;
+        };
         if let Some(alias_prefix) = source.localized_name.strip_suffix("_block") {
             let legacy_alias = format!("{alias_prefix}_flow_{level}");
             name_to_id.entry(legacy_alias).or_insert(id);
@@ -1142,22 +980,17 @@ pub fn water_face_visible_against(reg: &BlockRegistry, neigh_id: BlockId) -> boo
 /// Returns block world for the `core::world::block` module.
 #[inline]
 pub fn get_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
-    if wp.y < Y_MIN || wp.y > Y_MAX {
-        return 0;
-    }
-    let (cc, local) = world_to_chunk_xz(wp.x, wp.z);
-    let Some(chunk) = chunk_map.chunks.get(&cc) else {
-        return 0;
-    };
-    let lx = local.x as usize;
-    let lz = local.y as usize;
-    let ly = world_y_to_local(wp.y);
-    chunk.get(lx, ly, lz)
+    get_block_world_impl(chunk_map, wp, false)
 }
 
 /// Returns stacked block world for the `core::world::block` module.
 #[inline]
 pub fn get_stacked_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
+    get_block_world_impl(chunk_map, wp, true)
+}
+
+#[inline]
+fn get_block_world_impl(chunk_map: &ChunkMap, wp: IVec3, stacked: bool) -> BlockId {
     if wp.y < Y_MIN || wp.y > Y_MAX {
         return 0;
     }
@@ -1168,7 +1001,11 @@ pub fn get_stacked_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
     let lx = local.x as usize;
     let lz = local.y as usize;
     let ly = world_y_to_local(wp.y);
-    chunk.get_stacked(lx, ly, lz)
+    if stacked {
+        chunk.get_stacked(lx, ly, lz)
+    } else {
+        chunk.get(lx, ly, lz)
+    }
 }
 
 /// Returns id world for the `core::world::block` module.
@@ -1179,21 +1016,33 @@ pub fn get_id_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
 
 /// Sets id world for the `core::world::block` module.
 pub fn set_id_world(chunk_map: &mut ChunkMap, wp: IVec3, id: BlockId) -> Option<BlockId> {
-    let Some(mut access) = world_access_mut(chunk_map, wp) else {
-        return None;
-    };
-    let old = access.get();
-    access.set(id);
-    Some(old)
+    set_id_world_impl(chunk_map, wp, id, false)
 }
 
 /// Sets stacked id world for the `core::world::block` module.
 pub fn set_stacked_id_world(chunk_map: &mut ChunkMap, wp: IVec3, id: BlockId) -> Option<BlockId> {
+    set_id_world_impl(chunk_map, wp, id, true)
+}
+
+fn set_id_world_impl(
+    chunk_map: &mut ChunkMap,
+    wp: IVec3,
+    id: BlockId,
+    stacked: bool,
+) -> Option<BlockId> {
     let Some(mut access) = world_access_mut(chunk_map, wp) else {
         return None;
     };
-    let old = access.get_stacked();
-    access.set_stacked(id);
+    let old = if stacked {
+        access.get_stacked()
+    } else {
+        access.get()
+    };
+    if stacked {
+        access.set_stacked(id);
+    } else {
+        access.set(id);
+    }
     Some(old)
 }
 
@@ -1515,6 +1364,146 @@ fn default_block_collider_size_m() -> [f32; 3] {
 }
 
 #[inline]
+fn air_block_def() -> BlockDef {
+    let mut air = runtime_block_def(
+        "air".into(),
+        "air".into(),
+        BlockStats::default(),
+        Handle::default(),
+        Handle::default(),
+    );
+    air.overridable = false;
+    air.collider = BlockColliderDefinition::default();
+    air
+}
+
+#[inline]
+fn registry_store_with_air() -> (Vec<BlockDef>, HashMap<String, BlockId>) {
+    let mut defs = Vec::new();
+    let mut name_to_id = HashMap::new();
+    defs.push(air_block_def());
+    name_to_id.insert("air".into(), 0);
+    (defs, name_to_id)
+}
+
+#[inline]
+fn insert_loaded_block_and_variants(
+    defs: &mut Vec<BlockDef>,
+    name_to_id: &mut HashMap<String, BlockId>,
+    common: LoadedBlockCommon,
+    visual: LoadedBlockVisual,
+) {
+    let id = defs.len() as BlockId;
+    name_to_id.insert(common.localized_name.clone(), id);
+    defs.push(build_loaded_block_def(common, visual));
+    append_auto_slab_variants(defs, name_to_id, id);
+    append_auto_fluid_flow_variants(defs, name_to_id, id);
+}
+
+#[inline]
+fn empty_face_uvs() -> (UvRect, UvRect, UvRect, UvRect, UvRect, UvRect) {
+    (Z, Z, Z, Z, Z, Z)
+}
+
+#[inline]
+fn build_loaded_block_common(block_json: &BlockJson) -> LoadedBlockCommon {
+    let (localized_name, display_name) =
+        normalize_block_identity(&block_json.localized_name, &block_json.name);
+    let stats = normalize_block_stats(block_json.stats.clone());
+    let fluid_flow = resolve_fluid_flow(block_json.fluid_flow.as_ref(), &stats);
+    let allowed_environments =
+        sanitize_allowed_environments(block_json.allowed_environments.as_slice());
+
+    LoadedBlockCommon {
+        localized_name,
+        display_name,
+        overridable: block_json.overridable,
+        stats,
+        mining_wobble: block_json.mining_wobble.sanitized(),
+        prop: block_json.prop.clone().map(PropDefinition::sanitized),
+        collider: block_json.collider.clone().sanitized(),
+        fluid_flow,
+        water_logged: block_json.water_logged,
+        allowed_environments,
+    }
+}
+
+#[inline]
+fn headless_loaded_block_visual() -> LoadedBlockVisual {
+    loaded_block_visual_from_parts(empty_face_uvs(), None, Handle::default(), Handle::default())
+}
+
+#[inline]
+fn build_loaded_block_def(common: LoadedBlockCommon, visual: LoadedBlockVisual) -> BlockDef {
+    BlockDef {
+        localized_name: common.localized_name,
+        name: common.display_name,
+        mesh_visible: true,
+        overridable: common.overridable,
+        stats: common.stats,
+        mining_wobble: common.mining_wobble,
+        prop: common.prop,
+        collider: common.collider,
+        uv_top: visual.uv_top,
+        uv_bottom: visual.uv_bottom,
+        uv_north: visual.uv_north,
+        uv_east: visual.uv_east,
+        uv_south: visual.uv_south,
+        uv_west: visual.uv_west,
+        connected_texture: visual.connected_texture,
+        fluid_flow: common.fluid_flow,
+        water_logged: common.water_logged,
+        allowed_environments: common.allowed_environments,
+        image: visual.image,
+        material: visual.material,
+    }
+}
+
+#[inline]
+fn runtime_none_collider() -> BlockColliderDefinition {
+    BlockColliderDefinition {
+        kind: BlockColliderKind::None,
+        block_entities: false,
+        size_m: default_block_collider_size_m(),
+        offset_m: [0.0, 0.0, 0.0],
+    }
+}
+
+#[inline]
+fn runtime_block_def(
+    localized_name: String,
+    display_name: String,
+    stats: BlockStats,
+    image: Handle<Image>,
+    material: Handle<StandardMaterial>,
+) -> BlockDef {
+    let (top_face_uv, bottom_face_uv, north_face_uv, east_face_uv, south_face_uv, west_face_uv) =
+        empty_face_uvs();
+    BlockDef {
+        localized_name,
+        name: display_name,
+        mesh_visible: false,
+        overridable: !stats.solid,
+        stats,
+        mining_wobble: MiningWobbleConfig::default(),
+        prop: None,
+        collider: runtime_none_collider(),
+        uv_top: top_face_uv,
+        uv_bottom: bottom_face_uv,
+        uv_north: north_face_uv,
+        uv_east: east_face_uv,
+        uv_south: south_face_uv,
+        uv_west: west_face_uv,
+        connected_texture: None,
+        fluid_flow: None,
+        water_logged: false,
+        allowed_environments: Vec::new(),
+        image,
+        material,
+    }
+}
+
+#[inline]
 fn default_mining_wobble_amplitude() -> f32 {
     0.055
 }
@@ -1560,6 +1549,23 @@ fn sanitize_allowed_environments(raw_values: &[String]) -> Vec<BlockEnvironment>
     out
 }
 
+#[inline]
+fn insert_variant_block_if_absent(
+    defs: &mut Vec<BlockDef>,
+    name_to_id: &mut HashMap<String, BlockId>,
+    localized_name: String,
+    mut def: BlockDef,
+) -> Option<BlockId> {
+    if name_to_id.contains_key(localized_name.as_str()) {
+        return None;
+    }
+    def.localized_name = localized_name.clone();
+    let id = defs.len() as BlockId;
+    defs.push(def);
+    name_to_id.insert(localized_name, id);
+    Some(id)
+}
+
 /// Normalizes block identity fields loaded from JSON.
 ///
 /// Supports both schemas:
@@ -1586,26 +1592,10 @@ fn normalize_block_name_key(raw_name: &str, fallback_localized_name: &str) -> St
     block_name_key_from_localized_name(fallback_localized_name)
 }
 
-fn is_name_key(value: &str) -> bool {
-    value.starts_with("KEY_")
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
-}
-
 fn block_name_key_from_localized_name(localized_name: &str) -> String {
     let mut key = String::with_capacity(localized_name.len() + 4);
     key.push_str("KEY_");
-    let mut last_was_separator = false;
-    for ch in localized_name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            key.push(ch.to_ascii_uppercase());
-            last_was_separator = false;
-        } else if !last_was_separator {
-            key.push('_');
-            last_was_separator = true;
-        }
-    }
+    last_was_separator(localized_name, &mut key);
     while key.ends_with('_') {
         key.pop();
     }
@@ -1619,16 +1609,7 @@ fn normalize_runtime_block_localized_name(raw: &str) -> String {
         localized_name = suffix.to_string();
     }
     let mut out = String::with_capacity(localized_name.len().max(16));
-    let mut last_sep = false;
-    for ch in localized_name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch);
-            last_sep = false;
-        } else if !last_sep {
-            out.push('_');
-            last_sep = true;
-        }
-    }
+    last_was_separator(&localized_name, &mut out);
     while out.ends_with('_') {
         out.pop();
     }
@@ -1948,5 +1929,45 @@ fn material_policy_from_stats(stats: &BlockStats) -> (AlphaMode, Color) {
         (AlphaMode::Opaque, Color::WHITE)
     } else {
         (AlphaMode::Blend, Color::srgba(1.0, 1.0, 1.0, 0.8))
+    }
+}
+
+#[inline]
+fn add_standard_block_material(
+    materials: &mut Assets<StandardMaterial>,
+    image: &Handle<Image>,
+    stats: &BlockStats,
+) -> Handle<StandardMaterial> {
+    let (alpha_mode, base_color) = material_policy_from_stats(stats);
+    materials.add(StandardMaterial {
+        base_color_texture: Some(image.clone()),
+        base_color,
+        alpha_mode,
+        unlit: false,
+        metallic: 0.0,
+        perceptual_roughness: 1.0,
+        reflectance: 0.0,
+        ..Default::default()
+    })
+}
+
+#[inline]
+fn loaded_block_visual_from_parts(
+    face_uvs: (UvRect, UvRect, UvRect, UvRect, UvRect, UvRect),
+    connected_texture: Option<ConnectedTextureDef>,
+    image: Handle<Image>,
+    material: Handle<StandardMaterial>,
+) -> LoadedBlockVisual {
+    let (uv_top, uv_bottom, uv_north, uv_east, uv_south, uv_west) = face_uvs;
+    LoadedBlockVisual {
+        uv_top,
+        uv_bottom,
+        uv_north,
+        uv_east,
+        uv_south,
+        uv_west,
+        connected_texture,
+        image,
+        material,
     }
 }

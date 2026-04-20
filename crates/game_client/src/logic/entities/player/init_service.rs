@@ -11,7 +11,7 @@ use crate::core::world::chunk_dimension::{
     CX, CY, Y_MAX, Y_MIN, local_y_to_world, world_to_chunk_xz, world_y_to_local,
 };
 use crate::generator::chunk::chunk_meshing::safe_despawn_entity;
-use crate::utils::key_utils::convert;
+use crate::utils::key_utils::convert_input;
 use bevy::camera::visibility::RenderLayers;
 use bevy::input::mouse::MouseMotion;
 use bevy::light::{CascadeShadowConfigBuilder, GlobalAmbientLight};
@@ -377,7 +377,7 @@ fn release_cursor_on_escape(
     keys: Res<ButtonInput<KeyCode>>,
     game_config: Res<GlobalConfig>,
 ) {
-    let unlock = convert(game_config.input.ui_close_back.as_str()).expect("Invalid close/back key");
+    let unlock = convert_input(game_config.input.ui_close_back.as_str()).expect("Invalid close/back key");
     if !keys.just_pressed(unlock) {
         return;
     }
@@ -466,12 +466,12 @@ fn player_move_simple(
     let jump_v0 = (2.0 * gravity * JUMP_HEIGHT).sqrt();
     const DOUBLE_TAP_WIN: f32 = 0.28;
 
-    let forward_key = convert(game_config.input.move_up.as_str()).expect("Invalid key");
-    let back_key = convert(game_config.input.move_down.as_str()).expect("Invalid key");
-    let left_key = convert(game_config.input.move_left.as_str()).expect("Invalid key");
-    let right_key = convert(game_config.input.move_right.as_str()).expect("Invalid key");
-    let jump_key = convert(game_config.input.jump.as_str()).unwrap_or(KeyCode::Space);
-    let down_key = convert(game_config.input.sprint.as_str()).unwrap_or(KeyCode::ShiftLeft);
+    let forward_key = convert_input(game_config.input.move_up.as_str()).expect("Invalid key");
+    let back_key = convert_input(game_config.input.move_down.as_str()).expect("Invalid key");
+    let left_key = convert_input(game_config.input.move_left.as_str()).expect("Invalid key");
+    let right_key = convert_input(game_config.input.move_right.as_str()).expect("Invalid key");
+    let jump_key = convert_input(game_config.input.jump.as_str()).unwrap_or(KeyCode::Space);
+    let down_key = convert_input(game_config.input.sprint.as_str()).unwrap_or(KeyCode::ShiftLeft);
     let input_blocked = ui_state
         .as_ref()
         .is_some_and(|state| state.blocks_game_input());
@@ -499,6 +499,10 @@ fn player_move_simple(
     }
 
     let dt = time.delta_secs();
+    if !dt.is_finite() || dt <= 0.0 {
+        kcc.translation = Some(Vec3::ZERO);
+        return;
+    }
     let now = time.elapsed_secs();
     let grounded = kcc_out.map(|o| o.grounded).unwrap_or(false);
 
@@ -536,7 +540,7 @@ fn player_move_simple(
         delta += wish * ground_speed * fly_multi * dt;
         delta += Vec3::Y * up_down * ground_speed * fly_v_multi * dt;
         kin.vel_y = 0.0;
-        kcc.translation = Some(delta);
+        kcc.translation = Some(sanitize_movement_delta(delta));
     } else {
         if grounded && kin.vel_y < 0.0 {
             kin.vel_y = 0.0;
@@ -547,12 +551,24 @@ fn player_move_simple(
                 gravity
             };
             kin.vel_y -= g_eff * dt;
+            if !kin.vel_y.is_finite() {
+                kin.vel_y = 0.0;
+            }
         }
 
         let mut delta = Vec3::ZERO;
         delta += wish * ground_speed * dt;
         delta += Vec3::Y * kin.vel_y * dt;
-        kcc.translation = Some(delta);
+        kcc.translation = Some(sanitize_movement_delta(delta));
+    }
+}
+
+#[inline]
+fn sanitize_movement_delta(delta: Vec3) -> Vec3 {
+    if delta.is_finite() {
+        delta
+    } else {
+        Vec3::ZERO
     }
 }
 
@@ -578,7 +594,10 @@ fn apply_noclip_to_player(
     let spectator = matches!(game_mode.0, GameMode::Spectator);
     if spectator {
         flight.flying = true;
+    }
+    let noclip = spectator || flight.flying;
 
+    if noclip {
         if has_sensor.is_none() {
             commands.entity(e).insert(Sensor);
         }
